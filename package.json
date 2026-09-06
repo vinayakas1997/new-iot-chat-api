@@ -1,0 +1,33 @@
+{
+  "name": "industrial-rag-sql",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@9.12.0",
+  "scripts": {
+    "typecheck": "pnpm -r --parallel typecheck",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "build": "pnpm -r build",
+    "dev:api": "pnpm --filter @app/api dev",
+    "dev:web-user": "pnpm --filter @app/web-user dev",
+    "dev:web-ops": "pnpm --filter @app/web-ops dev",
+    "dev:scheduler": "pnpm --filter @app/scheduler dev",
+    "job:ingest": "pnpm --filter @app/ingest start",
+    "job:scheduler": "pnpm --filter @app/scheduler start",
+    "db:generate": "pnpm --filter @app/api db:generate",
+    "db:migrate": "pnpm --filter @app/api db:migrate",
+    "db:seed-user": "pnpm --filter @app/api seed:user"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.4",
+    "eslint": "^9.12.0",
+    "prettier": "^3.3.3",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2",
+    "typescript-eslint": "^8.8.0"
+  }
+}
