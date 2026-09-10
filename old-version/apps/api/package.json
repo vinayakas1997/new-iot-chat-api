@@ -1,0 +1,52 @@
+{
+  "name": "@app/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./config": "./src/config.ts",
+    "./logger": "./src/logger.ts",
+    "./db/machine": "./src/db/machine-db.ts",
+    "./db/app": "./src/db/app/client.ts",
+    "./db/app/schema": "./src/db/app/schema.ts",
+    "./hindsight": "./src/hindsight/index.ts",
+    "./llm": "./src/llm/index.ts",
+    "./history": "./src/history/store.ts",
+    "./jobrun": "./src/jobrun.ts",
+    "./report/run": "./src/report/run.ts",
+    "./report/due": "./src/report/due.ts"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/db/app/migrate.ts",
+    "seed:user": "tsx src/scripts/seed-user.ts"
+  },
+  "dependencies": {
+    "@app/shared": "workspace:*",
+    "@fastify/cookie": "^10.0.1",
+    "@fastify/cors": "^10.0.1",
+    "argon2": "^0.41.1",
+    "cronstrue": "^2.50.0",
+    "dotenv": "^16.4.5",
+    "drizzle-orm": "^0.35.3",
+    "fastify": "^5.0.0",
+    "fastify-plugin": "^5.0.1",
+    "jose": "^5.9.4",
+    "pg": "^8.13.0",
+    "pino": "^9.4.0",
+    "zod": "^3.23.8"
+  },
+  "optionalDependencies": {
+    "@ai-sdk/anthropic": "^1.0.0",
+    "ai": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.10",
+    "drizzle-kit": "^0.26.2",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.2"
+  }
+}

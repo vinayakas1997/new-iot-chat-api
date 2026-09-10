@@ -1,17 +1,15 @@
 /**
  * ────────────────────────────────────────────────────────────────────────────
- *  THE LOCKED FACT SCHEMA  —  DECISION 1 (see implementation-plan.md §7)
+ *  THE LOCKED FACT SCHEMA — v1 (see new-plan/02-part1-ingestion.md §4,
+ *  new-plan/03-granularity-matrix.md, new-plan/08-open-decisions.md #1)
  * ────────────────────────────────────────────────────────────────────────────
  *
- *  This is the single contract between:
- *    - the fact-extraction LLM prompt          (apps/ingest/extract/prompt.ts)
- *    - extraction output validation            (apps/ingest/extract/validate.ts)
- *    - what gets written to Hindsight          (apps/api/hindsight/retain.ts)
- *    - what the chat side assumes on recall    (apps/api/hindsight/recall.ts)
+ *  Single contract between extraction prompt → validation → Hindsight retain
+ *  → recall → report evaluate. Carried over unchanged from the archived trail
+ *  (old-version/packages/shared/src/fact-schema.ts).
  *
  *  Changing a field here means re-ingesting everything. Add optional fields
- *  freely; never rename or repurpose an existing one. Bump SCHEMA_VERSION on
- *  any change and record it on every stored fact.
+ *  freely; never rename or repurpose an existing one.
  */
 import { z } from 'zod';
 
@@ -23,7 +21,7 @@ export type EntityType = z.infer<typeof EntityType>;
 
 export const Entity = z.object({
   type: EntityType,
-  /** Canonical name/id, e.g. "line-3", "welder-07", "OEE". Stable across runs. */
+  /** Canonical name/id, e.g. "line-3", "press-04", "oee". Stable across runs. */
   name: z.string().min(1),
   /** Optional human label if different from `name`. */
   label: z.string().min(1).optional(),
@@ -45,11 +43,15 @@ export type TimeScope = z.infer<typeof TimeScope>;
 
 export const Aggregation = z.enum(['raw', 'sum', 'avg', 'min', 'max', 'count', 'last']);
 
+export const METRIC_NAMES = ['oee', 'downtime_min', 'scrap_rate', 'units_produced', 'units_scrapped', 'runtime_min'] as const;
+export const MetricName = z.enum(METRIC_NAMES);
+export type MetricName = z.infer<typeof MetricName>;
+
 /** Optional structured numeric observation attached to a fact. */
 export const MetricObservation = z.object({
-  name: z.string().min(1), // e.g. "OEE", "MTBF", "throughput"
+  name: z.string().min(1),
   value: z.number(),
-  unit: z.string().min(1).optional(), // e.g. "%", "units/hr", "min"
+  unit: z.string().min(1).optional(),
   aggregation: Aggregation.default('raw'),
 });
 export type MetricObservation = z.infer<typeof MetricObservation>;
@@ -67,9 +69,9 @@ export type EventDetail = z.infer<typeof EventDetail>;
 
 /** Provenance — lets ops trace a stored fact back to source rows. */
 export const FactSource = z.object({
-  queryName: z.string().min(1), // which SQL query set produced the rows
+  queryName: z.string().min(1),
   rowIds: z.array(z.union([z.string(), z.number()])).default([]),
-  checkpoint: z.string().optional(), // ingestion checkpoint marker
+  checkpoint: z.string().optional(),
 });
 export type FactSource = z.infer<typeof FactSource>;
 

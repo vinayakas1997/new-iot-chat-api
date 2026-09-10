@@ -7,10 +7,13 @@ import type { Schedule } from '@app/shared';
 import { eq } from 'drizzle-orm';
 import { getAppDb } from '../db/app/client.js';
 import { schedules } from '../db/app/schema.js';
-import { bankForUserQuery, getHindsight } from '../hindsight/index.js';
+import { getBankId } from '../hindsight/bank.js';
+import { getHindsight } from '../hindsight/index.js';
 import { writeHistory } from '../history/store.js';
 import { getLlm } from '../llm/index.js';
 import { logger } from '../logger.js';
+import { buildChartForQuestion } from '../chat/chart-tool.js';
+import { resolveLineScope } from '../lines/store.js';
 import { deliverExternal } from './deliver.js';
 import { DEFAULT_THRESHOLDS, evaluateCondition } from './evaluate.js';
 import { nextRunAt } from '../schedule/cron.js';
@@ -23,7 +26,9 @@ const DRAFT_SYSTEM = [
 ].join('\n');
 
 export async function runReportForSchedule(s: Schedule): Promise<Schedule['lastResult']> {
-  const bankId = bankForUserQuery(s.userId, s.queryText);
+  // Clone-per-line scope: legacy rows without lineId fall back to the default line.
+  const lineId = s.lineId ?? (await resolveLineScope().catch(() => ({ lineIds: [] as string[] }))).lineIds[0] ?? 'line-3';
+  const bankId = getBankId({ lineId });
   const hindsight = getHindsight();
 
   let recalled;
@@ -65,7 +70,7 @@ export async function runReportForSchedule(s: Schedule): Promise<Schedule['lastR
     question: s.queryText,
     answer,
     scheduleId: s.id,
-    meta: { evaluation: evalResult },
+    meta: { evaluation: evalResult, charts: await buildChartForQuestion(s.queryText, lineId), lineIds: [lineId] },
   });
 
   void deliverExternal(`Daily report: ${s.queryText}`, answer);

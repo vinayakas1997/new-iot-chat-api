@@ -1,8 +1,23 @@
 /**
  * Shared contract types across API, jobs, and both UIs.
- * Keep this framework-free (zod + plain types only).
+ * Framework-free (zod + plain types only).
+ * History answers store the full envelope so graphs replay (08-open-decisions #7).
  */
 import { z } from 'zod';
+import { ChartData } from './chart-schema.js';
+
+/* ------------------------------------------------------------------ lines --- */
+
+export const LineEntry = z.object({
+  id: z.string(),
+  /** Canonical name, e.g. "line-1". Matches industrial line_id + bank suffix. */
+  name: z.string().min(1),
+  displayName: z.string().optional(),
+  active: z.boolean(),
+  sortOrder: z.number().int(),
+  createdAt: z.string().datetime(),
+});
+export type LineEntry = z.infer<typeof LineEntry>;
 
 /* ------------------------------------------------------------------ auth --- */
 
@@ -25,27 +40,32 @@ export type Theme = z.infer<typeof Theme>;
 
 /* ------------------------------------------------------------- schedules --- */
 
-export const Recurrence = z.enum(['daily', 'weekdays', 'weekly', 'once']);
+export const Recurrence = z.enum(['daily', 'weekdays', 'weekly', 'once', 'hourly']);
 export type Recurrence = z.infer<typeof Recurrence>;
 
 /** Result of parsing a natural-language schedule request. */
 export const ParsedSchedule = z.object({
+  heading: z.string().min(1).max(120).optional(),
   queryText: z.string().min(1),
-  /** 24h local time "HH:MM". */
+  /** 24h local time "HH:MM". For hourly this is the minute offset (HH ignored, MM is minute). */
   timeOfDay: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
   recurrence: Recurrence,
   /** 0=Sun..6=Sat; required when recurrence === 'weekly'. */
   weekday: z.number().int().min(0).max(6).optional(),
   /** ISO date "YYYY-MM-DD"; required when recurrence === 'once'. */
   onDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  /** IANA tz, e.g. "Asia/Kolkata". */
+  /** IANA tz, e.g. "Asia/Ho_Chi_Minh". */
   timezone: z.string().min(1),
+  /** Single line scope (clone-per-line). Omitted = not mentioned. */
+  lineId: z.string().min(1).optional(),
 });
 export type ParsedSchedule = z.infer<typeof ParsedSchedule>;
 
 export const Schedule = ParsedSchedule.extend({
   id: z.string(),
   userId: z.string(),
+  /** Single line scope (clone-per-line). Undefined = legacy row → default line. */
+  lineId: z.string().min(1).optional(),
   active: z.boolean(),
   cronExpr: z.string(),
   nextRunAt: z.string().datetime().nullable(),
@@ -65,7 +85,9 @@ export const HistoryEntry = z.object({
   userId: z.string(),
   source: HistorySource,
   question: z.string(),
+  /** Full answer envelope (summary + charts), so History renders graphs too. */
   answer: z.string(),
+  charts: z.array(ChartData).default([]),
   scheduleId: z.string().nullable(),
   createdAt: z.string().datetime(),
 });
@@ -82,6 +104,8 @@ export type ChatMessage = z.infer<typeof ChatMessage>;
 
 export const ChatRequest = z.object({
   messages: z.array(ChatMessage).min(1),
+  /** Line scope. Omitted/empty = all active lines (resolved server-side). */
+  lineIds: z.array(z.string().min(1)).max(50).optional(),
 });
 export type ChatRequest = z.infer<typeof ChatRequest>;
 

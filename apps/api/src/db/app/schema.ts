@@ -34,9 +34,12 @@ export const schedules = pgTable('schedules', {
   userId: uuid('user_id')
     .notNull()
     .references(() => users.id, { onDelete: 'cascade' }),
+  heading: text('heading'),
   queryText: text('query_text').notNull(),
+  /** Single line scope (clone-per-line model). NULL = legacy → default line. */
+  lineId: text('line_id'),
   timeOfDay: text('time_of_day').notNull(), // "HH:MM" local
-  recurrence: text('recurrence').notNull(), // daily | weekdays | weekly | once
+  recurrence: text('recurrence').notNull(), // daily | weekdays | weekly | once | hourly
   weekday: integer('weekday'), // 0..6 when recurrence = weekly
   onDate: text('on_date'), // "YYYY-MM-DD" when recurrence = once
   timezone: text('timezone').notNull(),
@@ -71,7 +74,22 @@ export const jobRuns = pgTable('job_runs', {
   error: text('error'),
 });
 
+/**
+ * Master lines registry — the ONLY source of valid line names.
+ * `name` matches the industrial `line_id` and the Hindsight bank suffix
+ * (`line:<name>`). Managed by ops; users only ever pick from active lines.
+ */
+export const lines = pgTable('lines', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  name: text('name').notNull().unique(),
+  displayName: text('display_name'),
+  active: boolean('active').notNull().default(true),
+  sortOrder: integer('sort_order').notNull().default(0),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export type UserRow = typeof users.$inferSelect;
 export type ScheduleRow = typeof schedules.$inferSelect;
+export type LineRow = typeof lines.$inferSelect;
 export type HistoryRow = typeof history.$inferSelect;
 export type JobRunRow = typeof jobRuns.$inferSelect;

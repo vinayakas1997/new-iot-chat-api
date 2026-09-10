@@ -22,7 +22,8 @@
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/app/migrate.ts",
-    "seed:user": "tsx src/scripts/seed-user.ts"
+    "seed:user": "tsx src/scripts/seed-user.ts",
+    "seed:lines": "tsx src/scripts/seed-lines.ts"
   },
   "dependencies": {
     "@app/shared": "workspace:*",

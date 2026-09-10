@@ -9,6 +9,7 @@ function toDto(r: ScheduleRow): Schedule {
     id: r.id,
     userId: r.userId,
     queryText: r.queryText,
+    lineId: r.lineId ?? undefined,
     timeOfDay: r.timeOfDay,
     recurrence: r.recurrence as Schedule['recurrence'],
     weekday: r.weekday ?? undefined,

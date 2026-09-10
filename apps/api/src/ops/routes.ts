@@ -6,6 +6,7 @@ import { config } from '../config.js';
 import { verifyPassword } from '../auth/password.js';
 import { cookieOptions, issueSession, readSession } from '../auth/session.js';
 import { logger } from '../logger.js';
+import { createLine, deleteLine, listLines, updateLine } from '../lines/store.js';
 import {
   getAllJobStatus,
   getSchedulerOverview,
@@ -13,6 +14,16 @@ import {
 } from './queries.js';
 
 const OpsLogin = z.object({ username: z.string(), password: z.string() });
+const LineCreate = z.object({
+  name: z.string().min(1).max(64),
+  displayName: z.string().max(128).optional(),
+  sortOrder: z.number().int().optional(),
+});
+const LinePatch = z.object({
+  displayName: z.string().max(128).nullable().optional(),
+  active: z.boolean().optional(),
+  sortOrder: z.number().int().optional(),
+});
 
 export async function opsRoutes(app: FastifyInstance) {
   app.post('/ops/login', async (req, reply) => {
@@ -53,6 +64,35 @@ export async function opsRoutes(app: FastifyInstance) {
 
   app.get('/ops/schedules', { preHandler: app.requireOps }, async () => {
     return { schedules: await getSchedulerOverview() };
+  });
+
+  // Lines registry (ops-managed; users read active lines via GET /lines).
+  app.get('/ops/lines', { preHandler: app.requireOps }, async () => {
+    return { lines: await listLines(false) };
+  });
+
+  app.post('/ops/lines', { preHandler: app.requireOps }, async (req, reply) => {
+    const parsed = LineCreate.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'invalid body' });
+    try {
+      return { line: await createLine(parsed.data) };
+    } catch {
+      return reply.code(409).send({ error: 'line name already exists' });
+    }
+  });
+
+  app.patch('/ops/lines/:id', { preHandler: app.requireOps }, async (req, reply) => {
+    const parsed = LinePatch.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: 'invalid body' });
+    const line = await updateLine((req.params as { id: string }).id, parsed.data);
+    if (!line) return reply.code(404).send({ error: 'not found' });
+    return { line };
+  });
+
+  app.delete('/ops/lines/:id', { preHandler: app.requireOps }, async (req, reply) => {
+    const ok = await deleteLine((req.params as { id: string }).id);
+    if (!ok) return reply.code(404).send({ error: 'not found' });
+    return { ok: true };
   });
 
   // "retry failed batch" — kick off a one-shot ingestion run as a detached child.

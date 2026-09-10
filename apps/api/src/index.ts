@@ -13,6 +13,7 @@ import { getAppDb } from './db/app/client.js';
 import { getMachineDb } from './db/machine-db.js';
 import { getHindsight } from './hindsight/index.js';
 import { historyRoutes } from './history/routes.js';
+import { lineRoutes } from './lines/routes.js';
 import { logger } from './logger.js';
 import { opsRoutes } from './ops/routes.js';
 import { scheduleRoutes } from './schedule/routes.js';
@@ -43,6 +44,7 @@ async function buildServer() {
 
   await app.register(authRoutes);
   await app.register(chatRoutes);
+  await app.register(lineRoutes);
   await app.register(scheduleRoutes);
   await app.register(historyRoutes);
   await app.register(settingsRoutes);

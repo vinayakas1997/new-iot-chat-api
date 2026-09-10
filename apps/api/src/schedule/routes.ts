@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import cronstrue from 'cronstrue';
 import { z } from 'zod';
+import { config } from '../config.js';
 import { parseScheduleRequest } from './parse.js';
 import { toCronExpr } from './cron.js';
 import {
@@ -10,16 +11,42 @@ import {
   setScheduleActive,
 } from './store.js';
 
-const PreviewBody = z.object({ message: z.string().min(1), timezone: z.string().optional() });
-const CreateBody = z.object({ message: z.string().min(1), timezone: z.string().optional() });
+const PreviewBody = z.object({
+  message: z.string().min(1),
+  timezone: z.string().optional(),
+  lineId: z.string().min(1).optional(),
+});
+const CreateBody = z.union([
+  z.object({ message: z.string().min(1), timezone: z.string().optional(), lineId: z.string().min(1).optional() }),
+  z.object({
+    heading: z.string().min(1).max(120).optional(),
+    queryText: z.string().min(1),
+    lineId: z.string().min(1).optional(),
+    timeOfDay: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+    timezone: z.string().min(1).optional(),
+    recurrence: z.enum(['daily', 'weekdays', 'weekly', 'once', 'hourly']),
+    weekday: z.number().int().min(0).max(6).optional(),
+    onDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  }),
+]);
 const ActiveBody = z.object({ active: z.boolean() });
 
 export async function scheduleRoutes(app: FastifyInstance) {
-  // Parse-only: UI shows the interpreted schedule for confirmation before saving.
+    // Parse-only: UI shows the interpreted schedule for confirmation before saving.
   app.post('/schedules/preview', { preHandler: app.requireUser }, async (req, reply) => {
+    const body = req.body as any;
+    // Advanced create panel can preview with structured fields directly (no LLM)
+    if (body?.queryText && body?.timeOfDay && body?.recurrence) {
+      const { ParsedSchedule } = await import('@app/shared');
+      const v = ParsedSchedule.safeParse({ timezone: config.plant.tz, ...body, heading: body.heading });
+      if (v.success) {
+        const cronExpr = toCronExpr(v.data);
+        return { parsed: v.data, cronExpr, humanCron: safeCronText({ ...v.data, cronExpr }) };
+      }
+    }
     const parsed = PreviewBody.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: 'message required' });
-    const p = await parseScheduleRequest(parsed.data.message, parsed.data.timezone);
+    const p = await parseScheduleRequest(parsed.data.message, parsed.data.timezone, parsed.data.lineId);
     const cronExpr = toCronExpr(p);
     return { parsed: p, cronExpr, humanCron: safeCronText({ ...p, cronExpr }) };
   });
@@ -30,8 +57,17 @@ export async function scheduleRoutes(app: FastifyInstance) {
 
   app.post('/schedules', { preHandler: app.requireUser }, async (req, reply) => {
     const parsed = CreateBody.safeParse(req.body);
-    if (!parsed.success) return reply.code(400).send({ error: 'message required' });
-    const p = await parseScheduleRequest(parsed.data.message, parsed.data.timezone);
+    if (!parsed.success) return reply.code(400).send({ error: 'message or structured schedule required', details: parsed.error.issues });
+    let p;
+    if ('message' in parsed.data) {
+      p = await parseScheduleRequest(parsed.data.message, parsed.data.timezone, parsed.data.lineId);
+    } else {
+      // structured picker — validate via ParsedSchedule directly
+      const { ParsedSchedule } = await import('@app/shared');
+      const v = ParsedSchedule.safeParse({ timezone: config.plant.tz, ...parsed.data });
+      if (!v.success) return reply.code(400).send({ error: 'invalid schedule', details: v.error.issues });
+      p = v.data;
+    }
     return { schedule: await createSchedule(req.user!.userId, p) };
   });
 

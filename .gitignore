@@ -10,3 +10,8 @@ coverage/
 *.log
 .pnpm-store/
 .mock-hindsight.json
+z_research-work/
+old-version/node_modules/
+old-version/*/.node_modules/
+apps/*/node_modules/
+packages/*/node_modules/

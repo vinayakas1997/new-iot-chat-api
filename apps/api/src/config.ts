@@ -30,6 +30,9 @@ const Schema = z
     API_PORT: z.coerce.number().int().positive().default(3001),
     API_CORS_ORIGIN: z.string().default('http://localhost:5173,http://localhost:5174'),
 
+    PLANT_TZ: z.string().min(1).default('Asia/Tokyo'),
+    PLANT_ID: z.string().min(1).default('vina-plant'),
+
     MACHINE_DATABASE_URL: z.string().default(''),
     MACHINE_DB_POOL_MAX: z.coerce.number().int().positive().default(5),
     MACHINE_DB_STATEMENT_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
@@ -85,6 +88,11 @@ export const config = {
   api: {
     port: env.API_PORT,
     corsOrigins: csv(env.API_CORS_ORIGIN),
+  },
+
+  plant: {
+    tz: env.PLANT_TZ,
+    id: env.PLANT_ID,
   },
 
   machineDb: {

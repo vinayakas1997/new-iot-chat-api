@@ -2,25 +2,20 @@
  * Tools the chat model may call:
  *   - recall_memory : semantic/graph/temporal recall from the line's Hindsight bank
  *   - live_sql      : read-only "right now" numbers straight from the plant DB
- *                     (the §5.6 live-SQL fallback; MCP-equivalent, called directly)
+ *                     (the live-SQL fallback; MCP-equivalent, called directly)
+ *   - chart_spec    : run a verified SELECT and return a ChartData spec for graphs
  *
- * live_sql is guarded: SELECT-only, single statement, hard row cap. In mock mode
- * it routes to the fixture MachineDb which only understands a few query shapes.
+ * live_sql / chart_spec share the verify-sql guard: SELECT-only, single statement,
+ * hard row cap. chart_spec maps rows → ChartData with the DB-GPT DashboardDataLoader
+ * heuristics (see ../chat/chart-tool.ts).
  */
 import type { LlmTool } from '../llm/index.js';
 import { getMachineDb } from '../db/machine-db.js';
 import { getHindsight } from '../hindsight/index.js';
-
-const MAX_ROWS = 200;
-
-function assertReadOnly(sql: string) {
-  const s = sql.trim().replace(/;+\s*$/, '');
-  if (/;/.test(s)) throw new Error('only a single statement is allowed');
-  if (!/^(select|with)\b/i.test(s)) throw new Error('only SELECT / WITH queries are allowed');
-  if (/\b(insert|update|delete|drop|alter|create|truncate|grant|revoke|copy)\b/i.test(s))
-    throw new Error('write/DDL keywords are not allowed');
-  return s;
-}
+import { CHAT_SQL_MAX_ROWS, assertReadOnly } from './verify-sql.js';
+import { rowsToChart } from './chart-tool.js';
+import { SUPPORTED_DISPLAY_TYPES } from './sql-prompt.js';
+import type { ChartType } from '@app/shared';
 
 export function buildChatTools(bankId: string): LlmTool[] {
   const hindsight = getHindsight();
@@ -61,13 +56,51 @@ export function buildChatTools(bankId: string): LlmTool[] {
         required: ['sql'],
         properties: {
           sql: { type: 'string', description: 'a single SELECT statement' },
+          display_type: {
+            type: 'string',
+            enum: [...SUPPORTED_DISPLAY_TYPES],
+            description: 'hint for how the result should be visualised',
+          },
         },
       },
       execute: async (input) => {
         const sql = assertReadOnly(String(input.sql));
         const res = await machineDb.executeQuery(sql);
-        const rows = res.rows.slice(0, MAX_ROWS);
+        const rows = res.rows.slice(0, CHAT_SQL_MAX_ROWS);
         return JSON.stringify({ rowCount: res.rowCount, rows }, null, 2);
+      },
+    },
+    {
+      name: 'chart_spec',
+      description:
+        'Run ONE verified read-only SELECT and return the result as a chart spec (ChartData JSON). Use when the user asks for a chart, trend, or comparison.',
+      parameters: {
+        type: 'object',
+        required: ['sql'],
+        properties: {
+          sql: { type: 'string', description: 'a single SELECT statement' },
+          display_type: {
+            type: 'string',
+            enum: [...SUPPORTED_DISPLAY_TYPES],
+            description: 'chart type to produce',
+          },
+          chart_name: { type: 'string', description: 'human title for the chart' },
+        },
+      },
+      execute: async (input) => {
+        const sql = assertReadOnly(String(input.sql));
+        const chartType = (SUPPORTED_DISPLAY_TYPES as readonly string[]).includes(String(input.display_type))
+          ? (String(input.display_type) as ChartType)
+          : ('LineChart' as ChartType);
+        const res = await machineDb.executeQuery(sql);
+        const rows = res.rows.slice(0, CHAT_SQL_MAX_ROWS) as Record<string, unknown>[];
+        const spec = rowsToChart({
+          chartName: input.chart_name ? String(input.chart_name) : 'Chart',
+          chartType,
+          sql,
+          rows,
+        });
+        return JSON.stringify(spec);
       },
     },
   ];

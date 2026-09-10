@@ -36,9 +36,16 @@ export class MockMachineDb implements MachineDb {
     if (q.includes('from production_rows') && q.includes('where') && q.includes('status')) {
       return this.wrap(SAMPLE_NEW_ROWS as unknown as T[]);
     }
-    // context builder / live tool: hourly breakdown
+    // context builder / live tool: hourly breakdown.
+    // Honours a line_id param when present so per-line charts stay per-line.
     if (q.includes('hourly') || (q.includes('date_trunc') && q.includes("'hour'"))) {
-      return this.wrap(SAMPLE_HOURLY_ROWS as unknown as T[]);
+      const lineParam = params.find((p) => typeof p === 'string' && (p as string).startsWith('line-'));
+      const inlineLine = /line_id\s*=\s*'(line-[^']+)'/.exec(sql)?.[1];
+      const want = lineParam ?? inlineLine;
+      const rows = want
+        ? SAMPLE_HOURLY_ROWS.filter((r) => r.line_id === want)
+        : SAMPLE_HOURLY_ROWS;
+      return this.wrap(rows as unknown as T[]);
     }
     // ingest: flip status flags — accept and report affected count
     if (q.startsWith('update production_rows set status')) {

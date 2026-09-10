@@ -1,0 +1,45 @@
+# Local infra. In mock mode you only need `app-postgres`.
+# In live mode, bring up hindsight + hindsight-postgres too and point
+# MACHINE_DATABASE_URL at your real plant database (not defined here).
+services:
+  app-postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    ports:
+      - "5433:5432"
+    volumes:
+      - app-pg-data:/var/lib/postgresql/data
+
+  hindsight-postgres:
+    image: pgvector/pgvector:pg16
+    profiles: ["live"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hindsight
+      POSTGRES_PASSWORD: hindsight
+      POSTGRES_DB: hindsight
+    ports:
+      - "5434:5432"
+    volumes:
+      - hindsight-pg-data:/var/lib/postgresql/data
+
+  hindsight:
+    image: vectorize/hindsight:latest
+    profiles: ["live"]
+    restart: unless-stopped
+    depends_on:
+      - hindsight-postgres
+    environment:
+      HINDSIGHT_DATABASE_URL: postgres://hindsight:hindsight@hindsight-postgres:5432/hindsight
+      # Hindsight needs its own LLM key for extraction / entity resolution:
+      HINDSIGHT_LLM_API_KEY: ${HINDSIGHT_LLM_API_KEY}
+    ports:
+      - "8888:8888"
+
+volumes:
+  app-pg-data:
+  hindsight-pg-data:

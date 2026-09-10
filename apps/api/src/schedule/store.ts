@@ -8,7 +8,9 @@ function toDto(r: ScheduleRow): Schedule {
   return {
     id: r.id,
     userId: r.userId,
+    heading: (r as any).heading ?? undefined,
     queryText: r.queryText,
+    lineId: r.lineId ?? undefined,
     timeOfDay: r.timeOfDay,
     recurrence: r.recurrence as Schedule['recurrence'],
     weekday: r.weekday ?? undefined,
@@ -33,7 +35,9 @@ export async function createSchedule(userId: string, p: ParsedSchedule): Promise
     .insert(schedules)
     .values({
       userId,
+      heading: (p as any).heading ?? null,
       queryText: p.queryText,
+      lineId: p.lineId ?? null,
       timeOfDay: p.timeOfDay,
       recurrence: p.recurrence,
       weekday: p.weekday ?? null,
@@ -42,7 +46,7 @@ export async function createSchedule(userId: string, p: ParsedSchedule): Promise
       cronExpr: toCronExpr(p),
       active: true,
       nextRunAt: nextRunAt(p),
-    })
+    } as any)
     .returning();
   return toDto(row!);
 }

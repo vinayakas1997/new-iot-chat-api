@@ -16,13 +16,22 @@ function lastUser(opts: GenerateOptions): string {
   return '';
 }
 
+const MOCK_TREND_SQL =
+  "SELECT line_id, date_trunc('hour', ts) AS hour, sum(units_produced) units_produced, " +
+  'sum(units_scrapped) units_scrapped, avg(oee) avg_oee, sum(downtime_min) downtime_min ' +
+  "FROM production_rows WHERE line_id = 'line-3' GROUP BY 1,2 ORDER BY 2";
+
 async function runTools(tools: LlmTool[], query: string): Promise<string[]> {
   const out: string[] = [];
   for (const t of tools) {
     try {
-      const input = t.name.includes('sql')
-        ? { question: query }
-        : { query, queryTimestamp: new Date().toISOString() };
+      // Mirror what a live model would pass: verified SELECTs, not bare questions,
+      // so mock summaries show realistic tool output (and chart_spec succeeds).
+      const input = t.name === 'chart_spec'
+        ? { sql: MOCK_TREND_SQL, display_type: 'LineChart', chart_name: 'Trend' }
+        : t.name.includes('sql')
+          ? { sql: MOCK_TREND_SQL }
+          : { query, queryTimestamp: new Date().toISOString() };
       out.push(`[tool:${t.name}] ${await t.execute(input)}`);
     } catch (err) {
       out.push(`[tool:${t.name}] error: ${(err as Error).message}`);
@@ -41,11 +50,13 @@ export class MockLlm implements LlmPort {
       if (/schedule/i.test(opts.system)) {
         const time = /([01]?\d|2[0-3]):([0-5]\d)/.exec(query)?.[0] ?? '08:00';
         const [h, m] = time.split(':');
+        const isHourly = /hourly|every hour/i.test(query);
         return JSON.stringify({
+          heading: query.slice(0, 40),
           queryText: query,
           timeOfDay: `${h!.padStart(2, '0')}:${m}`,
-          recurrence: /weekday/i.test(query) ? 'weekdays' : 'daily',
-          timezone: 'Asia/Kolkata',
+          recurrence: isHourly ? 'hourly' : /weekday/i.test(query) ? 'weekdays' : 'daily',
+          timezone: 'Asia/Tokyo',
         });
       }
       return JSON.stringify({ facts: [] });

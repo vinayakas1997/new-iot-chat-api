@@ -36,3 +36,8 @@ export function getBankId(key: BankKey): string {
 export function bankForUserQuery(_userId: string, _query: string): string {
   return getBankId({ lineId: 'line-3', plantId: 'default' });
 }
+
+/** Multi-line scope: one bank per resolved line id (chat default = all lines). */
+export function banksForQuery(lineIds: string[]): { lineId: string; bankId: string }[] {
+  return lineIds.map((lineId) => ({ lineId, bankId: getBankId({ lineId }) }));
+}

@@ -30,9 +30,8 @@ export async function writeHistory(input: WriteHistoryInput): Promise<void> {
   }
 }
 
-/** Answers for one calendar day (local range passed as UTC bounds by the caller). */
-export async function historyForRange(userId: string, fromIso: string, toIso: string) {
-  return getAppDb()
+export async function historyForRange(userId: string, fromIso: string, toIso: string, line?: string) {
+  const rows = await getAppDb()
     .select()
     .from(history)
     .where(
@@ -43,6 +42,19 @@ export async function historyForRange(userId: string, fromIso: string, toIso: st
       ),
     )
     .orderBy(desc(history.createdAt));
+  // Surface persisted charts/lines (stored in meta JSONB by chat/report writers).
+  const mapped = rows.map((r) => {
+    const meta = (r.meta ?? {}) as Record<string, unknown>;
+    return {
+      ...r,
+      charts: Array.isArray(meta['charts']) ? (meta['charts'] as unknown[]) : [],
+      lineIds: Array.isArray(meta['lineIds']) ? (meta['lineIds'] as string[]) : [],
+    };
+  });
+  // Optional line filter: rows recorded before line-scoping carry no lineIds and
+  // are excluded when a filter is active (they predate the dimension).
+  if (line) return mapped.filter((r) => r.lineIds.includes(line));
+  return mapped;
 }
 
 /** Distinct YYYY-MM-DD strings that have at least one entry, for the calendar dots. */
