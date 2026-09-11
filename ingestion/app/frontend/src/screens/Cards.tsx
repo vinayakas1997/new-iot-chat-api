@@ -2,6 +2,12 @@ import { useEffect, useState } from "react";
 import { cardApi, api, type Card, type CardTemplate, type Line, type ReapplyResult, type TestResult } from "../lib/api";
 import { AlertBanner, StatusChip } from "../components/chips";
 
+/** Ticks per day by granularity — one source query per tick per card copy. */
+export const TICKS_PER_DAY: Record<Card["granularity"], number> = { hourly: 24, shift: 3, daily: 1 };
+export function tickCost(c: Pick<Card, "granularity">): number {
+  return TICKS_PER_DAY[c.granularity];
+}
+
 /** F3: template library + per-line card copies. Verdict: which cards are live, and on what? */
 export function Cards() {
   const [tab, setTab] = useState<"cards" | "templates">("cards");
@@ -17,7 +23,7 @@ export function Cards() {
   const [instTpl, setInstTpl] = useState<CardTemplate | null>(null);
   const [instLine, setInstLine] = useState("");
   const [showCardForm, setShowCardForm] = useState(false);
-  const [cardDraft, setCardDraft] = useState({ lineId: "", name: "", tables: "", sql: "", granularity: "hourly", unit: "", extractHint: "", threshold: "" });
+  const [cardDraft, setCardDraft] = useState({ lineId: "", name: "", tables: "", sql: "", granularity: "hourly", unit: "", extractHint: "", threshold: "", changeMode: "forward", reingestFrom: "" });
   const [editCard, setEditCard] = useState<Card | null>(null);
 
   async function refresh() {
@@ -85,8 +91,8 @@ export function Cards() {
           </button>
         ))}
         <div className="ml-auto flex gap-2">
-          {tab === "cards"
-            ? <button onClick={() => { setEditCard(null); setCardDraft({ lineId: lines[0]?.id ?? "", name: "", tables: "", sql: "", granularity: "hourly", unit: "", extractHint: "", threshold: "" }); setShowCardForm(true); }} className="rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white">New card</button>
+            {tab === "cards"
+            ? <button onClick={() => { setEditCard(null); setCardDraft({ lineId: lines[0]?.id ?? "", name: "", tables: "", sql: "", granularity: "hourly", unit: "", extractHint: "", threshold: "", changeMode: "forward", reingestFrom: "" }); setShowCardForm(true); }} className="rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white">New card</button>
             : <button onClick={() => { setTplDraft({ name: "", description: "", sqlTemplate: "", granularity: "hourly", unit: "", extractHint: "" }); setShowTplForm(true); }} className="rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white">New template</button>}
         </div>
       </div>
@@ -103,6 +109,7 @@ export function Cards() {
               </div>
               <div className="mt-1 text-xs text-slate-400">
                 {c.granularity}{c.unit ? ` · ${c.unit}` : ""}{c.threshold != null ? ` · warn > ${c.threshold}` : ""} · tables: {c.tables.join(", ") || "—"}
+                <span className="tnum ml-2">≈{tickCost(c)} queries/day</span>
               </div>
               <pre className="mt-2 max-h-28 overflow-auto rounded bg-slate-100 p-2 font-mono text-xs dark:bg-ink-900">{c.sql || "(no SQL yet)"}</pre>
               <div className="mt-1 text-xs">
@@ -134,7 +141,7 @@ export function Cards() {
                 {c.status === "dormant" ? (
                   <>
                     <button onClick={() => void act(() => cardApi.activateCard(c.id))} disabled={!canActivate(c)} className="rounded-lg border border-state-ok/50 px-3 py-1 text-state-ok disabled:opacity-40">Go live</button>
-                    <button onClick={() => { setEditCard(c); setCardDraft({ lineId: c.lineId, name: c.name, tables: c.tables.join(", "), sql: c.sql, granularity: c.granularity, unit: c.unit, extractHint: c.extractHint, threshold: c.threshold != null ? String(c.threshold) : "" }); setShowCardForm(true); }} className="rounded-lg border border-slate-300 px-3 py-1 dark:border-ink-700">edit</button>
+                    <button onClick={() => { setEditCard(c); setCardDraft({ lineId: c.lineId, name: c.name, tables: c.tables.join(", "), sql: c.sql, granularity: c.granularity, unit: c.unit, extractHint: c.extractHint, threshold: c.threshold != null ? String(c.threshold) : "", changeMode: "forward", reingestFrom: "" }); setShowCardForm(true); }} className="rounded-lg border border-slate-300 px-3 py-1 dark:border-ink-700">edit</button>
                     <button onClick={() => { if (confirm(`Delete card "${c.name}" on ${c.lineId}?`)) void act(() => cardApi.deleteCard(c.id)); }} className="rounded-lg border border-state-bad/50 px-3 py-1 text-state-bad">delete</button>
                   </>
                 ) : (
@@ -162,6 +169,9 @@ export function Cards() {
                 <span className="ml-auto text-xs text-slate-400">{t.granularity}{t.unit ? ` · ${t.unit}` : ""}</span>
               </div>
               {t.description && <div className="mt-1 text-sm text-slate-500">{t.description}</div>}
+              <div className="tnum mt-1 text-xs text-slate-400">
+                ≈{cards.filter((c) => c.templateId === t.id).reduce((s, c) => s + tickCost(c), 0)} queries/day across {cards.filter((c) => c.templateId === t.id).length} copies
+              </div>
               <pre className="mt-2 max-h-28 overflow-auto rounded bg-slate-100 p-2 font-mono text-xs dark:bg-ink-900">{t.sqlTemplate || "(no SQL template)"}</pre>
               <div className="mt-3 flex flex-wrap gap-2 text-sm">
                 <button onClick={() => { setInstTpl(t); setInstLine(lines[0]?.id ?? ""); }} className="rounded-lg bg-accent-500 px-3 py-1 font-medium text-white">instantiate → line</button>
@@ -262,6 +272,20 @@ export function Cards() {
             <Field label="Threshold (optional)"><input value={cardDraft.threshold} onChange={(e) => setCardDraft({ ...cardDraft, threshold: e.target.value })} placeholder="warn above…" className={inp} /></Field>
           </div>
           <Field label="Extraction hint"><textarea rows={2} value={cardDraft.extractHint} onChange={(e) => setCardDraft({ ...cardDraft, extractHint: e.target.value })} className={inp} /></Field>
+          {editCard && (
+            <div className="rounded-lg border border-slate-200 p-3 text-sm dark:border-ink-800">
+              <div className="font-medium">On save, this SQL change applies…</div>
+              <label className="mt-2 flex items-center gap-2">
+                <input type="radio" checked={cardDraft.changeMode === "forward"} onChange={() => setCardDraft({ ...cardDraft, changeMode: "forward" })} className="accent-teal-500" />
+                Forward-only — from now on (light)
+              </label>
+              <label className="mt-1 flex items-center gap-2">
+                <input type="radio" checked={cardDraft.changeMode === "reingest"} onChange={() => setCardDraft({ ...cardDraft, changeMode: "reingest" })} className="accent-teal-500" />
+                Re-ingest from
+                <input type="date" value={cardDraft.reingestFrom} onChange={(e) => setCardDraft({ ...cardDraft, reingestFrom: e.target.value })} className="rounded border border-slate-300 bg-transparent px-2 py-0.5 dark:border-ink-700" />
+              </label>
+            </div>
+          )}
           <div className="mt-3 flex justify-end gap-2">
             <button onClick={() => setShowCardForm(false)} className="rounded-lg px-4 py-2 text-sm">cancel</button>
             <button onClick={() => void act(() => {
@@ -271,6 +295,7 @@ export function Cards() {
                 sql: cardDraft.sql, granularity: cardDraft.granularity,
                 unit: cardDraft.unit, extractHint: cardDraft.extractHint,
                 threshold: cardDraft.threshold === "" ? null : Number(cardDraft.threshold),
+                ...(editCard ? { changeMode: cardDraft.changeMode, reingestFrom: cardDraft.reingestFrom || undefined } : {}),
               };
               return (editCard
                 ? cardApi.updateCard(editCard.id, body)

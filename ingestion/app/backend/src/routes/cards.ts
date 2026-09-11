@@ -118,7 +118,12 @@ export async function cardRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const tpl = getTemplate(id);
     if (!tpl) return reply.code(404).send({ error: "not found" });
-    const p = z.object({ sql: z.string().optional(), activate: z.boolean().default(false) }).safeParse(req.body ?? {});
+    const p = z.object({
+      sql: z.string().optional(),
+      activate: z.boolean().default(false),
+      changeMode: z.enum(["forward", "reingest"]).default("forward"),
+      reingestFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    }).safeParse(req.body ?? {});
     if (!p.success) return reply.code(400).send({ error: p.error.message });
     const sql = p.data.sql ?? tpl.sqlTemplate;
     const results = [];
@@ -128,7 +133,7 @@ export async function cardRoutes(app: FastifyInstance) {
         continue;
       }
       try {
-        updateCard(copy.id, { sql });
+        updateCard(copy.id, { sql }, { mode: p.data.changeMode, reingestFrom: p.data.reingestFrom });
         const t = await runCardTest(copy.id);
         recordCardTest(copy.id, true, getCard(copy.id)?.sql ?? "", null);
         if (p.data.activate) activateCard(copy.id);
@@ -163,10 +168,14 @@ export async function cardRoutes(app: FastifyInstance) {
   });
   app.patch("/api/ingest/cards/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
-    const p = cardSchema.partial().safeParse(req.body);
+    const p = cardSchema.partial().extend({
+      changeMode: z.enum(["forward", "reingest"]).default("forward"),
+      reingestFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    }).safeParse(req.body);
     if (!p.success) return reply.code(400).send({ error: p.error.message });
     try {
-      const c = updateCard(id, p.data);
+      const { changeMode, reingestFrom, ...patch } = p.data;
+      const c = updateCard(id, patch, { mode: changeMode, reingestFrom });
       if (!c) return reply.code(404).send({ error: "not found" });
       return c;
     } catch (e) {

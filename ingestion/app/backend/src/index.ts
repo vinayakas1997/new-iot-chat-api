@@ -8,6 +8,7 @@ import { cardRoutes } from "./routes/cards.js";
 import { hindsightRoutes } from "./routes/hindsight.js";
 import { historyRoutes } from "./routes/history.js";
 import { lineRoutes } from "./routes/lines.js";
+import { runTick, startTicker } from "./ticker.js";
 
 const PORT = Number(process.env.PORT ?? 3100);
 const STORE_PATH = process.env.STORE_PATH ?? "./data/setter.db";
@@ -27,7 +28,11 @@ async function main() {
   await app.register(historyRoutes);
   await app.register(hindsightRoutes);
 
+  // Manual tick trigger (setter action + verification hook).
+  app.post("/api/ingest/tick", async () => runTick(app.log));
+
   startPoller(app.log);
+  if (process.env.TICK_ENABLED !== "false") startTicker(app.log);
 
   await app.listen({ port: PORT, host: "0.0.0.0" });
 }

@@ -614,15 +614,21 @@ export function instantiateTemplate(templateId: string, lineId: string, override
   });
 }
 
+export type ChangeMode = "forward" | "reingest";
+
 export function updateCard(
   id: string,
-  patch: Partial<Pick<CardInput, "name" | "tables" | "sql" | "granularity" | "unit" | "extractHint" | "threshold">>
+  patch: Partial<Pick<CardInput, "name" | "tables" | "sql" | "granularity" | "unit" | "extractHint" | "threshold">>,
+  opts?: { mode?: ChangeMode; reingestFrom?: string }
 ): Card | null {
   const cur = getCard(id);
   if (!cur) return null;
   if (cur.status === "live") throw new Error("card is LIVE — take it dormant before editing");
-  const tables = patch.tables ?? cur.tables;
-  const outside = tablesSubsetOfLine(tables, cur.lineId);
+  // Validate BEFORE touching anything: a rejected change must leave no trace.
+  if ((opts?.mode ?? "forward") === "reingest" && (patch.sql ?? cur.sql) !== cur.sql && !opts?.reingestFrom) {
+    throw new Error("re-ingest needs a from-date");
+  }
+  const tables = patch.tables ?? cur.tables;  const outside = tablesSubsetOfLine(tables, cur.lineId);
   if (outside.length > 0) throw new Error(`tables not in line members: ${outside.join(", ")}`);
   const sqlChanged = patch.sql !== undefined && patch.sql !== cur.sql;
   getDb()
@@ -636,7 +642,10 @@ export function updateCard(
       patch.extractHint ?? cur.extractHint, patch.threshold ?? cur.threshold,
       sqlChanged ? 1 : 0, new Date().toISOString(), id
     );
-  if (sqlChanged) logCardEvent(id, "edited", "sql changed → re-test required before activation");
+  if (sqlChanged) {
+    const mode = opts?.mode ?? "forward";
+    logCardEvent(id, `mode-${mode}`, opts?.reingestFrom ? `from ${opts.reingestFrom} (historical rewrite pending engine backfill; ticks continue forward)` : "applies from now on");
+  }
   return getCard(id);
 }
 

@@ -19,6 +19,11 @@ cd backend && pnpm install && pnpm dev    # :3100
 cd frontend && pnpm install && pnpm dev   # :3101
 ```
 
+Env knobs: `STORE_PATH` (SQLite file), `POLLER_INTERVAL_MS` (connection
+checks), `TICK_INTERVAL_MS` (default 5 min), `TICK_ENABLED=false` (disable
+the tick engine), `PORT`, `LOG_LEVEL`. `POST /api/ingest/tick` triggers a
+tick on demand.
+
 ## Environment quirk (do not "fix" by upgrading blindly)
 
 This box runs a custom Node 18 (ABI **109**, not stock 108), so
