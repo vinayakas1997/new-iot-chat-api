@@ -11,6 +11,11 @@ services:
       LOG_LEVEL: info
     volumes:
       - setter-data:/data
+    # Lets the backend reach host-bound services (e.g. your atlas-35b LLM on
+    # host port 8009) via http://host.docker.internal:8009 — localhost inside
+    # the container is the container itself, hence the "fetch failed".
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
   frontend:
@@ -58,6 +63,10 @@ services:
     volumes:
       - hindsight-data:/home/hindsight/.pg0
     shm_size: 1g
+    # Same host-gateway mapping so HINDSIGHT_API_LLM_BASE_URL can point at a
+    # host-bound local LLM (e.g. http://host.docker.internal:8009/v1).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
 volumes:
