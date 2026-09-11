@@ -2,6 +2,7 @@ import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom"
 import { Shell } from "./shell/Shell";
 import { Connections } from "./screens/Connections";
 import { Cards } from "./screens/Cards";
+import { Hindsight } from "./screens/Hindsight";
 import { History } from "./screens/History";
 import { Lines } from "./screens/Lines";
 import { Home, Placeholder } from "./screens/misc";
@@ -17,7 +18,7 @@ const router = createBrowserRouter([
       { path: "lines", element: <Lines /> },
       { path: "cards", element: <Cards /> },
       { path: "history", element: <History /> },
-      { path: "hindsight", element: <Placeholder code="F5" name="Hindsight" verdict="Is Hindsight live?" /> },
+      { path: "hindsight", element: <Hindsight /> },
     ],
   },
 ]);

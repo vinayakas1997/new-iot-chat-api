@@ -133,6 +133,11 @@ export function openStore(path: string): Database.Database {
       error TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_runs_line_day ON runs(line_id, at);
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL
+    );
   `);
   return db;
 }
@@ -725,6 +730,25 @@ export function runsForLine(lineId: string, from: string, to: string): RunRecord
     durationMs: (x.duration_ms as number) ?? null,
     error: (x.error as string) ?? null,
   }));
+}
+
+export function getSetting(key: string): string | null {
+  const r = getDb().prepare("SELECT value FROM settings WHERE key=?").get(key) as { value: string } | undefined;
+  return r?.value ?? null;
+}
+
+export function setSetting(key: string, value: string): void {
+  getDb()
+    .prepare(
+      `INSERT INTO settings (key,value,updated_at) VALUES (?,?,?)
+       ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`
+    )
+    .run(key, value, new Date().toISOString());
+}
+
+export function lastFactWrite(): string | null {
+  const r = getDb().prepare("SELECT MAX(at) AS at FROM runs WHERE facts_stored>0").get() as { at: string | null };
+  return r.at;
 }
 
 export function getRun(id: number): RunRecord | null {

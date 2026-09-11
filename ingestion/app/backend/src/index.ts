@@ -5,6 +5,7 @@ import { createLogger } from "./logger.js";
 import { startPoller } from "./poller.js";
 import { connectionRoutes } from "./routes/connections.js";
 import { cardRoutes } from "./routes/cards.js";
+import { hindsightRoutes } from "./routes/hindsight.js";
 import { historyRoutes } from "./routes/history.js";
 import { lineRoutes } from "./routes/lines.js";
 
@@ -24,6 +25,7 @@ async function main() {
   await app.register(lineRoutes);
   await app.register(cardRoutes);
   await app.register(historyRoutes);
+  await app.register(hindsightRoutes);
 
   startPoller(app.log);
 
