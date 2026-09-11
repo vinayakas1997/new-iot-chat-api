@@ -28,6 +28,18 @@ export interface TableRef {
   name: string;
 }
 
+export interface Line {
+  id: string;
+  name: string;
+  connectionId: string;
+  connectionLabel: string;
+  memberTables: string[];
+  active: boolean;
+  lastTick: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface TableDetail extends TableRef {
   rowCount: number | null;
   primaryKey: string[];
@@ -62,4 +74,18 @@ export const api = {
     req<{ tables: TableRef[] }>(`/api/ingest/connections/${id}/tables`),
   describeTable: (id: string, schema: string, table: string) =>
     req<TableDetail>(`/api/ingest/connections/${id}/tables/${schema}/${table}`),
+  listLines: (params?: { connectionId?: string; table?: string; q?: string }) => {
+    const qs = new URLSearchParams(params as Record<string, string>).toString();
+    return req<Line[]>(`/api/ingest/lines${qs ? `?${qs}` : ""}`);
+  },
+  createLine: (input: { id: string; name: string; connectionId: string; memberTables: string[] }) =>
+    req<Line>("/api/ingest/lines", { method: "POST", body: JSON.stringify(input) }),
+  updateLine: (id: string, patch: { name?: string; connectionId?: string; memberTables?: string[] }) =>
+    req<Line>(`/api/ingest/lines/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deregisterLine: (id: string) =>
+    req<Line>(`/api/ingest/lines/${id}/deregister`, { method: "POST" }),
+  reregisterLine: (id: string) =>
+    req<Line>(`/api/ingest/lines/${id}/reregister`, { method: "POST" }),
+  unassignedTables: (connectionId: string) =>
+    req<{ unassigned: string[] }>(`/api/ingest/lines-unassigned?connectionId=${connectionId}`),
 };

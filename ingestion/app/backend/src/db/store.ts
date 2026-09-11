@@ -66,6 +66,17 @@ export function openStore(path: string): Database.Database {
       table_count INTEGER,
       error TEXT
     );
+    CREATE TABLE IF NOT EXISTS lines (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE RESTRICT,
+      member_tables TEXT NOT NULL DEFAULT '[]',
+      active INTEGER NOT NULL DEFAULT 1,
+      last_tick TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_lines_connection ON lines(connection_id);
   `);
   return db;
 }
@@ -213,4 +224,111 @@ export function lastCheck(connectionId: string): CheckResult | null {
 export function redact(c: ConnectionRecord): Omit<ConnectionRecord, "password"> {
   const { password: _pw, ...rest } = c;
   return rest;
+}
+
+/* ---------------- F2: production line registry ---------------- */
+
+export interface LineRecord {
+  id: string;
+  name: string;
+  connectionId: string;
+  /** ["schema.table", ...] — setter-grouped member tables. */
+  memberTables: string[];
+  /** Deregistered lines stay visible (badged) but get no ticks. */
+  active: boolean;
+  lastTick: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface LineInput {
+  id: string;
+  name: string;
+  connectionId: string;
+  memberTables: string[];
+}
+
+function lineRow(r: Record<string, unknown>): LineRecord {
+  return {
+    id: r.id as string,
+    name: r.name as string,
+    connectionId: r.connection_id as string,
+    memberTables: JSON.parse((r.member_tables as string) ?? "[]") as string[],
+    active: (r.active as number) === 1,
+    lastTick: (r.last_tick as string) ?? null,
+    createdAt: r.created_at as string,
+    updatedAt: r.updated_at as string,
+  };
+}
+
+export function listLines(filter?: { connectionId?: string; table?: string; q?: string }): LineRecord[] {
+  const all = (getDb().prepare("SELECT * FROM lines ORDER BY id").all() as Record<string, unknown>[]).map(lineRow);
+  return all.filter((l) => {
+    if (filter?.connectionId && l.connectionId !== filter.connectionId) return false;
+    if (filter?.table && !l.memberTables.some((t) => t.toLowerCase().includes(filter.table!.toLowerCase()))) return false;
+    if (filter?.q && !`${l.id} ${l.name}`.toLowerCase().includes(filter.q.toLowerCase())) return false;
+    return true;
+  });
+}
+
+export function getLine(id: string): LineRecord | null {
+  const r = getDb().prepare("SELECT * FROM lines WHERE id = ?").get(id);
+  return r ? lineRow(r as Record<string, unknown>) : null;
+}
+
+export function createLine(input: LineInput): LineRecord {
+  if (!getConnection(input.connectionId)) throw new Error("connection not found");
+  if (getLine(input.id)) throw new Error("line id already registered");
+  const now = new Date().toISOString();
+  getDb()
+    .prepare(
+      `INSERT INTO lines (id,name,connection_id,member_tables,active,last_tick,created_at,updated_at)
+       VALUES (?,?,?,?,1,NULL,?,?)`
+    )
+    .run(input.id, input.name, input.connectionId, JSON.stringify(input.memberTables), now, now);
+  return getLine(input.id)!;
+}
+
+export function updateLine(
+  id: string,
+  patch: Partial<Omit<LineInput, "id">>
+): LineRecord | null {
+  const cur = getLine(id);
+  if (!cur) return null;
+  if (patch.connectionId && !getConnection(patch.connectionId)) throw new Error("connection not found");
+  getDb()
+    .prepare(
+      `UPDATE lines SET name=?,connection_id=?,member_tables=?,updated_at=? WHERE id=?`
+    )
+    .run(
+      patch.name ?? cur.name,
+      patch.connectionId ?? cur.connectionId,
+      JSON.stringify(patch.memberTables ?? cur.memberTables),
+      new Date().toISOString(),
+      id
+    );
+  return getLine(id);
+}
+
+/** Deregister: stops future ticks, keeps the record + history visible. */
+export function deregisterLine(id: string): LineRecord | null {
+  const cur = getLine(id);
+  if (!cur) return null;
+  getDb().prepare("UPDATE lines SET active=0,updated_at=? WHERE id=?").run(new Date().toISOString(), id);
+  return getLine(id);
+}
+
+export function reregisterLine(id: string): LineRecord | null {
+  const cur = getLine(id);
+  if (!cur) return null;
+  getDb().prepare("UPDATE lines SET active=1,updated_at=? WHERE id=?").run(new Date().toISOString(), id);
+  return getLine(id);
+}
+
+export function linesBoundTo(connectionId: string): LineRecord[] {
+  return (getDb().prepare("SELECT * FROM lines WHERE connection_id = ?").all(connectionId) as Record<string, unknown>[]).map(lineRow);
+}
+
+export function touchLineTick(id: string, at: string): void {
+  getDb().prepare("UPDATE lines SET last_tick=? WHERE id=?").run(at, id);
 }

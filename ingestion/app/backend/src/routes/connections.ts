@@ -5,6 +5,7 @@ import {
   deleteConnection,
   getConnection,
   lastCheck,
+  linesBoundTo,
   listConnections,
   redact,
   updateConnection,
@@ -56,7 +57,13 @@ export async function connectionRoutes(app: FastifyInstance) {
 
   app.delete("/api/ingest/connections/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
-    // F2 will enforce "blocked while lines bound" here once lines exist.
+    // F1 lock: blocked while lines are bound (DB RESTRICT backs this too).
+    const bound = linesBoundTo(id);
+    if (bound.length > 0) {
+      return reply.code(409).send({
+        error: `connection has ${bound.length} bound line(s): ${bound.map((l) => l.id).join(", ")} — rebind or deregister them first`,
+      });
+    }
     if (!deleteConnection(id)) return reply.code(404).send({ error: "not found" });
     return { ok: true };
   });

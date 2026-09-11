@@ -1,6 +1,7 @@
 import { listConnections, recordCheck } from "./db/store.js";
 import { driverFor } from "./drivers/index.js";
 import type { Logger } from "./logger.js";
+import { unassignedTables } from "./routes/lines.js";
 
 const POLL_INTERVAL_MS = Number(process.env.POLLER_INTERVAL_MS ?? 5 * 60 * 1000);
 
@@ -23,6 +24,18 @@ export function startPoller(log: Logger): NodeJS.Timeout {
           tableCount: r.tables.length,
           error: null,
         });
+        // F2 lock: nudge about source tables belonging to no registered line.
+        try {
+          const unassigned = await unassignedTables(conn.id);
+          if (unassigned.length > 0) {
+            log.warn(
+              { connectionId: conn.id, label: conn.label, unassigned },
+              "source tables belong to no line"
+            );
+          }
+        } catch {
+          // probe already succeeded; nudge is best-effort
+        }
       } catch (e) {
         const error = (e as Error).message;
         recordCheck({

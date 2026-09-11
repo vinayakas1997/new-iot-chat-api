@@ -1,6 +1,7 @@
 import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom";
 import { Shell } from "./shell/Shell";
 import { Connections } from "./screens/Connections";
+import { Lines } from "./screens/Lines";
 import { Home, Placeholder } from "./screens/misc";
 
 const router = createBrowserRouter([
@@ -11,7 +12,7 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate to="connections" replace /> },
       { path: "connections", element: <Connections /> },
-      { path: "lines", element: <Placeholder code="F2" name="Lines" verdict="Which lines are in the pipeline?" /> },
+      { path: "lines", element: <Lines /> },
       { path: "cards", element: <Placeholder code="F3" name="Cards" verdict="Which cards are live, and on what?" /> },
       { path: "history", element: <Placeholder code="F4" name="History" verdict="Did ingestion run clean?" /> },
       { path: "hindsight", element: <Placeholder code="F5" name="Hindsight" verdict="Is Hindsight live?" /> },

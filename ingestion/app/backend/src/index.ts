@@ -4,6 +4,7 @@ import { openStore } from "./db/store.js";
 import { createLogger } from "./logger.js";
 import { startPoller } from "./poller.js";
 import { connectionRoutes } from "./routes/connections.js";
+import { lineRoutes } from "./routes/lines.js";
 
 const PORT = Number(process.env.PORT ?? 3100);
 const STORE_PATH = process.env.STORE_PATH ?? "./data/setter.db";
@@ -18,6 +19,7 @@ async function main() {
   app.get("/api/health", async () => ({ ok: true, at: new Date().toISOString() }));
 
   await app.register(connectionRoutes);
+  await app.register(lineRoutes);
 
   startPoller(app.log);
 
