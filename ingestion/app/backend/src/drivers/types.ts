@@ -37,4 +37,6 @@ const READONLY = /^\s*(select|with|show|describe|desc|explain)\b/i;
 
 export function assertReadonly(sql: string): void {
   if (!READONLY.test(sql)) throw new Error("only read-only statements allowed");
+  const stripped = sql.replace(/'([^'\\]|\\.)*'/g, "''").replace(/"([^"\\]|\\.)*"/g, '""');
+  if (stripped.includes(";")) throw new Error("multi-statement queries are not allowed");
 }

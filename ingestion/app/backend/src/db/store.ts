@@ -77,6 +77,47 @@ export function openStore(path: string): Database.Database {
       updated_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_lines_connection ON lines(connection_id);
+    CREATE TABLE IF NOT EXISTS card_templates (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      sql_template TEXT NOT NULL DEFAULT '',
+      granularity TEXT NOT NULL DEFAULT 'hourly' CHECK (granularity IN ('hourly','shift','daily')),
+      unit TEXT NOT NULL DEFAULT '',
+      extract_hint TEXT NOT NULL DEFAULT '',
+      version INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS cards (
+      id TEXT PRIMARY KEY,
+      template_id TEXT REFERENCES card_templates(id) ON DELETE SET NULL,
+      template_version INTEGER,
+      line_id TEXT NOT NULL REFERENCES lines(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      tables_json TEXT NOT NULL DEFAULT '[]',
+      sql_text TEXT NOT NULL DEFAULT '',
+      granularity TEXT NOT NULL DEFAULT 'hourly' CHECK (granularity IN ('hourly','shift','daily')),
+      unit TEXT NOT NULL DEFAULT '',
+      extract_hint TEXT NOT NULL DEFAULT '',
+      threshold REAL,
+      status TEXT NOT NULL DEFAULT 'dormant' CHECK (status IN ('live','dormant')),
+      version INTEGER NOT NULL DEFAULT 1,
+      last_test_at TEXT,
+      last_test_ok INTEGER,
+      last_test_sql_hash TEXT,
+      last_test_error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_cards_line ON cards(line_id);
+    CREATE TABLE IF NOT EXISTS card_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      card_id TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+      at TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      detail TEXT NOT NULL DEFAULT ''
+    );
   `);
   return db;
 }
@@ -331,4 +372,296 @@ export function linesBoundTo(connectionId: string): LineRecord[] {
 
 export function touchLineTick(id: string, at: string): void {
   getDb().prepare("UPDATE lines SET last_tick=? WHERE id=?").run(at, id);
+}
+
+/* ---------------- F3: context component cards ---------------- */
+
+export type Granularity = "hourly" | "shift" | "daily";
+export type CardStatus = "live" | "dormant";
+
+export interface CardTemplate {
+  id: string;
+  name: string;
+  description: string;
+  sqlTemplate: string;
+  granularity: Granularity;
+  unit: string;
+  extractHint: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Card {
+  id: string;
+  templateId: string | null;
+  templateVersion: number | null;
+  lineId: string;
+  name: string;
+  tables: string[];
+  sql: string;
+  granularity: Granularity;
+  unit: string;
+  extractHint: string;
+  threshold: number | null;
+  status: CardStatus;
+  version: number;
+  lastTest: { at: string; ok: boolean; sqlHash: string | null; error: string | null } | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export function sqlHash(sql: string): string {
+  let h = 5381;
+  for (let i = 0; i < sql.length; i++) h = ((h << 5) + h + sql.charCodeAt(i)) | 0;
+  return `h${(h >>> 0).toString(36)}`;
+}
+
+function tplRow(r: Record<string, unknown>): CardTemplate {
+  return {
+    id: r.id as string,
+    name: r.name as string,
+    description: (r.description as string) ?? "",
+    sqlTemplate: (r.sql_template as string) ?? "",
+    granularity: r.granularity as Granularity,
+    unit: (r.unit as string) ?? "",
+    extractHint: (r.extract_hint as string) ?? "",
+    version: r.version as number,
+    createdAt: r.created_at as string,
+    updatedAt: r.updated_at as string,
+  };
+}
+
+function cardRow(r: Record<string, unknown>): Card {
+  const ok = r.last_test_ok as number | null;
+  return {
+    id: r.id as string,
+    templateId: (r.template_id as string) ?? null,
+    templateVersion: (r.template_version as number) ?? null,
+    lineId: r.line_id as string,
+    name: r.name as string,
+    tables: JSON.parse((r.tables_json as string) ?? "[]") as string[],
+    sql: (r.sql_text as string) ?? "",
+    granularity: r.granularity as Granularity,
+    unit: (r.unit as string) ?? "",
+    extractHint: (r.extract_hint as string) ?? "",
+    threshold: (r.threshold as number) ?? null,
+    status: r.status as CardStatus,
+    version: r.version as number,
+    lastTest:
+      r.last_test_at == null
+        ? null
+        : {
+            at: r.last_test_at as string,
+            ok: ok === 1,
+            sqlHash: (r.last_test_sql_hash as string) ?? null,
+            error: (r.last_test_error as string) ?? null,
+          },
+    createdAt: r.created_at as string,
+    updatedAt: r.updated_at as string,
+  };
+}
+
+function logCardEvent(cardId: string, kind: string, detail = ""): void {
+  getDb()
+    .prepare("INSERT INTO card_events (card_id,at,kind,detail) VALUES (?,?,?,?)")
+    .run(cardId, new Date().toISOString(), kind, detail);
+}
+
+export function listTemplates(): CardTemplate[] {
+  return (getDb().prepare("SELECT * FROM card_templates ORDER BY name").all() as Record<string, unknown>[]).map(tplRow);
+}
+
+export function createTemplate(t: Omit<CardTemplate, "id" | "version" | "createdAt" | "updatedAt">): CardTemplate {
+  const id = `tpl-${Date.now().toString(36)}`;
+  const now = new Date().toISOString();
+  getDb()
+    .prepare(
+      `INSERT INTO card_templates (id,name,description,sql_template,granularity,unit,extract_hint,version,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,1,?,?)`
+    )
+    .run(id, t.name, t.description, t.sqlTemplate, t.granularity, t.unit, t.extractHint, now, now);
+  return getTemplate(id)!;
+}
+
+export function getTemplate(id: string): CardTemplate | null {
+  const r = getDb().prepare("SELECT * FROM card_templates WHERE id=?").get(id);
+  return r ? tplRow(r as Record<string, unknown>) : null;
+}
+
+export function updateTemplate(id: string, patch: Partial<Omit<CardTemplate, "id" | "version" | "createdAt" | "updatedAt">>): CardTemplate | null {
+  const cur = getTemplate(id);
+  if (!cur) return null;
+  const bump = patch.sqlTemplate !== undefined && patch.sqlTemplate !== cur.sqlTemplate;
+  getDb()
+    .prepare(
+      `UPDATE card_templates SET name=?,description=?,sql_template=?,granularity=?,unit=?,extract_hint=?,
+       version=version+?,updated_at=? WHERE id=?`
+    )
+    .run(
+      patch.name ?? cur.name,
+      patch.description ?? cur.description,
+      patch.sqlTemplate ?? cur.sqlTemplate,
+      patch.granularity ?? cur.granularity,
+      patch.unit ?? cur.unit,
+      patch.extractHint ?? cur.extractHint,
+      bump ? 1 : 0,
+      new Date().toISOString(),
+      id
+    );
+  return getTemplate(id);
+}
+
+export function deleteTemplate(id: string): boolean {
+  return getDb().prepare("DELETE FROM card_templates WHERE id=?").run(id).changes > 0;
+}
+
+export interface CardInput {
+  lineId: string;
+  name: string;
+  tables: string[];
+  sql: string;
+  granularity: Granularity;
+  unit?: string;
+  extractHint?: string;
+  threshold?: number | null;
+  templateId?: string | null;
+}
+
+function tablesSubsetOfLine(tables: string[], lineId: string): string[] {
+  const line = getLine(lineId);
+  if (!line) return ["line not found"];
+  const members = new Set(line.memberTables.map((t) => t.toLowerCase()));
+  return tables.filter((t) => !members.has(t.toLowerCase()));
+}
+
+export function listCards(lineId?: string): Card[] {
+  const rows = (
+    lineId
+      ? getDb().prepare("SELECT * FROM cards WHERE line_id=? ORDER BY name").all(lineId)
+      : getDb().prepare("SELECT * FROM cards ORDER BY line_id,name").all()
+  ) as Record<string, unknown>[];
+  return rows.map(cardRow);
+}
+
+export function getCard(id: string): Card | null {
+  const r = getDb().prepare("SELECT * FROM cards WHERE id=?").get(id);
+  return r ? cardRow(r as Record<string, unknown>) : null;
+}
+
+export function copiesOfTemplate(templateId: string): Card[] {
+  return (getDb().prepare("SELECT * FROM cards WHERE template_id=?").all(templateId) as Record<string, unknown>[]).map(cardRow);
+}
+
+export function createCard(input: CardInput): Card {
+  const line = getLine(input.lineId);
+  if (!line) throw new Error("line not found");
+  if (!line.active) throw new Error("line is deregistered");
+  const outside = tablesSubsetOfLine(input.tables, input.lineId);
+  if (outside.length > 0) throw new Error(`tables not in line members: ${outside.join(", ")}`);
+  const id = `card-${Date.now().toString(36)}`;
+  const now = new Date().toISOString();
+  const tpl = input.templateId ? getTemplate(input.templateId) : null;
+  getDb()
+    .prepare(
+      `INSERT INTO cards (id,template_id,template_version,line_id,name,tables_json,sql_text,granularity,unit,extract_hint,threshold,status,version,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?, 'dormant',1,?,?)`
+    )
+    .run(
+      id, tpl?.id ?? null, tpl?.version ?? null, input.lineId, input.name,
+      JSON.stringify(input.tables), input.sql, input.granularity,
+      input.unit ?? "", input.extractHint ?? "", input.threshold ?? null, now, now
+    );
+  logCardEvent(id, "created", `from ${tpl ? `template ${tpl.name} v${tpl.version}` : "scratch"}`);
+  return getCard(id)!;
+}
+
+/** Instantiate a template onto a line: independent copy, free to diverge. */
+export function instantiateTemplate(templateId: string, lineId: string, overrides?: Partial<Pick<CardInput, "name" | "tables" | "sql">>): Card {
+  const tpl = getTemplate(templateId);
+  if (!tpl) throw new Error("template not found");
+  const line = getLine(lineId);
+  if (!line) throw new Error("line not found");
+  return createCard({
+    lineId,
+    name: overrides?.name ?? tpl.name,
+    tables: overrides?.tables ?? [...line.memberTables],
+    sql: overrides?.sql ?? tpl.sqlTemplate,
+    granularity: tpl.granularity,
+    unit: tpl.unit,
+    extractHint: tpl.extractHint,
+    templateId: tpl.id,
+  });
+}
+
+export function updateCard(
+  id: string,
+  patch: Partial<Pick<CardInput, "name" | "tables" | "sql" | "granularity" | "unit" | "extractHint" | "threshold">>
+): Card | null {
+  const cur = getCard(id);
+  if (!cur) return null;
+  if (cur.status === "live") throw new Error("card is LIVE — take it dormant before editing");
+  const tables = patch.tables ?? cur.tables;
+  const outside = tablesSubsetOfLine(tables, cur.lineId);
+  if (outside.length > 0) throw new Error(`tables not in line members: ${outside.join(", ")}`);
+  const sqlChanged = patch.sql !== undefined && patch.sql !== cur.sql;
+  getDb()
+    .prepare(
+      `UPDATE cards SET name=?,tables_json=?,sql_text=?,granularity=?,unit=?,extract_hint=?,threshold=?,
+       version=version+?,updated_at=? WHERE id=?`
+    )
+    .run(
+      patch.name ?? cur.name, JSON.stringify(tables), patch.sql ?? cur.sql,
+      patch.granularity ?? cur.granularity, patch.unit ?? cur.unit,
+      patch.extractHint ?? cur.extractHint, patch.threshold ?? cur.threshold,
+      sqlChanged ? 1 : 0, new Date().toISOString(), id
+    );
+  if (sqlChanged) logCardEvent(id, "edited", "sql changed → re-test required before activation");
+  return getCard(id);
+}
+
+export function deleteCard(id: string): boolean {
+  const cur = getCard(id);
+  if (!cur) return false;
+  if (cur.status === "live") throw new Error("card is LIVE — take it dormant before deleting");
+  logCardEvent(id, "deleted", "");
+  return getDb().prepare("DELETE FROM cards WHERE id=?").run(id).changes > 0;
+}
+
+export function recordCardTest(id: string, ok: boolean, sql: string, error: string | null): void {
+  getDb()
+    .prepare(
+      `UPDATE cards SET last_test_at=?,last_test_ok=?,last_test_sql_hash=?,last_test_error=? WHERE id=?`
+    )
+    .run(new Date().toISOString(), ok ? 1 : 0, sqlHash(sql), error, id);
+  logCardEvent(id, ok ? "test-passed" : "test-failed", error ?? "");
+}
+
+/**
+ * Activation guard (F3 lock): a card goes live only with tested SQL —
+ * last test must pass AND match the current sql hash.
+ */
+export function activateCard(id: string): Card {
+  const cur = getCard(id);
+  if (!cur) throw new Error("card not found");
+  if (!cur.sql.trim()) throw new Error("card has no SQL");
+  if (!cur.lastTest?.ok) throw new Error("no passing test-run — test before activating");
+  if (cur.lastTest.sqlHash !== sqlHash(cur.sql)) throw new Error("SQL changed since last test — re-test before activating");
+  getDb().prepare("UPDATE cards SET status='live',updated_at=? WHERE id=?").run(new Date().toISOString(), id);
+  logCardEvent(id, "activated", `v${cur.version}`);
+  return getCard(id)!;
+}
+
+export function dormCard(id: string): Card {
+  const cur = getCard(id);
+  if (!cur) throw new Error("card not found");
+  getDb().prepare("UPDATE cards SET status='dormant',updated_at=? WHERE id=?").run(new Date().toISOString(), id);
+  logCardEvent(id, "dormant", "");
+  return getCard(id)!;
+}
+
+export function cardEvents(cardId: string): { at: string; kind: string; detail: string }[] {
+  return (getDb().prepare("SELECT at,kind,detail FROM card_events WHERE card_id=? ORDER BY id DESC LIMIT 50").all(cardId) as {
+    at: string; kind: string; detail: string;
+  }[]);
 }

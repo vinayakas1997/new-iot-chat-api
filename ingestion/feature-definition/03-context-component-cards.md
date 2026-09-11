@@ -70,9 +70,12 @@ connectionId`, so mixed-version banks stay traceable.
 - Database connectivity itself (F1) and line membership itself (F2).
 - Read-only verification views (F4, F5).
 
-## Open points
-- Card extras: whether a card also carries threshold, unit label, or a
-  per-card extraction hint for the AI extractor.
-- Test-run scope: live tables vs date-limited sample (e.g. yesterday only).
-- Re-ingest style: overwrite old facts in the window vs keep both versions
-  visible.
+## Open points — resolved at F3 build time
+- Card extras: **included** — unit label, per-card extraction hint, optional
+  numeric threshold.
+- Test-run scope: **windowed** — `{{from}}`/`{{to}}` placeholders substituted
+  (default = last 24h), executed read-only, capped at 50 preview rows.
+- Re-ingest style: **overwrite** within the window; version stamps keep the
+  seam visible.
+- Activation guard: a card goes live only with a passing test whose hash
+  matches the current SQL. Multi-statement SQL rejected.

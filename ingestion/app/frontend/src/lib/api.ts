@@ -89,3 +89,72 @@ export const api = {
   unassignedTables: (connectionId: string) =>
     req<{ unassigned: string[] }>(`/api/ingest/lines-unassigned?connectionId=${connectionId}`),
 };
+
+export interface CardTemplate {
+  id: string;
+  name: string;
+  description: string;
+  sqlTemplate: string;
+  granularity: "hourly" | "shift" | "daily";
+  unit: string;
+  extractHint: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Card {
+  id: string;
+  templateId: string | null;
+  templateVersion: number | null;
+  lineId: string;
+  name: string;
+  tables: string[];
+  sql: string;
+  granularity: "hourly" | "shift" | "daily";
+  unit: string;
+  extractHint: string;
+  threshold: number | null;
+  status: "live" | "dormant";
+  version: number;
+  lastTest: { at: string; ok: boolean; sqlHash: string | null; error: string | null } | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TestResult {
+  columns: string[];
+  rows: Record<string, unknown>[];
+  rowCount: number;
+  sql: string;
+}
+
+export interface ReapplyResult {
+  templateId: string;
+  templateVersion: number;
+  sqlHash: string;
+  results: { cardId: string; lineId: string; status: "green" | "red" | "skipped-live"; rowCount?: number; error?: string }[];
+}
+
+export const cardApi = {
+  listTemplates: () => req<CardTemplate[]>("/api/ingest/templates"),
+  createTemplate: (input: Record<string, unknown>) =>
+    req<CardTemplate>("/api/ingest/templates", { method: "POST", body: JSON.stringify(input) }),
+  updateTemplate: (id: string, patch: Record<string, unknown>) =>
+    req<CardTemplate>(`/api/ingest/templates/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteTemplate: (id: string) => req<{ ok: boolean }>(`/api/ingest/templates/${id}`, { method: "DELETE" }),
+  instantiate: (id: string, input: { lineId: string; name?: string; tables?: string[]; sql?: string }) =>
+    req<Card>(`/api/ingest/templates/${id}/instantiate`, { method: "POST", body: JSON.stringify(input) }),
+  reapply: (id: string, input: { sql?: string; activate?: boolean }) =>
+    req<ReapplyResult>(`/api/ingest/templates/${id}/reapply`, { method: "POST", body: JSON.stringify(input) }),
+  listCards: (lineId?: string) => req<Card[]>(`/api/ingest/cards${lineId ? `?lineId=${lineId}` : ""}`),
+  createCard: (input: Record<string, unknown>) =>
+    req<Card>("/api/ingest/cards", { method: "POST", body: JSON.stringify(input) }),
+  updateCard: (id: string, patch: Record<string, unknown>) =>
+    req<Card>(`/api/ingest/cards/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  deleteCard: (id: string) => req<{ ok: boolean }>(`/api/ingest/cards/${id}`, { method: "DELETE" }),
+  testCard: (id: string, from?: string, to?: string) =>
+    req<TestResult>(`/api/ingest/cards/${id}/test`, { method: "POST", body: JSON.stringify({ from, to }) }),
+  activateCard: (id: string) => req<Card>(`/api/ingest/cards/${id}/activate`, { method: "POST" }),
+  dormantCard: (id: string) => req<Card>(`/api/ingest/cards/${id}/dormant`, { method: "POST" }),
+};

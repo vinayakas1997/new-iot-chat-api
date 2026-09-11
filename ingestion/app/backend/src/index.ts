@@ -4,6 +4,7 @@ import { openStore } from "./db/store.js";
 import { createLogger } from "./logger.js";
 import { startPoller } from "./poller.js";
 import { connectionRoutes } from "./routes/connections.js";
+import { cardRoutes } from "./routes/cards.js";
 import { lineRoutes } from "./routes/lines.js";
 
 const PORT = Number(process.env.PORT ?? 3100);
@@ -20,6 +21,7 @@ async function main() {
 
   await app.register(connectionRoutes);
   await app.register(lineRoutes);
+  await app.register(cardRoutes);
 
   startPoller(app.log);
 
