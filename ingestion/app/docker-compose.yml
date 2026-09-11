@@ -1,0 +1,25 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "3100:3100"
+    environment:
+      PORT: "3100"
+      STORE_PATH: /data/setter.db
+      POLLER_INTERVAL_MS: "300000"
+      TICK_INTERVAL_MS: "300000"
+      LOG_LEVEL: info
+    volumes:
+      - setter-data:/data
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3101:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  setter-data:
