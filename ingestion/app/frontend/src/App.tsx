@@ -2,6 +2,7 @@ import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom"
 import { Shell } from "./shell/Shell";
 import { Connections } from "./screens/Connections";
 import { Cards } from "./screens/Cards";
+import { History } from "./screens/History";
 import { Lines } from "./screens/Lines";
 import { Home, Placeholder } from "./screens/misc";
 
@@ -15,7 +16,7 @@ const router = createBrowserRouter([
       { path: "connections", element: <Connections /> },
       { path: "lines", element: <Lines /> },
       { path: "cards", element: <Cards /> },
-      { path: "history", element: <Placeholder code="F4" name="History" verdict="Did ingestion run clean?" /> },
+      { path: "history", element: <History /> },
       { path: "hindsight", element: <Placeholder code="F5" name="Hindsight" verdict="Is Hindsight live?" /> },
     ],
   },

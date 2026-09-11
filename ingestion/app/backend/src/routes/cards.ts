@@ -16,6 +16,7 @@ import {
   listCards,
   listTemplates,
   recordCardTest,
+  recordRun,
   sqlHash,
   updateCard,
   updateTemplate,
@@ -185,14 +186,32 @@ export async function cardRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const p = z.object({ from: z.string().optional(), to: z.string().optional() }).safeParse(req.body ?? {});
     if (!p.success) return reply.code(400).send({ error: p.error.message });
+    const started = Date.now();
     try {
       const t = await runCardTest(id, p.data.from, p.data.to);
+      const card = getCard(id)!;
       // Hash the RAW card SQL (with {{from}}/{{to}} intact): the substituted
       // window changes every run, but the definition is what the guard checks.
-      recordCardTest(id, true, getCard(id)?.sql ?? "", null);
+      recordCardTest(id, true, card.sql, null);
+      // F4: every test-run is footprinted in the run log (kind=test).
+      recordRun({
+        at: new Date().toISOString(), lineId: card.lineId, cardId: id,
+        cardVersion: card.version, kind: "test", ok: true,
+        rowsPulled: t.rowCount, unitsBuilt: t.rowCount, factsStored: 0,
+        durationMs: Date.now() - started, error: null,
+      });
       return t;
     } catch (e) {
-      recordCardTest(id, false, getCard(id)?.sql ?? "", (e as Error).message);
+      const card = getCard(id);
+      recordCardTest(id, false, card?.sql ?? "", (e as Error).message);
+      if (card) {
+        recordRun({
+          at: new Date().toISOString(), lineId: card.lineId, cardId: id,
+          cardVersion: card.version, kind: "test", ok: false,
+          rowsPulled: 0, unitsBuilt: 0, factsStored: 0,
+          durationMs: Date.now() - started, error: (e as Error).message,
+        });
+      }
       return reply.code(502).send({ error: (e as Error).message });
     }
   });

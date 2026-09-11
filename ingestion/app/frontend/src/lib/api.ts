@@ -158,3 +158,56 @@ export const cardApi = {
   activateCard: (id: string) => req<Card>(`/api/ingest/cards/${id}/activate`, { method: "POST" }),
   dormantCard: (id: string) => req<Card>(`/api/ingest/cards/${id}/dormant`, { method: "POST" }),
 };
+
+export interface DaySummary {
+  runs: number;
+  ok: number;
+  failed: number;
+  rows: number;
+  facts: number;
+}
+
+export interface RunRow {
+  id: number;
+  at: string;
+  lineId: string;
+  cardId: string;
+  cardVersion: number;
+  cardName: string;
+  kind: "test" | "tick";
+  ok: boolean;
+  rowsPulled: number;
+  unitsBuilt: number;
+  factsStored: number;
+  durationMs: number | null;
+  error: string | null;
+}
+
+export interface DayView {
+  lineId: string;
+  date: string;
+  summary: DaySummary;
+  prevDate: string;
+  prev: DaySummary;
+  runs: RunRow[];
+  failures: RunRow[];
+}
+
+export interface RunInterpretation {
+  run: RunRow;
+  cardName: string;
+  contextIn: { sql: string; granularity: string; extractHint: string };
+  factsOut: { stored: number; note: string };
+}
+
+export const historyApi = {
+  line: (id: string) =>
+    req<Line & { quietHours: number | null }>(`/api/ingest/history/line/${id}`),
+  month: (lineId: string, month: string) =>
+    req<{ lineId: string; month: string; days: Record<string, DaySummary> }>(
+      `/api/ingest/history/month?lineId=${lineId}&month=${month}`
+    ),
+  day: (lineId: string, date: string) =>
+    req<DayView>(`/api/ingest/history/day?lineId=${lineId}&date=${date}`),
+  run: (id: number) => req<RunInterpretation>(`/api/ingest/history/run/${id}`),
+};

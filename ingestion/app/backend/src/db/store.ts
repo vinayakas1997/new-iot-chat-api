@@ -118,6 +118,21 @@ export function openStore(path: string): Database.Database {
       kind TEXT NOT NULL,
       detail TEXT NOT NULL DEFAULT ''
     );
+    CREATE TABLE IF NOT EXISTS runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      at TEXT NOT NULL,
+      line_id TEXT NOT NULL,
+      card_id TEXT NOT NULL,
+      card_version INTEGER NOT NULL,
+      kind TEXT NOT NULL CHECK (kind IN ('test','tick')),
+      ok INTEGER NOT NULL,
+      rows_pulled INTEGER NOT NULL DEFAULT 0,
+      units_built INTEGER NOT NULL DEFAULT 0,
+      facts_stored INTEGER NOT NULL DEFAULT 0,
+      duration_ms INTEGER,
+      error TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_runs_line_day ON runs(line_id, at);
   `);
   return db;
 }
@@ -664,4 +679,63 @@ export function cardEvents(cardId: string): { at: string; kind: string; detail: 
   return (getDb().prepare("SELECT at,kind,detail FROM card_events WHERE card_id=? ORDER BY id DESC LIMIT 50").all(cardId) as {
     at: string; kind: string; detail: string;
   }[]);
+}
+
+/* ---------------- F4: run log (tests today, ticks tomorrow) ---------------- */
+
+export interface RunRecord {
+  id: number;
+  at: string;
+  lineId: string;
+  cardId: string;
+  cardVersion: number;
+  kind: "test" | "tick";
+  ok: boolean;
+  rowsPulled: number;
+  unitsBuilt: number;
+  factsStored: number;
+  durationMs: number | null;
+  error: string | null;
+}
+
+export function recordRun(r: Omit<RunRecord, "id">): number {
+  const res = getDb()
+    .prepare(
+      `INSERT INTO runs (at,line_id,card_id,card_version,kind,ok,rows_pulled,units_built,facts_stored,duration_ms,error)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+    )
+    .run(r.at, r.lineId, r.cardId, r.cardVersion, r.kind, r.ok ? 1 : 0, r.rowsPulled, r.unitsBuilt, r.factsStored, r.durationMs, r.error);
+  return Number(res.lastInsertRowid);
+}
+
+export function runsForLine(lineId: string, from: string, to: string): RunRecord[] {
+  return (getDb()
+    .prepare("SELECT * FROM runs WHERE line_id=? AND at>=? AND at<? ORDER BY at DESC LIMIT 500")
+    .all(lineId, from, to) as Record<string, unknown>[]).map((x) => ({
+    id: x.id as number,
+    at: x.at as string,
+    lineId: x.line_id as string,
+    cardId: x.card_id as string,
+    cardVersion: x.card_version as number,
+    kind: x.kind as "test" | "tick",
+    ok: (x.ok as number) === 1,
+    rowsPulled: x.rows_pulled as number,
+    unitsBuilt: x.units_built as number,
+    factsStored: x.facts_stored as number,
+    durationMs: (x.duration_ms as number) ?? null,
+    error: (x.error as string) ?? null,
+  }));
+}
+
+export function getRun(id: number): RunRecord | null {
+  const x = getDb().prepare("SELECT * FROM runs WHERE id=?").get(id) as Record<string, unknown> | undefined;
+  if (!x) return null;
+  return {
+    id: x.id as number, at: x.at as string, lineId: x.line_id as string,
+    cardId: x.card_id as string, cardVersion: x.card_version as number,
+    kind: x.kind as "test" | "tick", ok: (x.ok as number) === 1,
+    rowsPulled: x.rows_pulled as number, unitsBuilt: x.units_built as number,
+    factsStored: x.facts_stored as number, durationMs: (x.duration_ms as number) ?? null,
+    error: (x.error as string) ?? null,
+  };
 }
