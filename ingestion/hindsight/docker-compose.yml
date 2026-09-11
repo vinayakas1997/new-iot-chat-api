@@ -1,0 +1,26 @@
+# Standalone Hindsight memory service (ghcr.io/vectorize-io/hindsight).
+# Independent of the app stack: edit .env, then `docker compose up -d` here.
+# API :8888, Control Plane UI :9999.
+services:
+  hindsight:
+    image: ghcr.io/vectorize-io/hindsight:latest
+    ports:
+      - "8888:8888"
+      - "9999:9999"
+    environment:
+      # Dummy default boots the service (health + UI live); memory ops need
+      # a real key or a local LLM — see .env.example.
+      HINDSIGHT_API_LLM_API_KEY: ${HINDSIGHT_API_LLM_API_KEY:-local-dummy-key}
+      HINDSIGHT_API_LLM_PROVIDER: ${HINDSIGHT_API_LLM_PROVIDER:-openai}
+      HINDSIGHT_API_LLM_BASE_URL: ${HINDSIGHT_API_LLM_BASE_URL:-}
+      HINDSIGHT_API_LLM_MODEL: ${HINDSIGHT_API_LLM_MODEL:-}
+    volumes:
+      - hindsight-data:/home/hindsight/.pg0
+    shm_size: 1g
+    # Reach host-bound local LLMs (e.g. http://host.docker.internal:8009/v1).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+volumes:
+  hindsight-data:

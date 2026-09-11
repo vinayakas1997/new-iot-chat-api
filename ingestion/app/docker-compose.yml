@@ -42,34 +42,6 @@ services:
       - ./test-postgres/init:/docker-entrypoint-initdb.d:ro
     restart: unless-stopped
 
-  # Hindsight memory service per official docs
-  # (ghcr.io/vectorize-io/hindsight): API on 8888, Control Plane UI on 9999.
-  # Needs HINDSIGHT_API_LLM_API_KEY for memory ops — copy .env.example to .env
-  # and set it (or point HINDSIGHT_API_LLM_BASE_URL at your local LLM).
-  # Health + UI work without a key. From the setter F5 screen use
-  # http://hindsight:8888/health (in-compose) — deep link opens :9999.
-  hindsight:
-    image: ghcr.io/vectorize-io/hindsight:latest
-    ports:
-      - "8888:8888"
-      - "9999:9999"
-    environment:
-      # Dummy default boots the service (health + UI live); memory ops need
-      # a real key or a local LLM base URL — see .env.example.
-      HINDSIGHT_API_LLM_API_KEY: ${HINDSIGHT_API_LLM_API_KEY:-local-dummy-key}
-      HINDSIGHT_API_LLM_PROVIDER: ${HINDSIGHT_API_LLM_PROVIDER:-openai}
-      HINDSIGHT_API_LLM_BASE_URL: ${HINDSIGHT_API_LLM_BASE_URL:-}
-      HINDSIGHT_API_LLM_MODEL: ${HINDSIGHT_API_LLM_MODEL:-}
-    volumes:
-      - hindsight-data:/home/hindsight/.pg0
-    shm_size: 1g
-    # Same host-gateway mapping so HINDSIGHT_API_LLM_BASE_URL can point at a
-    # host-bound local LLM (e.g. http://host.docker.internal:8009/v1).
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    restart: unless-stopped
-
 volumes:
   setter-data:
   test-pgdata:
-  hindsight-data:

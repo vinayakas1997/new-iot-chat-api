@@ -15,8 +15,22 @@ The old `old-things/.../http-hindsight.ts` PATHS map is **outdated** (guessed
 - `POST /v1/default/banks/{bank_id}/reflect` — reflect/answer.
   `ReflectRequest = { query (required), budget?, tags?, ... }`
 
-Full schema: `GET /openapi.json` on the running service (saved snapshot:
-ask the setter; regenerate any time — the server is the truth).
+## Proven live (2026-09-11, local qwen36-35B)
+
+- Retain works: `POST …/banks/bank:line-1/memories` with
+  `{items:[{content,timestamp,tags,metadata}],async:false}` →
+  `{"success":true,"items_count":1,"usage":{…}}` (model did real work).
+- Recall shape confirmed (`{"results":[...]}`) but returned empty in the
+  smoke test — likely needs consolidation time or different params
+  (`types`, `tags_match`). Tune in the extraction slice; do not assume
+  write→immediate-recall.
+- Boot requires a *reachable* LLM at startup (it verifies the connection):
+  default cloud endpoint fails in offline sandboxes → the compose `.env`
+  points at the local box. Never leave BASE_URL at a dead endpoint or the
+  container crash-loops.
+
+Full schema: `GET /openapi.json` on the running service — the server is
+the truth; regenerate any snapshot from it.
 
 ## Banks
 
