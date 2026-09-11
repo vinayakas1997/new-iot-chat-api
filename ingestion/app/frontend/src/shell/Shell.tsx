@@ -6,7 +6,7 @@ const NAV = [
   { to: "/setter/lines", n: "F2", label: "Lines" },
   { to: "/setter/cards", n: "F3", label: "Cards" },
   { to: "/setter/history", n: "F4", label: "History" },
-  { to: "/setter/hindsight", n: "F5", label: "Hindsight" },
+  { to: "/setter/hindsight", n: "F5", label: "AI Services" },
 ];
 
 /** App shell: sidebar (pipeline order) + topbar. Never reloads on nav. */

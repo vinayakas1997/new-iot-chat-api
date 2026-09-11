@@ -8,6 +8,7 @@ import { cardRoutes } from "./routes/cards.js";
 import { hindsightRoutes } from "./routes/hindsight.js";
 import { historyRoutes } from "./routes/history.js";
 import { lineRoutes } from "./routes/lines.js";
+import { llmRoutes } from "./routes/llm.js";
 import { runTick, startTicker } from "./ticker.js";
 
 const PORT = Number(process.env.PORT ?? 3100);
@@ -27,6 +28,7 @@ async function main() {
   await app.register(cardRoutes);
   await app.register(historyRoutes);
   await app.register(hindsightRoutes);
+  await app.register(llmRoutes);
 
   // Manual tick trigger (setter action + verification hook).
   app.post("/api/ingest/tick", async () => runTick(app.log));

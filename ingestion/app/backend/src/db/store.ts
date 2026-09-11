@@ -138,6 +138,18 @@ export function openStore(path: string): Database.Database {
       value TEXT NOT NULL DEFAULT '',
       updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS llm_providers (
+      id TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      base_url TEXT NOT NULL,
+      api_key TEXT NOT NULL DEFAULT '',
+      active_model TEXT NOT NULL DEFAULT '',
+      is_active INTEGER NOT NULL DEFAULT 0,
+      last_ok TEXT,
+      last_error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
   return db;
 }
@@ -758,6 +770,122 @@ export function setSetting(key: string, value: string): void {
 export function lastFactWrite(): string | null {
   const r = getDb().prepare("SELECT MAX(at) AS at FROM runs WHERE facts_stored>0").get() as { at: string | null };
   return r.at;
+}
+
+/* ---------------- F6: LLM providers ---------------- */
+
+export interface LlmProvider {
+  id: string;
+  label: string;
+  baseUrl: string;
+  hasKey: boolean;
+  activeModel: string;
+  isActive: boolean;
+  lastOk: string | null;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface LlmRow extends Omit<LlmProvider, "hasKey" | "isActive" | "baseUrl" | "activeModel" | "lastOk" | "lastError" | "createdAt" | "updatedAt" | "label" | "id"> {
+  id: string;
+  label: string;
+  base_url: string;
+  api_key: string;
+  active_model: string;
+  is_active: number;
+  last_ok: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function llmRow(r: LlmRow, withKey: boolean): LlmProvider & { apiKey?: string } {
+  const base = {
+    id: r.id,
+    label: r.label,
+    baseUrl: r.base_url,
+    hasKey: r.api_key.length > 0,
+    activeModel: r.active_model,
+    isActive: r.is_active === 1,
+    lastOk: r.last_ok,
+    lastError: r.last_error,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+  return withKey ? { ...base, apiKey: r.api_key } : base;
+}
+
+export function listLlmProviders(): LlmProvider[] {
+  return (getDb().prepare("SELECT * FROM llm_providers ORDER BY label").all() as LlmRow[]).map((r) => llmRow(r, false));
+}
+
+export function getLlmProvider(id: string, withKey = false): (LlmProvider & { apiKey?: string }) | null {
+  const r = getDb().prepare("SELECT * FROM llm_providers WHERE id=?").get(id) as LlmRow | undefined;
+  return r ? llmRow(r, withKey) : null;
+}
+
+export function activeLlmProvider(): (LlmProvider & { apiKey?: string }) | null {
+  const r = getDb().prepare("SELECT * FROM llm_providers WHERE is_active=1 LIMIT 1").get() as LlmRow | undefined;
+  return r ? llmRow(r, true) : null;
+}
+
+export function createLlmProvider(input: { label: string; baseUrl: string; apiKey?: string; activeModel?: string }): LlmProvider {
+  const id = `llm-${Date.now().toString(36)}`;
+  const now = new Date().toISOString();
+  getDb()
+    .prepare(
+      `INSERT INTO llm_providers (id,label,base_url,api_key,active_model,is_active,created_at,updated_at)
+       VALUES (?,?,?,?,'',0,?,?)`
+    )
+    .run(id, input.label, input.baseUrl.replace(/\/$/, ""), input.apiKey ?? "", now, now);
+  if (input.activeModel) {
+    getDb().prepare("UPDATE llm_providers SET is_active=0").run();
+    getDb().prepare("UPDATE llm_providers SET active_model=?,is_active=1,updated_at=? WHERE id=?").run(input.activeModel, now, id);
+  }
+  return getLlmProvider(id)!;
+}
+
+export function updateLlmProvider(
+  id: string,
+  patch: Partial<{ label: string; baseUrl: string; apiKey: string }>
+): LlmProvider | null {
+  const cur = getLlmProvider(id, true);
+  if (!cur) return null;
+  getDb()
+    .prepare("UPDATE llm_providers SET label=?,base_url=?,api_key=?,updated_at=? WHERE id=?")
+    .run(
+      patch.label ?? cur.label,
+      (patch.baseUrl ?? cur.baseUrl).replace(/\/$/, ""),
+      patch.apiKey ?? cur.apiKey ?? "",
+      new Date().toISOString(),
+      id
+    );
+  return getLlmProvider(id);
+}
+
+export function deleteLlmProvider(id: string): boolean {
+  return getDb().prepare("DELETE FROM llm_providers WHERE id=?").run(id).changes > 0;
+}
+
+export function activateLlmModel(id: string, model: string): LlmProvider | null {
+  const cur = getLlmProvider(id);
+  if (!cur) return null;
+  getDb().prepare("UPDATE llm_providers SET is_active=0").run();
+  getDb()
+    .prepare("UPDATE llm_providers SET active_model=?,is_active=1,updated_at=? WHERE id=?")
+    .run(model, new Date().toISOString(), id);
+  return getLlmProvider(id);
+}
+
+export function deactivateLlm(id: string): void {
+  getDb().prepare("UPDATE llm_providers SET is_active=0,updated_at=? WHERE id=?").run(new Date().toISOString(), id);
+}
+
+export function markLlmCheck(id: string, ok: boolean, error: string | null): void {
+  getDb()
+    .prepare("UPDATE llm_providers SET last_ok=CASE WHEN ? THEN ? ELSE last_ok END,last_error=? WHERE id=?")
+    .run(ok ? 1 : 0, new Date().toISOString(), error, id);
 }
 
 export function getRun(id: number): RunRecord | null {

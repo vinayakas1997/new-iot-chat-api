@@ -1,7 +1,8 @@
-import { listConnections, recordCheck } from "./db/store.js";
+import { activeLlmProvider, listConnections, markLlmCheck, recordCheck } from "./db/store.js";
 import { driverFor } from "./drivers/index.js";
 import type { Logger } from "./logger.js";
 import { unassignedTables } from "./routes/lines.js";
+import { probeLlm } from "./routes/llm.js";
 
 const POLL_INTERVAL_MS = Number(process.env.POLLER_INTERVAL_MS ?? 5 * 60 * 1000);
 
@@ -50,6 +51,23 @@ export function startPoller(log: Logger): NodeJS.Timeout {
           { connectionId: conn.id, label: conn.label, error },
           "connection health check FAILED"
         );
+      }
+    }
+    // F6: the active LLM gets the same continuous treatment — silent when
+    // healthy, loud in the logs when not.
+    const active = activeLlmProvider();
+    if (active) {
+      try {
+        const r = await probeLlm(active.id);
+        if (!r.ok) {
+          log.error(
+            { providerId: active.id, label: active.label, error: r.error },
+            "LLM health check FAILED"
+          );
+        }
+      } catch (e) {
+        markLlmCheck(active.id, false, (e as Error).message);
+        log.error({ providerId: active.id, error: (e as Error).message }, "LLM health check FAILED");
       }
     }
   }
