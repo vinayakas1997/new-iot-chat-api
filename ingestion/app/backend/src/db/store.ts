@@ -150,6 +150,31 @@ export function openStore(path: string): Database.Database {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS graph_specs (
+      id TEXT PRIMARY KEY,
+      card_id TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+      name TEXT NOT NULL DEFAULT '',
+      chart_type TEXT NOT NULL DEFAULT 'table' CHECK (chart_type IN ('table','line','bar','area')),
+      x_column TEXT NOT NULL DEFAULT '',
+      y_columns TEXT NOT NULL DEFAULT '[]',
+      title TEXT NOT NULL DEFAULT '',
+      config TEXT NOT NULL DEFAULT '{}',
+      version INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_graph_specs_card ON graph_specs(card_id);
+    CREATE TABLE IF NOT EXISTS query_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      line_id TEXT NOT NULL,
+      sql TEXT NOT NULL,
+      row_count INTEGER,
+      duration_ms INTEGER,
+      ok INTEGER NOT NULL DEFAULT 1,
+      error TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_query_history_line ON query_history(line_id, created_at);
   `);
   return db;
 }
@@ -899,4 +924,130 @@ export function getRun(id: number): RunRecord | null {
     factsStored: x.facts_stored as number, durationMs: (x.duration_ms as number) ?? null,
     error: (x.error as string) ?? null,
   };
+}
+
+/* ---------------- Graph specs (F3: stored visualizations) ---------------- */
+
+export type ChartType = "table" | "line" | "bar" | "area";
+
+export interface GraphSpec {
+  id: string;
+  cardId: string;
+  name: string;
+  chartType: ChartType;
+  xColumn: string;
+  yColumns: string[];
+  title: string;
+  config: Record<string, unknown>;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+function graphRow(r: Record<string, unknown>): GraphSpec {
+  return {
+    id: r.id as string,
+    cardId: r.card_id as string,
+    name: (r.name as string) ?? "",
+    chartType: r.chart_type as ChartType,
+    xColumn: (r.x_column as string) ?? "",
+    yColumns: JSON.parse((r.y_columns as string) ?? "[]") as string[],
+    title: (r.title as string) ?? "",
+    config: JSON.parse((r.config as string) ?? "{}") as Record<string, unknown>,
+    version: r.version as number,
+    createdAt: r.created_at as string,
+    updatedAt: r.updated_at as string,
+  };
+}
+
+export function listGraphsForCard(cardId: string): GraphSpec[] {
+  return (getDb().prepare("SELECT * FROM graph_specs WHERE card_id=? ORDER BY name").all(cardId) as Record<string, unknown>[]).map(graphRow);
+}
+
+export function getGraph(id: string): GraphSpec | null {
+  const r = getDb().prepare("SELECT * FROM graph_specs WHERE id=?").get(id);
+  return r ? graphRow(r as Record<string, unknown>) : null;
+}
+
+export function createGraphSpec(input: { cardId: string; name?: string; chartType?: ChartType; xColumn?: string; yColumns?: string[]; title?: string; config?: Record<string, unknown> }): GraphSpec {
+  const id = `gph-${Date.now().toString(36)}`;
+  const now = new Date().toISOString();
+  getDb()
+    .prepare(
+      `INSERT INTO graph_specs (id,card_id,name,chart_type,x_column,y_columns,title,config,version,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,1,?,?)`
+    )
+    .run(
+      id, input.cardId, input.name ?? "", input.chartType ?? "table",
+      input.xColumn ?? "", JSON.stringify(input.yColumns ?? []),
+      input.title ?? "", JSON.stringify(input.config ?? {}),
+      now, now
+    );
+  return getGraph(id)!;
+}
+
+export function updateGraphSpec(id: string, patch: Partial<Pick<GraphSpec, "name" | "chartType" | "xColumn" | "yColumns" | "title" | "config">>): GraphSpec | null {
+  const cur = getGraph(id);
+  if (!cur) return null;
+  const bump = patch.xColumn !== undefined && patch.xColumn !== cur.xColumn
+    || patch.yColumns !== undefined && JSON.stringify(patch.yColumns) !== JSON.stringify(cur.yColumns)
+    || patch.chartType !== undefined && patch.chartType !== cur.chartType;
+  getDb()
+    .prepare(
+      `UPDATE graph_specs SET name=?,chart_type=?,x_column=?,y_columns=?,title=?,config=?,
+       version=version+?,updated_at=? WHERE id=?`
+    )
+    .run(
+      patch.name ?? cur.name, patch.chartType ?? cur.chartType,
+      patch.xColumn ?? cur.xColumn, JSON.stringify(patch.yColumns ?? cur.yColumns),
+      patch.title ?? cur.title, JSON.stringify(patch.config ?? cur.config),
+      bump ? 1 : 0, new Date().toISOString(), id
+    );
+  return getGraph(id);
+}
+
+export function deleteGraph(id: string): boolean {
+  return getDb().prepare("DELETE FROM graph_specs WHERE id=?").run(id).changes > 0;
+}
+
+/* ---------------- Query history (playground) ---------------- */
+
+export interface QueryHistoryEntry {
+  id: number;
+  lineId: string;
+  sql: string;
+  rowCount: number | null;
+  durationMs: number | null;
+  ok: boolean;
+  error: string | null;
+  createdAt: string;
+}
+
+export function recordQueryHistory(entry: { lineId: string; sql: string; rowCount?: number; durationMs?: number; ok?: boolean; error?: string }): number {
+  const r = getDb()
+    .prepare(
+      `INSERT INTO query_history (line_id,sql,row_count,duration_ms,ok,error,created_at)
+       VALUES (?,?,?,?,?,?,?)`
+    )
+    .run(
+      entry.lineId, entry.sql, entry.rowCount ?? null, entry.durationMs ?? null,
+      (entry.ok ?? true) ? 1 : 0, entry.error ?? null, new Date().toISOString()
+    );
+  return Number(r.lastInsertRowid);
+}
+
+export function queryHistory(lineId: string, limit = 20): QueryHistoryEntry[] {
+  return (getDb()
+    .prepare("SELECT * FROM query_history WHERE line_id=? ORDER BY id DESC LIMIT ?")
+    .all(lineId, limit) as Record<string, unknown>[])
+    .map((x) => ({
+      id: x.id as number,
+      lineId: x.line_id as string,
+      sql: x.sql as string,
+      rowCount: (x.row_count as number) ?? null,
+      durationMs: (x.duration_ms as number) ?? null,
+      ok: (x.ok as number) === 1,
+      error: (x.error as string) ?? null,
+      createdAt: x.created_at as string,
+    }));
 }

@@ -211,3 +211,78 @@ export const historyApi = {
     req<DayView>(`/api/ingest/history/day?lineId=${lineId}&date=${date}`),
   run: (id: number) => req<RunInterpretation>(`/api/ingest/history/run/${id}`),
 };
+
+/* ---- Playground (SQL workbench) ---- */
+
+export interface PlaygroundResult {
+  columns: string[];
+  rows: Record<string, unknown>[];
+  rowCount: number;
+  capped: boolean;
+  durationMs: number;
+  sql: string;
+}
+
+export interface QueryHistoryEntry {
+  id: number;
+  lineId: string;
+  sql: string;
+  rowCount: number | null;
+  durationMs: number | null;
+  ok: boolean;
+  error: string | null;
+  createdAt: string;
+}
+
+export interface LineColumn {
+  table: string;
+  name: string;
+  type: string;
+}
+
+export const playgroundApi = {
+  run: (lineId: string, sql: string, from?: string, to?: string) =>
+    req<PlaygroundResult>("/api/ingest/playground/run", {
+      method: "POST",
+      body: JSON.stringify({ lineId, sql, from, to }),
+    }),
+  history: (lineId: string) =>
+    req<QueryHistoryEntry[]>(`/api/ingest/playground/history/${lineId}`),
+  columns: (lineId: string) =>
+    req<{ columns: LineColumn[] }>(`/api/ingest/playground/columns/${lineId}`),
+};
+
+/* ---- Graph specs (stored visualizations) ---- */
+
+export type ChartType = "table" | "line" | "bar" | "area";
+
+export interface GraphSpec {
+  id: string;
+  cardId: string;
+  name: string;
+  chartType: ChartType;
+  xColumn: string;
+  yColumns: string[];
+  title: string;
+  config: Record<string, unknown>;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const graphApi = {
+  listForCard: (cardId: string) =>
+    req<GraphSpec[]>(`/api/ingest/cards/${cardId}/graphs`),
+  create: (cardId: string, input: Partial<GraphSpec>) =>
+    req<GraphSpec>(`/api/ingest/cards/${cardId}/graphs`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  update: (id: string, patch: Partial<GraphSpec>) =>
+    req<GraphSpec>(`/api/ingest/graphs/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  delete: (id: string) =>
+    req<{ ok: boolean }>(`/api/ingest/graphs/${id}`, { method: "DELETE" }),
+};

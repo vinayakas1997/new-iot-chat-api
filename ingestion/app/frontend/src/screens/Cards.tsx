@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { cardApi, api, type Card, type CardTemplate, type Line, type ReapplyResult, type TestResult } from "../lib/api";
+import { cardApi, api, graphApi, playgroundApi, type Card, type CardTemplate, type Line, type ReapplyResult, type TestResult, type GraphSpec, type ChartType, type PlaygroundResult, type QueryHistoryEntry, type LineColumn } from "../lib/api";
 import { AlertBanner, StatusChip } from "../components/chips";
 
 /** Ticks per day by granularity — one source query per tick per card copy. */
@@ -10,7 +10,7 @@ export function tickCost(c: Pick<Card, "granularity">): number {
 
 /** F3: template library + per-line card copies. Verdict: which cards are live, and on what? */
 export function Cards() {
-  const [tab, setTab] = useState<"cards" | "templates">("cards");
+  const [tab, setTab] = useState<"cards" | "templates" | "playground">("cards");
   const [cards, setCards] = useState<Card[]>([]);
   const [templates, setTemplates] = useState<CardTemplate[]>([]);
   const [lines, setLines] = useState<Line[]>([]);
@@ -25,6 +25,20 @@ export function Cards() {
   const [showCardForm, setShowCardForm] = useState(false);
   const [cardDraft, setCardDraft] = useState({ lineId: "", name: "", tables: "", sql: "", granularity: "hourly", unit: "", extractHint: "", threshold: "", changeMode: "forward", reingestFrom: "" });
   const [editCard, setEditCard] = useState<Card | null>(null);
+  const [graphCard, setGraphCard] = useState<Card | null>(null);
+  const [cardGraphs, setCardGraphs] = useState<Record<string, GraphSpec[]>>({});
+
+  // Playground state
+  const [pgLineId, setPgLineId] = useState("");
+  const [pgSql, setPgSql] = useState("");
+  const [pgResult, setPgResult] = useState<PlaygroundResult | null>(null);
+  const [pgError, setPgError] = useState<string | null>(null);
+  const [pgRunning, setPgRunning] = useState(false);
+  const [pgHistory, setPgHistory] = useState<QueryHistoryEntry[]>([]);
+  const [pgShowHistory, setPgShowHistory] = useState(false);
+  const [pgCols, setPgCols] = useState<LineColumn[]>([]);
+  const [pgShowSave, setPgShowSave] = useState(false);
+  const [pgSaveDraft, setPgSaveDraft] = useState({ name: "", tables: "", granularity: "hourly", unit: "", extractHint: "" });
 
   async function refresh() {
     try {
@@ -32,11 +46,24 @@ export function Cards() {
       setCards(c);
       setTemplates(t);
       setLines(l.filter((x) => x.active));
+      const gMap: Record<string, GraphSpec[]> = {};
+      await Promise.all(c.map(async (card) => {
+        try { gMap[card.id] = await graphApi.listForCard(card.id); } catch { gMap[card.id] = []; }
+      }));
+      setCardGraphs(gMap);
     } catch (e) {
       setError((e as Error).message);
     }
   }
   useEffect(() => void refresh(), []);
+
+  // Load playground history + columns when line changes
+  useEffect(() => {
+    if (tab === "playground" && pgLineId) {
+      playgroundApi.history(pgLineId).then(setPgHistory).catch(() => {});
+      playgroundApi.columns(pgLineId).then((r) => setPgCols(r.columns)).catch(() => setPgCols([]));
+    }
+  }, [tab, pgLineId]);
 
   const liveCount = cards.filter((c) => c.status === "live").length;
 
@@ -81,13 +108,13 @@ export function Cards() {
       {error && <div className="mt-4"><AlertBanner tone="bad" title="Request failed" detail={error} /></div>}
 
       <div className="mt-6 flex gap-2">
-        {(["cards", "templates"] as const).map((t) => (
+        {(["cards", "templates", "playground"] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
             className={`rounded-lg px-4 py-2 text-sm font-medium ${tab === t ? "bg-accent-500/15 text-accent-500" : "text-slate-500"}`}
           >
-            {t === "cards" ? `Cards (${cards.length})` : `Template library (${templates.length})`}
+            {t === "cards" ? `Cards (${cards.length})` : t === "templates" ? `Templates (${templates.length})` : "Playground"}
           </button>
         ))}
         <div className="ml-auto flex gap-2">
@@ -138,6 +165,9 @@ export function Cards() {
                 <button onClick={() => void onTest(c)} disabled={testingId === c.id} className="rounded-lg border border-slate-300 px-3 py-1 dark:border-ink-700">
                   {testingId === c.id ? "testing…" : "Test-run"}
                 </button>
+                <button onClick={() => setGraphCard(c)} className="rounded-lg border border-slate-300 px-3 py-1 dark:border-ink-700">
+                  Graph {(cardGraphs[c.id]?.length ?? 0) > 0 && <span className="tnum">({cardGraphs[c.id].length})</span>}
+                </button>
                 {c.status === "dormant" ? (
                   <>
                     <button onClick={() => void act(() => cardApi.activateCard(c.id))} disabled={!canActivate(c)} className="rounded-lg border border-state-ok/50 px-3 py-1 text-state-ok disabled:opacity-40">Go live</button>
@@ -185,6 +215,43 @@ export function Cards() {
             </div>
           ))}
         </div>
+      )}
+
+      {tab === "playground" && (
+        <PlaygroundTab
+          lines={lines}
+          lineId={pgLineId}
+          setLineId={setPgLineId}
+          sql={pgSql}
+          setSql={setPgSql}
+          result={pgResult}
+          error={pgError}
+          running={pgRunning}
+          history={pgHistory}
+          showHistory={pgShowHistory}
+          cols={pgCols}
+          showSave={pgShowSave}
+          saveDraft={pgSaveDraft}
+          onRun={async () => {
+            if (!pgLineId || !pgSql.trim()) return;
+            setPgRunning(true); setPgError(null); setPgResult(null);
+            try {
+              const r = await playgroundApi.run(pgLineId, pgSql);
+              setPgResult(r);
+              const h = await playgroundApi.history(pgLineId);
+              setPgHistory(h);
+            } catch (e) { setPgError((e as Error).message); }
+            finally { setPgRunning(false); }
+          }}
+          onHistoryToggle={() => setPgShowHistory(!pgShowHistory)}
+          onRerun={(sql) => setPgSql(sql)}
+          onSaveCard={async (name, tables, gran, unit, hint) => {
+            await cardApi.createCard({ lineId: pgLineId, name, tables: tables.split(",").map((s) => s.trim()).filter(Boolean), sql: pgSql, granularity: gran, unit, extractHint: hint });
+            setPgShowSave(false); setPgSql(""); setPgResult(null);
+          }}
+          setShowSave={setPgShowSave}
+          setSaveDraft={setPgSaveDraft}
+        />
       )}
       {reapplyOut && (
         <div className="mt-4 rounded-xl border border-slate-200 p-4 dark:border-ink-800">
@@ -268,7 +335,7 @@ export function Cards() {
                 <option value="hourly">hourly</option><option value="shift">shift</option><option value="daily">daily</option>
               </select>
             </Field>
-            <Field label="Unit"><input value={cardDraft.unit} onChange={(e) => setCardDraft({ ...cardDraft, unit: e.target.value })} className={inp} /></Field>
+            <Field label="Unit"><input value={cardDraft.unit} onChange={(e) => setCardDraft({ ...cardDraft, unit: e.target.value })} placeholder="°C, pcs…" className={inp} /></Field>
             <Field label="Threshold (optional)"><input value={cardDraft.threshold} onChange={(e) => setCardDraft({ ...cardDraft, threshold: e.target.value })} placeholder="warn above…" className={inp} /></Field>
           </div>
           <Field label="Extraction hint"><textarea rows={2} value={cardDraft.extractHint} onChange={(e) => setCardDraft({ ...cardDraft, extractHint: e.target.value })} className={inp} /></Field>
@@ -305,6 +372,10 @@ export function Cards() {
           </div>
         </Modal>
       )}
+
+      {graphCard && (
+        <GraphDesigner card={graphCard} onClose={() => { setGraphCard(null); refresh(); }} />
+      )}
     </div>
   );
 }
@@ -323,5 +394,345 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
         <div className="mt-4 flex flex-col gap-3">{children}</div>
       </div>
     </div>
+  );
+}
+
+/** SQL Playground tab — inline in Cards, not a separate route. */
+function PlaygroundTab({ lines, lineId, setLineId, sql, setSql, result, error, running, history, showHistory, cols, showSave, saveDraft, onRun, onHistoryToggle, onRerun, onSaveCard, setShowSave, setSaveDraft }: {
+  lines: Line[];
+  lineId: string;
+  setLineId: (v: string) => void;
+  sql: string;
+  setSql: (v: string) => void;
+  result: PlaygroundResult | null;
+  error: string | null;
+  running: boolean;
+  history: QueryHistoryEntry[];
+  showHistory: boolean;
+  cols: LineColumn[];
+  showSave: boolean;
+  saveDraft: { name: string; tables: string; granularity: string; unit: string; extractHint: string };
+  onRun: () => void;
+  onHistoryToggle: () => void;
+  onRerun: (sql: string) => void;
+  onSaveCard: (name: string, tables: string, gran: string, unit: string, hint: string) => Promise<void>;
+  setShowSave: (v: boolean) => void;
+  setSaveDraft: (f: (d: typeof saveDraft) => typeof saveDraft) => void;
+}) {
+  return (
+    <div>
+      <div className="flex items-center gap-3">
+        <label className="block text-sm">
+          Line
+          <select value={lineId} onChange={(e) => setLineId(e.target.value)} className="ml-2 w-64 rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-ink-700">
+            <option value="">— select line —</option>
+            {lines.map((l) => <option key={l.id} value={l.id}>{l.id} — {l.name}</option>)}
+          </select>
+        </label>
+        {cols.length > 0 && (
+          <div className="flex flex-wrap items-end gap-1 text-xs text-slate-400 dark:text-ink-500">
+            {cols.slice(0, 12).map((c) => (
+              <button key={`${c.table}.${c.name}`} onClick={() => setSql(sql ? `${sql} ${c.name}` : c.name)} className="rounded border border-slate-200 px-1.5 py-0.5 hover:bg-slate-100 dark:border-ink-700 dark:hover:bg-ink-800" title={`${c.table} · ${c.type}`}>{c.name}</button>
+            ))}
+            {cols.length > 12 && <span>+{cols.length - 12} more</span>}
+          </div>
+        )}
+      </div>
+      <div className="mt-3">
+        <textarea rows={6} value={sql} onChange={(e) => setSql(e.target.value)} placeholder="SELECT * FROM readings_temp LIMIT 50" className="w-full rounded-lg border border-slate-300 bg-transparent p-3 font-mono text-sm dark:border-ink-700" onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onRun(); }} />
+        <div className="mt-1 flex items-center gap-3 text-xs text-slate-400 dark:text-ink-500">
+          <span>Ctrl+Enter to run</span><span>·</span><span>SELECT/WITH/SHOW/EXPLAIN only</span><span>·</span><span>no multi-statement</span>
+        </div>
+      </div>
+      {error && <div className="mt-3"><AlertBanner tone="bad" title="Query failed" detail={error} /></div>}
+      <div className="mt-3 flex gap-2">
+        <button onClick={onRun} disabled={running || !lineId || !sql.trim()} className="rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40">{running ? "running…" : "Run query"}</button>
+        {result && <button onClick={() => { setSaveDraft((d) => ({ ...d, name: "", tables: lines.find((l) => l.id === lineId)?.memberTables.join(", ") ?? "", granularity: "hourly", unit: "", extractHint: "" })); setShowSave(true); }} className="rounded-lg border border-slate-300 px-4 py-2 text-sm dark:border-ink-700">Save as card</button>}
+        <button onClick={onHistoryToggle} className="ml-auto rounded-lg border border-slate-300 px-4 py-2 text-sm dark:border-ink-700">History ({history.length})</button>
+      </div>
+      {result && (
+        <div className="mt-4 overflow-auto rounded-xl border border-slate-200 dark:border-ink-800">
+          <div className="border-b border-slate-200 px-4 py-2 text-sm dark:border-ink-800">
+            <span className="tnum font-semibold">{result.rowCount}</span> rows
+            {result.capped && <span className="ml-2 text-state-warn">capped to 100</span>}
+            <span className="ml-2 text-slate-400">{result.durationMs}ms</span>
+          </div>
+          <table className="w-full text-left font-mono text-xs">
+            <thead><tr className="border-b border-slate-200 dark:border-ink-800">{result.columns.map((c) => <th key={c} className="px-3 py-2 font-semibold">{c}</th>)}</tr></thead>
+            <tbody>{result.rows.map((r, i) => <tr key={i} className="border-t border-slate-100 dark:border-ink-800">{result.columns.map((c) => <td key={c} className="px-3 py-1.5">{String(r[c] ?? "")}</td>)}</tr>)}</tbody>
+          </table>
+        </div>
+      )}
+      {result && result.rows.length === 0 && <div className="mt-4 rounded-xl border border-dashed border-slate-300 p-8 text-center dark:border-ink-700"><div className="text-sm text-slate-500">Query returned 0 rows</div></div>}
+      {showHistory && (
+        <div className="mt-4 rounded-xl border border-slate-200 p-4 dark:border-ink-800">
+          <div className="text-sm font-semibold">Recent queries</div>
+          {history.length === 0 && <div className="mt-2 text-sm text-slate-400">No history yet</div>}
+          {history.map((h) => (
+            <div key={h.id} className="mt-2 flex cursor-pointer items-center gap-2 rounded-lg border border-slate-100 p-2 text-xs hover:bg-slate-50 dark:border-ink-800 dark:hover:bg-ink-800/50" onClick={() => onRerun(h.sql)}>
+              <StatusChip tone={h.ok ? "ok" : "bad"}>{h.ok ? "ok" : "fail"}</StatusChip>
+              <span className="tnum text-slate-400">{h.rowCount != null ? `${h.rowCount} rows` : "—"}</span>
+              <span className="tnum text-slate-400">{h.durationMs != null ? `${h.durationMs}ms` : "—"}</span>
+              <span className="truncate font-mono text-slate-500">{h.sql.slice(0, 80)}</span>
+              <span className="ml-auto text-slate-400">{new Date(h.createdAt).toLocaleTimeString()}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {showSave && (
+        <Modal title="Save as card (dormant)" onClose={() => setShowSave(false)}>
+          <Field label="Card name"><input value={saveDraft.name} onChange={(e) => setSaveDraft((d) => ({ ...d, name: e.target.value }))} className={inp} /></Field>
+          <Field label="Tables (comma-separated)"><input value={saveDraft.tables} onChange={(e) => setSaveDraft((d) => ({ ...d, tables: e.target.value }))} className={`${inp} font-mono`} /></Field>
+          <div className="flex gap-3">
+            <Field label="Granularity"><select value={saveDraft.granularity} onChange={(e) => setSaveDraft((d) => ({ ...d, granularity: e.target.value }))} className={inp}><option value="hourly">hourly</option><option value="shift">shift</option><option value="daily">daily</option></select></Field>
+            <Field label="Unit"><input value={saveDraft.unit} onChange={(e) => setSaveDraft((d) => ({ ...d, unit: e.target.value }))} placeholder="°C, pcs…" className={inp} /></Field>
+          </div>
+          <Field label="Extraction hint"><textarea rows={2} value={saveDraft.extractHint} onChange={(e) => setSaveDraft((d) => ({ ...d, extractHint: e.target.value }))} className={inp} /></Field>
+          <div className="mt-3 flex justify-end gap-2">
+            <button onClick={() => setShowSave(false)} className="rounded-lg px-4 py-2 text-sm">cancel</button>
+            <button onClick={() => void onSaveCard(saveDraft.name, saveDraft.tables, saveDraft.granularity, saveDraft.unit, saveDraft.extractHint)} disabled={!saveDraft.name.trim()} className="rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40">Save dormant card</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/** Graph designer: pick chart type + axes from a card's test-run results, save spec. */
+function GraphDesigner({ card, onClose }: { card: Card; onClose: () => void }) {
+  const [graphs, setGraphs] = useState<GraphSpec[]>([]);
+  const [testResult, setTestResult] = useState<TestResult | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [draft, setDraft] = useState({
+    name: "", chartType: "table" as ChartType, xColumn: "", yColumns: [] as string[], title: "",
+  });
+  const [editing, setEditing] = useState<string | null>(null);
+
+  useEffect(() => {
+    Promise.all([
+      graphApi.listForCard(card.id).catch(() => []),
+      card.status === "live" || card.lastTest?.ok
+        ? cardApi.testCard(card.id).catch(() => null)
+        : Promise.resolve(null),
+    ]).then(([g, t]) => {
+      setGraphs(g);
+      setTestResult(t);
+      setLoading(false);
+      if (t && t.columns.length > 0) {
+        setDraft((d) => ({ ...d, xColumn: d.xColumn || t.columns[0] }));
+      }
+    });
+  }, [card.id]);
+
+  const cols = testResult?.columns ?? [];
+
+  function numericCols(): string[] {
+    if (!testResult) return [];
+    return cols.filter((c) => {
+      const v = testResult.rows[0]?.[c];
+      return typeof v === "number" || (typeof v === "string" && !isNaN(Number(v)));
+    });
+  }
+
+  function startEdit(g: GraphSpec) {
+    setEditing(g.id);
+    setDraft({ name: g.name, chartType: g.chartType, xColumn: g.xColumn, yColumns: g.yColumns, title: g.title });
+  }
+
+  function toggleY(col: string) {
+    setDraft((d) => ({
+      ...d,
+      yColumns: d.yColumns.includes(col) ? d.yColumns.filter((c) => c !== col) : [...d.yColumns, col],
+    }));
+  }
+
+  async function onSave() {
+    try {
+      if (editing) {
+        await graphApi.update(editing, draft);
+      } else {
+        await graphApi.create(card.id, draft);
+      }
+      const g = await graphApi.listForCard(card.id);
+      setGraphs(g);
+      setEditing(null);
+      setDraft({ name: "", chartType: "table", xColumn: cols[0] ?? "", yColumns: [], title: "" });
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function onDelete(id: string) {
+    if (!confirm("Delete this graph spec?")) return;
+    await graphApi.delete(id);
+    setGraphs((g) => g.filter((x) => x.id !== id));
+  }
+
+  return (
+    <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/60" onClick={onClose}>
+      <div className="max-h-[90vh] w-[48rem] overflow-auto rounded-xl bg-white p-6 dark:bg-ink-900" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between">
+          <h2 className="text-lg font-bold">Graph Designer — {card.name}</h2>
+          <button onClick={onClose} className="text-sm text-slate-400">close</button>
+        </div>
+
+        {error && <div className="mt-3"><AlertBanner tone="bad" title="Error" detail={error} /></div>}
+
+        {!testResult && !loading && (
+          <div className="mt-4 rounded-lg border border-state-warn/40 bg-state-warn/10 p-3 text-sm text-state-warn">
+            No test-run data yet — test the card first so column names appear below.
+          </div>
+        )}
+
+        {testResult && (
+          <div className="mt-4 rounded-lg border border-slate-200 p-4 dark:border-ink-800">
+            <div className="text-sm font-semibold">{editing ? "Edit graph spec" : "New graph spec"}</div>
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <Field label="Name">
+                <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="e.g. Temperature over time" className={inp} />
+              </Field>
+              <Field label="Chart type">
+                <div className="mt-1 flex gap-1">
+                  {(["table", "line", "bar", "area"] as const).map((t) => (
+                    <button
+                      key={t}
+                      onClick={() => setDraft({ ...draft, chartType: t })}
+                      className={`rounded-lg px-3 py-1.5 text-xs font-medium ${draft.chartType === t ? "bg-accent-500/15 text-accent-500" : "text-slate-500 hover:bg-slate-100 dark:hover:bg-ink-800"}`}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              </Field>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <Field label="X axis (column)">
+                <select value={draft.xColumn} onChange={(e) => setDraft({ ...draft, xColumn: e.target.value })} className={inp}>
+                  <option value="">— select —</option>
+                  {cols.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </Field>
+              <Field label="Y axis (series, click to toggle)">
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {numericCols().map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => toggleY(c)}
+                      className={`rounded px-2 py-0.5 text-xs ${draft.yColumns.includes(c) ? "bg-accent-500/20 text-accent-400 ring-1 ring-accent-500/30" : "text-slate-500 hover:bg-slate-100 dark:hover:bg-ink-800"}`}
+                    >
+                      {c}
+                    </button>
+                  ))}
+                  {numericCols().length === 0 && <span className="text-xs text-slate-400">no numeric columns</span>}
+                </div>
+              </Field>
+            </div>
+            <Field label="Title (optional)">
+              <input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} placeholder="Chart title" className={inp} />
+            </Field>
+
+            {/* Live preview */}
+            {draft.chartType !== "table" && draft.xColumn && draft.yColumns.length > 0 && (
+              <div className="mt-4 rounded-lg border border-slate-200 p-4 dark:border-ink-800">
+                <div className="text-xs font-semibold text-slate-400">Preview</div>
+                <ChartPreview rows={testResult.rows} x={draft.xColumn} yCols={draft.yColumns} type={draft.chartType} title={draft.title} />
+              </div>
+            )}
+            {draft.chartType === "table" && (
+              <div className="mt-4 text-xs text-slate-400">Table chart: the AI will render the data rows as a formatted table in the chat.</div>
+            )}
+
+            <div className="mt-3 flex justify-end gap-2">
+              {editing && <button onClick={() => { setEditing(null); setDraft({ name: "", chartType: "table", xColumn: cols[0] ?? "", yColumns: [], title: "" }); }} className="rounded-lg px-3 py-1.5 text-sm">cancel edit</button>}
+              <button onClick={() => void onSave()} disabled={!draft.xColumn} className="rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40">
+                {editing ? "Update" : "Save graph"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {graphs.length > 0 && (
+          <div className="mt-4">
+            <div className="text-sm font-semibold">Saved graphs ({graphs.length})</div>
+            {graphs.map((g) => (
+              <div key={g.id} className="mt-2 flex items-center gap-2 rounded-lg border border-slate-100 p-2 text-sm dark:border-ink-800">
+                <StatusChip tone="accent">{g.chartType}</StatusChip>
+                <span className="font-medium">{g.name || g.title || "Untitled"}</span>
+                <span className="text-xs text-slate-400">x:{g.xColumn} y:{g.yColumns.join(",")}</span>
+                <span className="tnum text-xs text-slate-400">v{g.version}</span>
+                <div className="ml-auto flex gap-1">
+                  <button onClick={() => startEdit(g)} className="rounded border border-slate-300 px-2 py-0.5 text-xs dark:border-ink-700">edit</button>
+                  <button onClick={() => void onDelete(g.id)} className="rounded border border-state-bad/50 px-2 py-0.5 text-xs text-state-bad">del</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {loading && <div className="mt-4 text-sm text-slate-400">Loading…</div>}
+      </div>
+    </div>
+  );
+}
+
+/** Minimal SVG chart preview — line, bar, area. No library needed. */
+function ChartPreview({ rows, x, yCols, type, title }: { rows: Record<string, unknown>[]; x: string; yCols: string[]; type: string; title: string }) {
+  if (rows.length === 0) return <div className="text-xs text-slate-400">No data to preview</div>;
+
+  const W = 400, H = 160, PAD = 30;
+  const xVals = rows.map((r) => String(r[x] ?? ""));
+  const numCols = yCols.filter((c) => rows.some((r) => typeof r[c] === "number" || !isNaN(Number(r[c]))));
+  if (numCols.length === 0) return <div className="text-xs text-slate-400">No numeric Y columns</div>;
+
+  const allNums = rows.map((r) => numCols.map((c) => Number(r[c] ?? 0))).flat();
+  const yMin = Math.min(...allNums);
+  const yMax = Math.max(...allNums) || 1;
+  const yRange = yMax - yMin || 1;
+
+  function xi(i: number) { return PAD + (i / Math.max(xVals.length - 1, 1)) * (W - 2 * PAD); }
+  function yi(v: number) { return H - PAD - ((v - yMin) / yRange) * (H - 2 * PAD); }
+
+  const COLORS = ["#14b8a6", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899"];
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full mt-2">
+      {title && <text x={W / 2} y={14} textAnchor="middle" className="fill-slate-500 text-xs">{title}</text>}
+      {/* grid lines */}
+      {[0, 0.25, 0.5, 0.75, 1].map((f) => (
+        <g key={f}>
+          <line x1={PAD} x2={W - PAD} y1={yi(yMin + f * yRange)} y2={yi(yMin + f * yRange)} className="stroke-slate-200 dark:stroke-ink-800" strokeWidth={0.5} />
+          <text x={PAD - 4} y={yi(yMin + f * yRange) + 3} textAnchor="end" className="fill-slate-400 text-[8px]">{(yMin + f * yRange).toFixed(1)}</text>
+        </g>
+      ))}
+      {/* x labels */}
+      {xVals.filter((_, i) => i % Math.max(1, Math.floor(xVals.length / 6)) === 0).map((v, _, arr) => {
+        const i = xVals.indexOf(v);
+        return <text key={i} x={xi(i)} y={H - 8} textAnchor="middle" className="fill-slate-400 text-[8px]">{v.length > 8 ? v.slice(0, 8) + "…" : v}</text>;
+      })}
+      {type === "line" && numCols.map((col, ci) => {
+        const pts = rows.map((r, i) => `${xi(i)},${yi(Number(r[col] ?? 0))}`).join(" ");
+        return <polyline key={col} points={pts} fill="none" stroke={COLORS[ci % COLORS.length]} strokeWidth={1.5} />;
+      })}
+      {type === "area" && numCols.map((col, ci) => {
+        const pts = rows.map((r, i) => `${xi(i)},${yi(Number(r[col] ?? 0))}`);
+        const d = `M${pts.join(" L")} L${xi(rows.length - 1)},${yi(yMin)} L${xi(0)},${yi(yMin)} Z`;
+        return <path key={col} d={d} fill={COLORS[ci % COLORS.length]} fillOpacity={0.15} />;
+      })}
+      {type === "bar" && rows.map((r, i) => {
+        const bw = (W - 2 * PAD) / Math.max(rows.length * numCols.length, 1) * 0.7;
+        return numCols.map((col, ci) => {
+          const v = Number(r[col] ?? 0);
+          const barH = ((v - yMin) / yRange) * (H - 2 * PAD);
+          return <rect key={`${i}-${ci}`} x={xi(i) - bw / 2 + ci * (bw + 1)} y={yi(v)} width={bw} height={barH} fill={COLORS[ci % COLORS.length]} rx={1} />;
+        });
+      })}
+      {/* legend */}
+      {numCols.map((col, ci) => (
+        <g key={col} transform={`translate(${PAD + ci * 80}, ${H - 2})`}>
+          <rect width={8} height={8} fill={COLORS[ci % COLORS.length]} rx={1} />
+          <text x={12} y={8} className="fill-slate-400 text-[8px]">{col}</text>
+        </g>
+      ))}
+    </svg>
   );
 }
