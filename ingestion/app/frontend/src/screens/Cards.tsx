@@ -35,6 +35,12 @@ export function Cards() {
   const [banks, setBanks] = useState<Record<string, BankOverviewEntry>>({});
   const [pushLine, setPushLine] = useState<{ id: string; name: string } | null>(null);
   const [liveNudge, setLiveNudge] = useState<{ cardId: string; cardName: string; lineId: string } | null>(null);
+  // Umbrella view: search + filters + group-by-line.
+  const [cardQ, setCardQ] = useState("");
+  const [cardLine, setCardLine] = useState("");
+  const [cardStatus, setCardStatus] = useState<"all" | "live" | "dormant" | "green" | "untested">("all");
+  const [grouped, setGrouped] = useState(true);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
   // Playground state
   const [pgLineId, setPgLineId] = useState("");
@@ -86,6 +92,56 @@ export function Cards() {
 
   const liveCount = cards.filter((c) => c.status === "live").length;
 
+  const lineNameOf = (id: string) => lines.find((l) => l.id === id)?.name ?? id;
+
+  const filteredCards = cards.filter((c) => {
+    if (cardLine && c.lineId !== cardLine) return false;
+    if (cardStatus === "live" && c.status !== "live") return false;
+    if (cardStatus === "dormant" && c.status !== "dormant") return false;
+    if (cardStatus === "green" && !c.lastTest?.ok) return false;
+    if (cardStatus === "untested" && c.lastTest) return false;
+    if (cardQ) {
+      const hay = `${c.name} ${c.lineId} ${lineNameOf(c.lineId)} ${c.tables.join(" ")}`.toLowerCase();
+      if (!hay.includes(cardQ.toLowerCase())) return false;
+    }
+    return true;
+  });
+
+  // Umbrella groups in line order, then cards whose line is gone (deregistered).
+  const cardGroups: { lineId: string; cards: Card[] }[] = (() => {
+    const byLine = new Map<string, Card[]>();
+    for (const c of filteredCards) {
+      const arr = byLine.get(c.lineId) ?? [];
+      arr.push(c);
+      byLine.set(c.lineId, arr);
+    }
+    const ordered: { lineId: string; cards: Card[] }[] = [];
+    for (const l of lines) {
+      const arr = byLine.get(l.id);
+      if (arr) { ordered.push({ lineId: l.id, cards: arr }); byLine.delete(l.id); }
+    }
+    for (const [lineId, arr] of byLine) ordered.push({ lineId, cards: arr });
+    return ordered;
+  })();
+
+  function bankChipFor(lineId: string, anyGreen: boolean, small = true) {
+    const b = banks[lineId];
+    const cls = small ? "rounded-lg border px-3 py-1 text-sm" : "rounded-lg border px-3 py-1 text-sm";
+    if (b?.ready) {
+      return <button onClick={() => openBankDrawer(lineId)} title={`bank:line-${lineId} ready — review or re-push`} className={`${cls} border-state-ok/50 text-state-ok`}>bank ✓</button>;
+    }
+    return (
+      <button
+        onClick={() => openBankDrawer(lineId)}
+        disabled={!anyGreen}
+        title={anyGreen ? `Preview bank:line-${lineId} and push to Hindsight` : "Needs a tested-green card before pushing to Hindsight"}
+        className={`${cls} border-slate-300 text-accent-500 disabled:opacity-40 dark:border-ink-700`}
+      >
+        {b?.draftSaved ? "bank draft" : "→ hindsight"}
+      </button>
+    );
+  }
+
   async function act(fn: () => Promise<unknown>) {
     setError(null);
     try {
@@ -134,6 +190,68 @@ export function Cards() {
     } catch { /* banks overview is best-effort; activation already succeeded */ }
   }
 
+  function cardTile(c: Card, showLine = false) {
+    return (
+      <div key={c.id} className="rounded-xl border border-slate-200 p-4 dark:border-ink-800">
+        {showLine && (
+          <div className="mb-1 text-xs text-slate-400">
+            <FormattedText text={lineNameOf(c.lineId)} lineName={lineNameOf(c.lineId)} /> <span className="font-mono">{c.lineId}</span>
+          </div>
+        )}
+        <div className="flex items-center gap-2">
+          <span className="font-semibold">{c.name}</span>
+          <span className="tnum text-xs text-slate-400">v{c.version}</span>
+          <span className="ml-auto"><StatusChip tone={c.status === "live" ? "ok" : "mute"}>{c.status.toUpperCase()}</StatusChip></span>
+        </div>
+        <div className="mt-1 text-xs text-slate-400">
+          {c.granularity}{c.unit ? ` · ${c.unit}` : ""}{c.threshold != null ? ` · warn > ${c.threshold}` : ""} · tables: <FormattedText text={c.tables.join(", ") || "—"} highlightTables />
+          <span className="tnum ml-2">≈{tickCost(c)} queries/day</span>
+        </div>
+        <pre className="mt-2 max-h-28 overflow-auto rounded bg-slate-100 p-2 font-mono text-xs dark:bg-ink-900">{c.sql || "(no SQL yet)"}</pre>
+        <div className="mt-1 text-xs">
+          {c.lastTest
+            ? <span className={c.lastTest.ok ? "text-state-ok" : "text-state-bad"}>last test {c.lastTest.ok ? "passed" : `failed: ${c.lastTest.error}`} · {new Date(c.lastTest.at).toLocaleTimeString()}</span>
+            : <span className="text-slate-400">never tested — cannot go live</span>}
+        </div>
+        {testOut[c.id] && (
+          <div className="mt-2 overflow-auto rounded border border-slate-200 text-xs dark:border-ink-800">
+            <div className="border-b border-slate-200 px-2 py-1 text-slate-400 dark:border-ink-800">
+              <span className="tnum">{testOut[c.id].rowCount}</span> rows · last 24h window · preview 50
+            </div>
+            <table className="w-full text-left font-mono">
+              <thead><tr>{testOut[c.id].columns.map((x) => <th key={x} className="px-2 py-1">{x}</th>)}</tr></thead>
+              <tbody>
+                {testOut[c.id].rows.map((r, i) => (
+                  <tr key={i} className="border-t border-slate-100 dark:border-ink-800">
+                    {testOut[c.id].columns.map((x) => <td key={x} className="px-2 py-1">{String(r[x] ?? "")}</td>)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <div className="mt-3 flex flex-wrap gap-2 text-sm">
+          <button onClick={() => void onTest(c)} disabled={testingId === c.id} className="rounded-lg border border-slate-300 px-3 py-1 dark:border-ink-700">
+            {testingId === c.id ? "testing…" : "Test-run"}
+          </button>
+          <button onClick={() => setGraphCard(c)} className="rounded-lg border border-slate-300 px-3 py-1 dark:border-ink-700">
+            Graph {(cardGraphs[c.id]?.length ?? 0) > 0 && <span className="tnum">({cardGraphs[c.id].length})</span>}
+          </button>
+          {bankChipFor(c.lineId, c.lastTest?.ok === true)}
+          {c.status === "dormant" ? (
+            <>
+              <button onClick={() => void onActivate(c)} disabled={!canActivate(c)} className="rounded-lg border border-state-ok/50 px-3 py-1 text-state-ok disabled:opacity-40">Go live</button>
+              <button onClick={() => { setEditCard(c); setCardDraft({ lineId: c.lineId, name: c.name, tables: c.tables.join(", "), sql: c.sql, granularity: c.granularity, unit: c.unit, extractHint: c.extractHint, threshold: c.threshold != null ? String(c.threshold) : "", changeMode: "forward", reingestFrom: "" }); setShowCardForm(true); }} className="rounded-lg border border-slate-300 px-3 py-1 dark:border-ink-700">edit</button>
+              <button onClick={() => { if (confirm(`Delete card "${c.name}" on ${c.lineId}?`)) void act(() => cardApi.deleteCard(c.id)); }} className="rounded-lg border border-state-bad/50 px-3 py-1 text-state-bad">delete</button>
+            </>
+          ) : (
+            <button onClick={() => void act(() => cardApi.dormantCard(c.id))} className="rounded-lg border border-state-warn/50 px-3 py-1 text-state-warn">take dormant</button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div>
       <h1 className="text-2xl font-bold">
@@ -178,78 +296,69 @@ export function Cards() {
       </div>
 
       {tab === "cards" && (
+        <div className="mt-4 flex flex-wrap items-center gap-2">
+          <input
+            value={cardQ}
+            onChange={(e) => setCardQ(e.target.value)}
+            placeholder="Search cards, lines, tables…"
+            className="w-64 rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-ink-700"
+          />
+          <select value={cardLine} onChange={(e) => setCardLine(e.target.value)} className="rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-ink-700">
+            <option value="">all lines</option>
+            {lines.map((l) => <option key={l.id} value={l.id}>{l.id} — {l.name}</option>)}
+          </select>
+          <select value={cardStatus} onChange={(e) => setCardStatus(e.target.value as typeof cardStatus)} className="rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-ink-700">
+            <option value="all">all statuses</option>
+            <option value="live">live</option>
+            <option value="dormant">dormant</option>
+            <option value="green">tested-green</option>
+            <option value="untested">untested</option>
+          </select>
+          <div className="ml-auto flex gap-1 text-sm">
+            <button onClick={() => setGrouped(true)} className={`rounded-lg px-3 py-2 ${grouped ? "bg-accent-500/15 font-medium text-accent-500" : "text-slate-500"}`}>Grouped</button>
+            <button onClick={() => setGrouped(false)} className={`rounded-lg px-3 py-2 ${!grouped ? "bg-accent-500/15 font-medium text-accent-500" : "text-slate-500"}`}>Flat</button>
+          </div>
+        </div>
+      )}
+
+      {tab === "cards" && !grouped && (
         <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
-          {cards.map((c) => (
-            <div key={c.id} className="rounded-xl border border-slate-200 p-4 dark:border-ink-800">
-              <div className="flex items-center gap-2">
-                <span className="font-semibold">{c.name}</span>
-                <span className="font-mono text-xs text-slate-400">{c.lineId}</span>
-                <span className="tnum text-xs text-slate-400">v{c.version}</span>
-                <span className="ml-auto"><StatusChip tone={c.status === "live" ? "ok" : "mute"}>{c.status.toUpperCase()}</StatusChip></span>
-              </div>
-              <div className="mt-1 text-xs text-slate-400">
-                {c.granularity}{c.unit ? ` · ${c.unit}` : ""}{c.threshold != null ? ` · warn > ${c.threshold}` : ""} · tables: <FormattedText text={c.tables.join(", ") || "—"} highlightTables />
-                <span className="tnum ml-2">≈{tickCost(c)} queries/day</span>
-              </div>
-              <pre className="mt-2 max-h-28 overflow-auto rounded bg-slate-100 p-2 font-mono text-xs dark:bg-ink-900">{c.sql || "(no SQL yet)"}</pre>
-              <div className="mt-1 text-xs">
-                {c.lastTest
-                  ? <span className={c.lastTest.ok ? "text-state-ok" : "text-state-bad"}>last test {c.lastTest.ok ? "passed" : `failed: ${c.lastTest.error}`} · {new Date(c.lastTest.at).toLocaleTimeString()}</span>
-                  : <span className="text-slate-400">never tested — cannot go live</span>}
-              </div>
-              {testOut[c.id] && (
-                <div className="mt-2 overflow-auto rounded border border-slate-200 text-xs dark:border-ink-800">
-                  <div className="border-b border-slate-200 px-2 py-1 text-slate-400 dark:border-ink-800">
-                    <span className="tnum">{testOut[c.id].rowCount}</span> rows · last 24h window · preview 50
-                  </div>
-                  <table className="w-full text-left font-mono">
-                    <thead><tr>{testOut[c.id].columns.map((x) => <th key={x} className="px-2 py-1">{x}</th>)}</tr></thead>
-                    <tbody>
-                      {testOut[c.id].rows.map((r, i) => (
-                        <tr key={i} className="border-t border-slate-100 dark:border-ink-800">
-                          {testOut[c.id].columns.map((x) => <td key={x} className="px-2 py-1">{String(r[x] ?? "")}</td>)}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+          {filteredCards.map((c) => cardTile(c, true))}
+        </div>
+      )}
+
+      {tab === "cards" && grouped && (
+        <div className="mt-4 flex flex-col gap-4">
+          {cardGroups.map((g) => {
+            const line = lines.find((l) => l.id === g.lineId);
+            const live = g.cards.filter((c) => c.status === "live").length;
+            const failing = g.cards.filter((c) => c.lastTest && !c.lastTest.ok).length;
+            const anyGreen = g.cards.some((c) => c.lastTest?.ok);
+            const shut = collapsed[g.lineId];
+            return (
+              <div key={g.lineId} className="rounded-xl border border-slate-200 dark:border-ink-800">
+                <div onClick={() => setCollapsed((m) => ({ ...m, [g.lineId]: !m[g.lineId] }))} className="flex cursor-pointer flex-wrap items-center gap-2 px-4 py-3">
+                  <span className="text-slate-400">{shut ? "▸" : "▾"}</span>
+                  <FormattedText text={line?.name ?? g.lineId} lineName={line?.name ?? g.lineId} />
+                  <span className="font-mono text-xs text-slate-400">{g.lineId}</span>
+                  <span className="tnum text-xs text-slate-400">{live} live / {g.cards.length - live} dormant</span>
+                  {failing > 0 && <StatusChip tone="bad">{failing} failing</StatusChip>}
+                  <span className="tnum text-xs text-slate-400">last tick: {line?.lastTick ? new Date(line.lastTick).toLocaleString() : "—"}</span>
+                  <span className="ml-auto" onClick={(e) => e.stopPropagation()}>{bankChipFor(g.lineId, anyGreen)}</span>
                 </div>
-              )}
-              <div className="mt-3 flex flex-wrap gap-2 text-sm">
-                <button onClick={() => void onTest(c)} disabled={testingId === c.id} className="rounded-lg border border-slate-300 px-3 py-1 dark:border-ink-700">
-                  {testingId === c.id ? "testing…" : "Test-run"}
-                </button>
-                <button onClick={() => setGraphCard(c)} className="rounded-lg border border-slate-300 px-3 py-1 dark:border-ink-700">
-                  Graph {(cardGraphs[c.id]?.length ?? 0) > 0 && <span className="tnum">({cardGraphs[c.id].length})</span>}
-                </button>
-                {(() => {
-                  const b = banks[c.lineId];
-                  if (b?.ready) {
-                    return <button onClick={() => openBankDrawer(c.lineId)} title={`bank:line-${c.lineId} ready — review or re-push`} className="rounded-lg border border-state-ok/50 px-3 py-1 text-state-ok">bank ✓</button>;
-                  }
-                  const green = c.lastTest?.ok === true;
-                  return (
-                    <button
-                      onClick={() => openBankDrawer(c.lineId)}
-                      disabled={!green}
-                      title={green ? `Preview bank:line-${c.lineId} and push to Hindsight` : "Test-run this card green first, then push its line bank"}
-                      className="rounded-lg border border-slate-300 px-3 py-1 text-accent-500 disabled:opacity-40 dark:border-ink-700"
-                    >
-                      {b?.draftSaved ? "bank draft" : "→ hindsight"}
-                    </button>
-                  );
-                })()}
-                {c.status === "dormant" ? (
-                  <>
-                    <button onClick={() => void onActivate(c)} disabled={!canActivate(c)} className="rounded-lg border border-state-ok/50 px-3 py-1 text-state-ok disabled:opacity-40">Go live</button>
-                    <button onClick={() => { setEditCard(c); setCardDraft({ lineId: c.lineId, name: c.name, tables: c.tables.join(", "), sql: c.sql, granularity: c.granularity, unit: c.unit, extractHint: c.extractHint, threshold: c.threshold != null ? String(c.threshold) : "", changeMode: "forward", reingestFrom: "" }); setShowCardForm(true); }} className="rounded-lg border border-slate-300 px-3 py-1 dark:border-ink-700">edit</button>
-                    <button onClick={() => { if (confirm(`Delete card "${c.name}" on ${c.lineId}?`)) void act(() => cardApi.deleteCard(c.id)); }} className="rounded-lg border border-state-bad/50 px-3 py-1 text-state-bad">delete</button>
-                  </>
-                ) : (
-                  <button onClick={() => void act(() => cardApi.dormantCard(c.id))} className="rounded-lg border border-state-warn/50 px-3 py-1 text-state-warn">take dormant</button>
+                {!shut && (
+                  <div className="grid grid-cols-1 gap-4 border-t border-slate-100 p-4 dark:border-ink-800 xl:grid-cols-2">
+                    {g.cards.map((c) => cardTile(c))}
+                  </div>
                 )}
               </div>
+            );
+          })}
+          {cardGroups.length === 0 && (
+            <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500 dark:border-ink-700">
+              No cards match the filters. <button onClick={() => { setCardQ(""); setCardLine(""); setCardStatus("all"); }} className="text-accent-500">clear filters</button>
             </div>
-          ))}
+          )}
         </div>
       )}
       {tab === "cards" && cards.length === 0 && (
