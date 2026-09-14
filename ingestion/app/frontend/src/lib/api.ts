@@ -90,6 +90,64 @@ export const api = {
     req<{ unassigned: string[] }>(`/api/ingest/lines-unassigned?connectionId=${connectionId}`),
 };
 
+/* ---- Hindsight banks (per-line provisioning) ---- */
+
+export interface BankOverviewEntry {
+  lineId: string;
+  lineName: string;
+  bankId: string;
+  ready: boolean;
+  draftSaved: boolean;
+  greenCards: number;
+  cards: number;
+}
+
+export interface BankPreview {
+  lineId: string;
+  lineName: string;
+  bankId: string;
+  ready: boolean;
+  hindsightConfigured: boolean;
+  tables: { table: string; columns: { name: string; type: string }[]; error?: string }[];
+  missions: { retain: string; observations: string; reflect: string };
+  extractionMode: "concise" | "verbose";
+  entityLabels: { key: string; description: string; type: "value" | "multi-values"; values: { value: string; description: string }[]; tag: boolean }[];
+  directives: { name: string; content: string; tags: string[] }[];
+  disposition: { skepticism: number; literalism: number; empathy: number };
+  observations: { enabled: boolean; autoConsolidate: boolean };
+  mentalModel: { name: string; source_query: string };
+  draft?: Partial<BankPlan>;
+  draftSaved: boolean;
+}
+
+export interface BankPlan {
+  missions: { retain: string; observations: string; reflect: string };
+  extractionMode: "concise" | "verbose";
+  entityLabels: BankPreview["entityLabels"];
+  directives: { name: string; content: string; tags: string[] }[];
+  disposition: { skepticism: number; literalism: number; empathy: number };
+  observations: { enabled: boolean; autoConsolidate: boolean };
+  mentalModel: { name: string; source_query: string };
+}
+
+export const bankApi = {
+  overview: () =>
+    req<{ hindsight: { configured: boolean; base: string | null }; banks: BankOverviewEntry[] }>("/api/ingest/banks"),
+  preview: (lineId: string) => req<BankPreview>(`/api/ingest/banks/preview/${lineId}`),
+  suggest: (lineId: string, kind: "entities" | "missions" | "mental-model" | "directives") =>
+    req<{ kind: string; text: string; parsed: unknown; model: string; latencyMs: number }>("/api/ingest/banks/suggest", {
+      method: "POST",
+      body: JSON.stringify({ lineId, kind }),
+    }),
+  saveDraft: (lineId: string, plan: BankPlan) =>
+    req<{ ok: boolean }>("/api/ingest/banks/draft", { method: "POST", body: JSON.stringify({ lineId, plan }) }),
+  push: (lineId: string, plan: BankPlan) =>
+    req<{ ok: boolean; bankId: string; directivesCreated: number; mentalModelOp: string | null; warnings: string[] }>(
+      "/api/ingest/banks/push",
+      { method: "POST", body: JSON.stringify({ lineId, plan }) }
+    ),
+};
+
 export interface CardTemplate {
   id: string;
   name: string;

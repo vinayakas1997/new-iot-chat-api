@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { AlertBanner, StatusChip } from "../components/chips";
+import { bankApi, type BankOverviewEntry } from "../lib/api";
 
 interface HsStatus {
   configured: boolean;
@@ -40,6 +41,7 @@ export function Hindsight() {
   const [detecting, setDetecting] = useState(false);
   const [detected, setDetected] = useState<DetectOut | null>(null);
   const [picked, setPicked] = useState("");
+  const [banks, setBanks] = useState<BankOverviewEntry[]>([]);
 
   async function refresh() {
     try {
@@ -50,6 +52,7 @@ export function Hindsight() {
       setSt(hs);
       if (hs.url) setUrl(hs.url);
       setProviders(llm);
+      bankApi.overview().then((o) => setBanks(o.banks)).catch(() => {});
     } catch (e) {
       setError((e as Error).message);
     }
@@ -106,6 +109,19 @@ export function Hindsight() {
           <button onClick={() => void refresh()} className="rounded-lg border border-slate-300 px-4 py-2 text-sm dark:border-ink-700">Recheck</button>
         </div>
       </div>
+
+      <h2 className="mt-8 text-sm font-bold uppercase tracking-widest text-slate-400">Line banks</h2>
+      {banks.length === 0 && <div className="mt-2 text-sm text-slate-400">no lines yet — register one in F2, then push it from the Lines tab.</div>}
+      {banks.map((b) => (
+        <div key={b.lineId} className="mt-2 flex max-w-2xl items-center gap-3 rounded-xl border border-slate-200 px-4 py-2 text-sm dark:border-ink-800">
+          <span className="font-mono">{b.bankId}</span>
+          <span className="text-slate-400">{b.lineName}</span>
+          <span className="ml-auto flex items-center gap-2">
+            <StatusChip tone={b.ready ? "ok" : b.draftSaved ? "mute" : "mute"}>{b.ready ? "ready" : b.draftSaved ? "draft" : "pending"}</StatusChip>
+            <span className="tnum text-xs text-slate-400">{b.greenCards}/{b.cards} green</span>
+          </span>
+        </div>
+      ))}
 
       <h2 className="mt-8 text-sm font-bold uppercase tracking-widest text-slate-400">LLM for extraction</h2>
       {providers.filter((p) => p.isActive).map((p) => (

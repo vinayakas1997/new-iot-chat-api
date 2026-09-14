@@ -38,6 +38,31 @@ the truth; regenerate any snapshot from it.
   (`bank%3Aline-1`) or confirm the server accepts raw colons per bank.
 - Banks are created implicitly on first retain (verify in extraction slice).
 
+## Bank provisioning (proven live 2026-09-14, `bank:line-line-smoke`)
+
+Push-to-Hindsight flow (`backend/src/routes/banks.ts`) provisions each line bank
+before ticks retain into it. All paths verified against `/openapi.json`:
+
+- `PUT /v1/default/banks/{bank_id}` (`CreateBankRequest`) — create-or-update
+  with missions + disposition + extraction mode in one call; missing fields
+  auto-fill with defaults. Body: `{name, mission, retain_mission,
+  observations_mission, reflect_mission, retain_extraction_mode,
+  enable_observations, disposition_skepticism, disposition_literalism,
+  disposition_empathy}`.
+- `PATCH /v1/default/banks/{bank_id}/config` (`{updates: {...}}`) — overrides
+  incl. `entity_labels` (controlled vocab, `tag:true` groups auto-tag memories
+  for recall filtering), `enable_observations`, `enable_auto_consolidation`.
+- `GET/POST /v1/default/banks/{bank_id}/directives` (`{name, content, tags?}`) —
+  hard reflect rules; push is idempotent by name (existing names skipped).
+- `POST /v1/default/banks/{bank_id}/mental-models` (`{name, source_query}`) —
+  background op (returns `operation_id`); best-effort on empty banks.
+- `GET /v1/default/banks/{bank_id}/config` returns `{config, overrides}` —
+  resolved vs bank-level-only.
+- Setter side: readiness marker `bankready:<lineId>` + draft JSON
+  `bankdraft:<lineId>` live in the `settings` table (no migration); AI-drafted
+  suggestions come from the active F6 LLM via `/api/ingest/banks/suggest`
+  (text/JSON, never auto-saved).
+
 ## Service state (compose)
 
 - Boots only with `HINDSIGHT_API_LLM_API_KEY` set → compose defaults to

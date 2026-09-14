@@ -4,6 +4,7 @@ import { openStore } from "./db/store.js";
 import { createLogger } from "./logger.js";
 import { startPoller } from "./poller.js";
 import { connectionRoutes } from "./routes/connections.js";
+import { bankRoutes } from "./routes/banks.js";
 import { cardRoutes } from "./routes/cards.js";
 import { graphRoutes } from "./routes/graphs.js";
 import { hindsightRoutes } from "./routes/hindsight.js";
@@ -26,6 +27,7 @@ async function main() {
   app.get("/api/health", async () => ({ ok: true, at: new Date().toISOString() }));
 
   await app.register(connectionRoutes);
+  await app.register(bankRoutes);
   await app.register(lineRoutes);
   await app.register(cardRoutes);
   await app.register(graphRoutes);

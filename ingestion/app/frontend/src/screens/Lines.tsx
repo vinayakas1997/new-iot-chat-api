@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, type Connection, type Line, type TableRef } from "../lib/api";
+import { api, bankApi, cardApi, type BankOverviewEntry, type Connection, type Line, type TableRef } from "../lib/api";
 import { AlertBanner, StatusChip } from "../components/chips";
+import { PushToHindsight } from "../components/PushToHindsight";
 
 type Draft = { id: string; name: string; connectionId: string; memberTables: string[] };
 
@@ -18,12 +19,27 @@ export function Lines() {
   const [pickTables, setPickTables] = useState<TableRef[]>([]);
   const [openId, setOpenId] = useState<string | null>(null);
   const [unassigned, setUnassigned] = useState<Record<string, string[]>>({});
+  const [banks, setBanks] = useState<Record<string, BankOverviewEntry>>({});
+  const [greenByLine, setGreenByLine] = useState<Record<string, number>>({});
+  const [pushLine, setPushLine] = useState<Line | null>(null);
 
   async function refresh() {
     try {
       const [l, c] = await Promise.all([api.listLines(), api.listConnections()]);
       setRows(l);
       setConns(c.filter((x) => x.enabled));
+      cardApi.listCards().then((cards) => {
+        const g: Record<string, number> = {};
+        for (const card of cards) {
+          if (card.lastTest?.ok) g[card.lineId] = (g[card.lineId] ?? 0) + 1;
+        }
+        setGreenByLine(g);
+      }).catch(() => {});
+      bankApi.overview().then((o) => {
+        const m: Record<string, BankOverviewEntry> = {};
+        for (const b of o.banks) m[b.lineId] = b;
+        setBanks(m);
+      }).catch(() => {});
     } catch (e) {
       setError((e as Error).message);
     }
@@ -151,6 +167,23 @@ export function Lines() {
                 </td>
                 <td className="py-2.5" onClick={(e) => e.stopPropagation()}>
                   <button onClick={() => openForm(l)} className="mr-3 text-accent-500">edit</button>
+                  {(() => {
+                    const b = banks[l.id];
+                    const green = greenByLine[l.id] ?? 0;
+                    if (b?.ready) {
+                      return <button onClick={() => setPushLine(l)} title={`bank:line-${l.id} ready — reopen to review or re-push`} className="mr-3 text-state-ok">bank ✓</button>;
+                    }
+                    return (
+                      <button
+                        onClick={() => setPushLine(l)}
+                        disabled={green === 0}
+                        title={green === 0 ? "Needs at least one tested-green card before pushing to Hindsight" : `Preview bank:line-${l.id} and push to Hindsight`}
+                        className="mr-3 text-accent-500 disabled:opacity-40"
+                      >
+                        → hindsight
+                      </button>
+                    );
+                  })()}
                   {l.active
                     ? <button onClick={() => void onDeregister(l)} className="text-state-warn">deregister</button>
                     : <button onClick={() => void api.reregisterLine(l.id).then(() => refresh())} className="text-state-ok">re-register</button>}
@@ -178,6 +211,15 @@ export function Lines() {
           <p className="mt-1 text-sm text-slate-500">Register your first production line to let the pipeline ingest for it.</p>
           <button onClick={() => openForm()} className="mt-4 rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white">Register your first line</button>
         </div>
+      )}
+
+      {pushLine && (
+        <PushToHindsight
+          lineId={pushLine.id}
+          lineName={pushLine.name}
+          onClose={() => setPushLine(null)}
+          onPushed={() => void refresh()}
+        />
       )}
 
       {showForm && (
