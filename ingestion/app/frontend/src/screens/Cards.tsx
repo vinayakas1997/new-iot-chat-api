@@ -454,15 +454,45 @@ export function Cards() {
                   Check all copies
                 </Btn>
                 <Btn variant="bad" icon={Trash2} onClick={() => { if (confirm(`Delete template "${t.name}"? Copies keep working.`)) void act(() => cardApi.deleteTemplate(t.id)); }}>delete</Btn>
-                {(() => {
-                  const nLines = new Set(cards.filter((c) => c.templateId === t.id).map((c) => c.lineId)).size;
-                  return (
-                    <span className="tnum self-center text-xs text-slate-400" title="Distinct lines holding copies of this template">
-                      used in {nLines} line{nLines === 1 ? "" : "s"}
-                    </span>
-                  );
-                })()}
               </div>
+              {(() => {
+                const copies = cards.filter((c) => c.templateId === t.id);
+                if (copies.length === 0) {
+                  return <div className="mt-2 text-xs text-slate-400">not used yet — no copies on any line</div>;
+                }
+                const seen = new Map<string, Card[]>();
+                for (const c of copies) {
+                  const arr = seen.get(c.lineId) ?? [];
+                  arr.push(c);
+                  seen.set(c.lineId, arr);
+                }
+                return (
+                  <div className="mt-2 rounded-lg bg-slate-50 p-2 dark:bg-ink-900/50">
+                    <div className="tnum text-xs uppercase tracking-wider text-slate-400">
+                      copies on {seen.size} line{seen.size === 1 ? "" : "s"}
+                    </div>
+                    {[...seen].map(([lineId, arr]) => {
+                      const l = lines.find((x) => x.id === lineId);
+                      const live = arr.filter((c) => c.status === "live").length;
+                      return (
+                        <div key={lineId} className="mt-1 flex items-center gap-2 text-xs">
+                          <FormattedText text={l?.name ?? lineId} lineName={l?.name ?? lineId} />
+                          <span className="font-mono text-slate-400">{lineId}</span>
+                          <span className="tnum text-slate-400">{l ? `${l.memberTables.length} tables` : "line gone"}</span>
+                          <StatusChip tone={live === arr.length ? "ok" : "mute"}>{live}/{arr.length} live</StatusChip>
+                          <Link
+                            to={`/setter/lines?edit=${lineId}`}
+                            title="Open this line in Lines to add/remove its tables"
+                            className="ml-auto inline-flex items-center gap-1 text-accent-500 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60"
+                          >
+                            <Pencil size={12} />edit tables
+                          </Link>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
               {reapplyByTpl[t.id] && (() => {
                 const out = reapplyByTpl[t.id];
                 const applied = appliedByTpl[t.id];

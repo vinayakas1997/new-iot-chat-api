@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { Brain, Layers, Pencil, Pause, Play, Plus, Save, Search } from "lucide-react";
 import { api, bankApi, cardApi, type BankOverviewEntry, type Connection, type Line, type TableRef } from "../lib/api";
 import { AlertBanner, StatusChip } from "../components/chips";
@@ -25,6 +25,7 @@ export function Lines() {
   const [banks, setBanks] = useState<Record<string, BankOverviewEntry>>({});
   const [greenByLine, setGreenByLine] = useState<Record<string, number>>({});
   const [pushLine, setPushLine] = useState<Line | null>(null);
+  const [params, setParams] = useSearchParams();
 
   async function refresh() {
     try {
@@ -48,6 +49,15 @@ export function Lines() {
     }
   }
   useEffect(() => void refresh(), []);
+  // Deep link from template tiles (?edit=<lineId>): open the line's edit form once rows arrive.
+  useEffect(() => {
+    const id = params.get("edit");
+    if (!id || rows.length === 0) return;
+    const l = rows.find((x) => x.id === id);
+    setParams({}, { replace: true });
+    if (l) openForm(l);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows]);
 
   const filtered = rows.filter((l) => {
     if (connFilter && l.connectionId !== connFilter) return false;
