@@ -48,9 +48,13 @@ export interface TableDetail extends TableRef {
 }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
+  const hasBody = init?.body != null;
   const r = await fetch(path, {
-    headers: { "content-type": "application/json" },
     ...init,
+    // A bodyless POST with content-type: application/json makes Fastify's
+    // JSON parser 400 ("Body cannot be empty...") before any handler runs.
+    // Send the header only when there is actually a body.
+    headers: { ...(hasBody ? { "content-type": "application/json" } : {}), ...init?.headers },
   });
   const body = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error((body as { error?: string }).error ?? `HTTP ${r.status}`);
