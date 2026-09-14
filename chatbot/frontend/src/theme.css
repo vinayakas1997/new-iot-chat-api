@@ -1,6 +1,0 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-
-.tnum { font-variant-numeric: tabular-nums; }
-body { background: #0f172a; }
