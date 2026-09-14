@@ -18,6 +18,52 @@ export function tickCost(c: Pick<Card, "granularity">): number {
   return TICKS_PER_DAY[c.granularity];
 }
 
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Table references in FROM/JOIN positions (CTE names excluded). */
+export function sqlTableRefs(sql: string): string[] {
+  const ctes = new Set<string>();
+  const cteRe = /(?:\bWITH\b|,)\s*([A-Za-z_]\w*)\s+AS\s*\(/gi;
+  let cm;
+  while ((cm = cteRe.exec(sql))) ctes.add(cm[1].toLowerCase());
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const re = /\b(?:FROM|JOIN)\s+([A-Za-z_][\w$#]*(?:\.[A-Za-z_][\w$#]*)?)/gi;
+  let m;
+  while ((m = re.exec(sql))) {
+    const t = m[1];
+    const k = t.toLowerCase();
+    if (ctes.has(k) || seen.has(k)) continue;
+    seen.add(k);
+    out.push(t);
+  }
+  return out;
+}
+
+/** Best member-table match for a template ref: exact, then bare-name, else null. */
+export function matchMember(ref: string, members: string[]): string | null {
+  const rl = ref.toLowerCase();
+  const exact = members.find((x) => x.toLowerCase() === rl);
+  if (exact) return exact;
+  const bare = rl.includes(".") ? rl.split(".").pop()! : rl;
+  return members.find((x) => {
+    const parts = x.toLowerCase().split(".");
+    return parts[parts.length - 1] === bare;
+  }) ?? null;
+}
+
+/** Substitute remapped table refs (whole tokens only — aliases untouched). */
+export function remapSql(sql: string, map: Record<string, string>): string {
+  let out = sql;
+  for (const [ref, tgt] of Object.entries(map)) {
+    if (!tgt || tgt.toLowerCase() === ref.toLowerCase()) continue;
+    out = out.replace(new RegExp(`(?<![\\w.])${escapeRegExp(ref)}(?![\\w.])`, "gi"), tgt);
+  }
+  return out;
+}
+
 /** F3: template library + per-line card copies. Verdict: which cards are live, and on what? */
 export function Cards() {
   const [tab, setTab] = useState<"cards" | "templates" | "playground">("cards");
@@ -33,6 +79,7 @@ export function Cards() {
   const [tplDraft, setTplDraft] = useState({ name: "", description: "", sqlTemplate: "", granularity: "hourly", unit: "", extractHint: "" });
   const [instTpl, setInstTpl] = useState<CardTemplate | null>(null);
   const [instLine, setInstLine] = useState("");
+  const [instMap, setInstMap] = useState<Record<string, string>>({});
   const [showCardForm, setShowCardForm] = useState(false);
   const [cardDraft, setCardDraft] = useState({ lineId: "", name: "", tables: "", sql: "", granularity: "hourly", unit: "", extractHint: "", threshold: "", changeMode: "forward", reingestFrom: "" });
   const [editCard, setEditCard] = useState<Card | null>(null);
@@ -437,7 +484,7 @@ export function Cards() {
               </div>
               <pre className="mt-2 max-h-28 overflow-auto rounded bg-slate-100 p-2 font-mono text-xs dark:bg-ink-900">{t.sqlTemplate || "(no SQL template)"}</pre>
               <div className="mt-3 flex flex-wrap gap-2 text-sm">
-                <Btn variant="primary" icon={ArrowRight} onClick={() => { setInstTpl(t); setInstLine(lines[0]?.id ?? ""); }} title="Stamp an independent copy of this template onto a line. The copy starts dormant and can differ freely afterwards.">instantiate → line</Btn>
+                <Btn variant="primary" icon={ArrowRight} onClick={() => { setInstTpl(t); setInstLine(lines[0]?.id ?? ""); setInstMap({}); }} title="Stamp an independent copy of this template onto a line. The copy starts dormant and can differ freely afterwards.">instantiate → line</Btn>
                 <Btn icon={Copy} onClick={() => { setTplDraft({ name: t.name, description: t.description, sqlTemplate: t.sqlTemplate, granularity: t.granularity, unit: t.unit, extractHint: t.extractHint }); setShowTplForm(true); }} title="Copy this template as a starting point for a new, separate template.">duplicate</Btn>
                 <Btn
                   icon={ClipboardCheck}
@@ -516,7 +563,7 @@ export function Cards() {
                         <X size={14} />
                       </button>
                     </div>
-                    <p className="mt-1 text-xs text-slate-500">✓ works = safe to update together · ✗ fails = fix that line first · locked-live = live copies, never touched.</p>
+                    <p className="mt-1 text-xs text-slate-500">✓ works = safe to update together · ✗ fails = fix that line first · locked-live = live copies, never touched. Note: apply pushes identical SQL — copies with per-line table renames get overwritten; remap them after applying.</p>
                     {out.results.map((r) => (
                       <div key={r.cardId} className="mt-1 flex items-center gap-2 text-sm">
                         <span className="font-mono">{r.lineId}</span>
@@ -629,20 +676,74 @@ export function Cards() {
         </Modal>
       )}
 
-      {instTpl && (
+      {instTpl && (() => {
+        const line = lines.find((l) => l.id === instLine);
+        const members = line?.memberTables ?? [];
+        const refs = sqlTableRefs(instTpl.sqlTemplate);
+        const missing = refs.filter((r) => !matchMember(r, members));
+        const mapping: Record<string, string> = {};
+        for (const r of refs) {
+          mapping[r] = instMap[r.toLowerCase()] ?? matchMember(r, members) ?? members[0] ?? "";
+        }
+        const blocked = refs.length > 0 && Object.values(mapping).some((v) => !v);
+        const preview = remapSql(instTpl.sqlTemplate, mapping);
+        const tables = [...new Set(Object.values(mapping).filter(Boolean))];
+        return (
         <Modal title={`Instantiate "${instTpl.name}"`} onClose={() => setInstTpl(null)}>
           <Field label="Target line">
-            <select value={instLine} onChange={(e) => setInstLine(e.target.value)} className={inp}>
+            <select value={instLine} onChange={(e) => { setInstLine(e.target.value); setInstMap({}); }} className={inp}>
               {lines.map((l) => <option key={l.id} value={l.id}>{l.id} — {l.name}</option>)}
             </select>
           </Field>
-          <p className="text-sm text-slate-500">Creates an independent dormant copy on the line (tables default to the line's members). Test it, then go live.</p>
+          {refs.length > 0 && (
+            <div className="rounded-lg bg-slate-50 p-2 text-sm dark:bg-ink-900/50">
+              <div className="tnum text-xs uppercase tracking-wider text-slate-400">
+                table mapping · {refs.length - missing.length} match, {missing.length} to map
+              </div>
+              {missing.length === 0 && (
+                <div className="mt-1 text-xs text-state-ok">all template tables exist on this line — one click, no edits.</div>
+              )}
+              {missing.map((r) => (
+                <div key={r} className="mt-2 flex items-center gap-2">
+                  <span className="shrink-0 font-mono text-xs">{r}</span>
+                  <span className="text-xs text-slate-400">→</span>
+                  <select
+                    value={mapping[r]}
+                    onChange={(e) => setInstMap((m) => ({ ...m, [r.toLowerCase()]: e.target.value }))}
+                    className="min-w-0 flex-1 rounded-lg border border-state-warn/50 bg-transparent px-2 py-1 font-mono text-xs focus:border-accent-500 focus:outline-none dark:border-ink-700"
+                    title="Pick the replacement table on the target line"
+                  >
+                    {members.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                  {!matchMember(r, members) && mapping[r] === members[0] && !(r.toLowerCase() in instMap) && (
+                    <span className="shrink-0 text-xs text-state-warn" title="Guessed from the line's first table — please confirm">check</span>
+                  )}
+                </div>
+              ))}
+              {missing.length > 0 && (
+                <pre className="mt-2 overflow-auto rounded bg-slate-100 p-2 font-mono text-xs dark:bg-ink-800">{preview || "(preview unavailable)"}</pre>
+              )}
+            </div>
+          )}
+          <p className="text-sm text-slate-500">Creates an independent dormant copy on the line{tables.length > 0 ? ` over ${tables.join(", ")}` : ""}. Test it, then go live.</p>
           <div className="mt-3 flex justify-end gap-2">
             <button onClick={() => setInstTpl(null)} className="rounded-lg px-4 py-2 text-sm text-slate-500 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800">cancel</button>
-            <Btn variant="primary" icon={ArrowRight} onClick={() => void act(() => cardApi.instantiate(instTpl.id, { lineId: instLine }).then(() => { setInstTpl(null); setTab("cards"); }))}>Instantiate dormant</Btn>
+            <Btn
+              variant="primary"
+              icon={ArrowRight}
+              disabled={blocked || members.length === 0}
+              title={members.length === 0 ? "This line has no member tables yet" : blocked ? "Map every table above first" : "Create the dormant copy with mapped tables"}
+              onClick={() => void act(() => cardApi.instantiate(
+                instTpl.id,
+                refs.length > 0 ? { lineId: instLine, sql: preview, tables } : { lineId: instLine },
+              ).then(() => { setInstTpl(null); setInstMap({}); setTab("cards"); }))}
+            >
+              Instantiate dormant
+            </Btn>
           </div>
         </Modal>
-      )}
+        );
+      })()}
 
       {showCardForm && (
         <Modal title={editCard ? `Edit ${editCard.name} (dormant)` : "New card (dormant)"} onClose={() => setShowCardForm(false)}>
