@@ -182,6 +182,7 @@ export function Cards() {
   const [reapplyByTpl, setReapplyByTpl] = useState<Record<string, ReapplyResult>>({});
   const [appliedByTpl, setAppliedByTpl] = useState<Record<string, boolean>>({});
   const [showTplForm, setShowTplForm] = useState(false);
+  const [editTpl, setEditTpl] = useState<CardTemplate | null>(null);
   const [tplDraft, setTplDraft] = useState({ name: "", description: "", sqlTemplate: "", granularity: "hourly", unit: "", extractHint: "" });
   const [instTpl, setInstTpl] = useState<CardTemplate | null>(null);
   const [instLine, setInstLine] = useState("");
@@ -204,7 +205,7 @@ export function Cards() {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [showSuggest, setShowSuggest] = useState(false);
   const [copyQ, setCopyQ] = useState<Record<string, string>>({});
-  const [copyStatus, setCopyStatus] = useState<Record<string, "all" | "live" | "dormant" | "failed">>({});
+  const [copyStatus, setCopyStatus] = useState<Record<string, "all" | "live" | "dormant" | "failed" | "stale">>({});
   const [checkedByTpl, setCheckedByTpl] = useState<Record<string, string[]>>({});
   const [sqlViewCard, setSqlViewCard] = useState<Card | null>(null);
   const [fixCard, setFixCard] = useState<{ tplId: string; cardId: string } | null>(null);
@@ -372,6 +373,15 @@ export function Cards() {
     setShowCardForm(true);
   }
 
+  function openEditTemplate(t: CardTemplate) {
+    const ref = t.referenceLineId ? lines.find((l) => l.id === t.referenceLineId) : undefined;
+    setEditTpl(t);
+    setTplDraft({ name: t.name, description: t.description, sqlTemplate: t.sqlTemplate, granularity: t.granularity, unit: t.unit, extractHint: t.extractHint });
+    setTplPickLine(t.referenceLineId ?? "");
+    setTplLineSearch(ref ? `${ref.id} — ${ref.name}` : "");
+    setShowTplForm(true);
+  }
+
   function openBankDrawer(lineId: string) {
     const l = lines.find((x) => x.id === lineId);
     setPushLine({ id: lineId, name: l?.name ?? lineId });
@@ -493,7 +503,7 @@ export function Cards() {
           </Link>
             {tab === "cards"
             ? <Btn variant="primary" icon={Plus} onClick={() => { setEditCard(null); setCardDraft({ lineId: lines[0]?.id ?? "", name: "", tables: "", sql: "", granularity: "hourly", unit: "", extractHint: "", threshold: "", changeMode: "forward", reingestFrom: "" }); setShowCardForm(true); }}>New card</Btn>
-            : <Btn variant="primary" icon={Plus} onClick={() => { setTplDraft({ name: "", description: "", sqlTemplate: "", granularity: "hourly", unit: "", extractHint: "" }); setTplPickLine(""); setTplLineSearch(""); setShowTplForm(true); }}>New template</Btn>}
+            : <Btn variant="primary" icon={Plus} onClick={() => { setEditTpl(null); setTplDraft({ name: "", description: "", sqlTemplate: "", granularity: "hourly", unit: "", extractHint: "" }); setTplPickLine(""); setTplLineSearch(""); setShowTplForm(true); }}>New template</Btn>}
         </div>
       </div>
 
@@ -625,6 +635,7 @@ export function Cards() {
               <div className="mt-3 flex flex-wrap gap-2 text-sm">
                 <Btn variant="primary" icon={ArrowRight} onClick={() => { setInstTpl(t); setInstLine(lines[0]?.id ?? ""); setInstMap({}); }} title="Stamp an independent copy of this template onto a line. The copy starts dormant and can differ freely afterwards.">instantiate → line</Btn>
                 <Btn icon={Copy} onClick={() => { setDupTpl(t); setDupLine(t.referenceLineId ?? lines[0]?.id ?? ""); setDupName(`${t.name} copy`); setDupMap({}); setDupSearch(""); setDupSug(false); }} title="Pick a line, edit the tables, and stamp a copy there.">duplicate</Btn>
+                <Btn icon={Pencil} onClick={() => openEditTemplate(t)} title="Edit this template — name, SQL, reference line, hints. Copies are untouched.">edit</Btn>
                 <Btn
                   icon={ClipboardCheck}
                   disabled={copies.length > 0 && checked.length === 0}
@@ -653,10 +664,13 @@ export function Cards() {
                   const r = resByCard.get(c.id);
                   return r ? r.status === "red" : (c.lastTest != null && !c.lastTest.ok);
                 };
+                const staleOf = (c: Card) => c.templateVersion != null && c.templateVersion < t.version;
+                const staleIds = copies.filter(staleOf).map((c) => c.id);
                 const visible = copies.filter((c) => {
                   if (stf === "live" && c.status !== "live") return false;
                   if (stf === "dormant" && c.status !== "dormant") return false;
                   if (stf === "failed" && !failedOf(c)) return false;
+                  if (stf === "stale" && !staleOf(c)) return false;
                   if (q && !`${c.lineId} ${lineNameOf(c.lineId)} ${c.name} ${c.tables.join(" ")}`.toLowerCase().includes(q)) return false;
                   return true;
                 });
@@ -683,7 +697,7 @@ export function Cards() {
                       </div>
                       <select
                         value={copyStatus[t.id] ?? "all"}
-                        onChange={(e) => setCopyStatus((m) => ({ ...m, [t.id]: e.target.value as "all" | "live" | "dormant" | "failed" }))}
+                        onChange={(e) => setCopyStatus((m) => ({ ...m, [t.id]: e.target.value as "all" | "live" | "dormant" | "failed" | "stale" }))}
                         title="Filter rows by state"
                         className="rounded-lg border border-slate-300 bg-transparent px-2 py-1.5 text-sm focus:border-accent-500 focus:outline-none dark:border-ink-700"
                       >
@@ -691,7 +705,17 @@ export function Cards() {
                         <option value="live">live</option>
                         <option value="dormant">dormant</option>
                         <option value="failed">failed</option>
+                        <option value="stale">stale (behind template)</option>
                       </select>
+                      {staleIds.length > 0 && (
+                        <button
+                          onClick={() => setCheckedByTpl((m) => ({ ...m, [t.id]: staleIds }))}
+                          title="Check every copy that is behind the template, ready to Check/Apply"
+                          className="rounded-lg border border-state-warn/50 px-2 py-1 text-xs text-state-warn transition-colors hover:bg-state-warn/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60"
+                        >
+                          select stale ({staleIds.length})
+                        </button>
+                      )}
                       {reapplyByTpl[t.id] && (
                         <>
                           <span className="tnum font-mono text-xs text-slate-400">{reapplyByTpl[t.id].sqlHash}</span>
@@ -757,6 +781,9 @@ export function Cards() {
                                         ))}
                                         {c.sql !== t.sqlTemplate && (
                                           <span className="text-[11px] text-state-warn" title="This copy's SQL differs from the template — bulk apply skips it">per-line SQL</span>
+                                        )}
+                                        {staleOf(c) && (
+                                          <StatusChip tone="warn"><span title={`Template is v${t.version}, this copy was taken at v${c.templateVersion}`}>stale v{c.templateVersion}</span></StatusChip>
                                         )}
                                       </div>
                                     </td>
@@ -981,7 +1008,7 @@ export function Cards() {
       )}
 
       {showTplForm && (
-        <Modal title="New template" onClose={() => setShowTplForm(false)}>
+        <Modal title={editTpl ? `Edit ${editTpl.name}` : "New template"} onClose={() => { setShowTplForm(false); setEditTpl(null); }}>
           <Field label="Name"><input value={tplDraft.name} onChange={(e) => setTplDraft({ ...tplDraft, name: e.target.value })} className={inp} /></Field>
           <Field label="Description"><input value={tplDraft.description} onChange={(e) => setTplDraft({ ...tplDraft, description: e.target.value })} className={inp} /></Field>
           <Field label="Line — the tables below come from here">
@@ -1101,12 +1128,18 @@ export function Cards() {
             <Field label="Unit"><input value={tplDraft.unit} onChange={(e) => setTplDraft({ ...tplDraft, unit: e.target.value })} placeholder="°C, pcs…" className={inp} /></Field>
           </div>
           <Field label="Extraction hint (for the AI extractor)"><textarea rows={2} value={tplDraft.extractHint} onChange={(e) => setTplDraft({ ...tplDraft, extractHint: e.target.value })} className={inp} /></Field>
+          {editTpl && tplDraft.sqlTemplate !== editTpl.sqlTemplate && (
+            <div className="rounded-lg border border-state-warn/40 px-3 py-2 text-xs text-slate-500">
+              Saving this SQL bumps the template to <b>v{editTpl.version + 1}</b>. Copies keep their current SQL and show as <b>stale</b> until you Check / Apply.
+            </div>
+          )}
           <div className="mt-3 flex justify-end gap-2">
-            <button onClick={() => setShowTplForm(false)} className="rounded-lg px-4 py-2 text-sm text-slate-500 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800">cancel</button>
+            <button onClick={() => { setShowTplForm(false); setEditTpl(null); }} className="rounded-lg px-4 py-2 text-sm text-slate-500 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800">cancel</button>
             <Btn variant="primary" icon={Save} onClick={() => void act(() => {
               const ref = lines.find((l) => l.id === tplPickLine) ?? lines[0];
-              return cardApi.createTemplate({ ...tplDraft, referenceLineId: ref?.id ?? null }).then(() => setShowTplForm(false));
-            })}>Save template</Btn>
+              const body = { ...tplDraft, referenceLineId: ref?.id ?? null };
+              return (editTpl ? cardApi.updateTemplate(editTpl.id, body) : cardApi.createTemplate(body)).then(() => { setShowTplForm(false); setEditTpl(null); });
+            })}>{editTpl ? "Save changes" : "Save template"}</Btn>
           </div>
         </Modal>
       )}
