@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  ArrowRight, Brain, ChartLine, ClipboardCheck, Copy, FlaskConical, History as HistoryIcon,
+  ArrowRight, Brain, ChartLine, ClipboardCheck, Copy, Eye, FlaskConical, History as HistoryIcon,
   ListChecks, Pause, Pencil, Play, Plus, Rocket, Save, Search, Trash2, X,
 } from "lucide-react";
 import { Btn, Segmented, Spinner } from "../components/ui";
+import { CardDetails } from "../components/CardDetails";
 import { cardApi, api, bankApi, graphApi, playgroundApi, type BankOverviewEntry, type Card, type CardTemplate, type Line, type ReapplyResult, type TestResult, type GraphSpec, type ChartType, type PlaygroundResult, type QueryHistoryEntry, type LineColumn } from "../lib/api";
 import { AlertBanner, StatusChip } from "../components/chips";
 import { FormattedText } from "../components/FormattedText";
@@ -40,6 +41,7 @@ export function Cards() {
   const [activeModel, setActiveModel] = useState<string | null>(null);
   const [banks, setBanks] = useState<Record<string, BankOverviewEntry>>({});
   const [pushLine, setPushLine] = useState<{ id: string; name: string } | null>(null);
+  const [detailCard, setDetailCard] = useState<Card | null>(null);
   const [liveNudge, setLiveNudge] = useState<{ cardId: string; cardName: string; lineId: string } | null>(null);
   // Umbrella view: search + filters + group-by-line.
   const [cardQ, setCardQ] = useState("");
@@ -254,6 +256,7 @@ export function Cards() {
           </div>
         )}
         <div className="mt-3 flex flex-wrap gap-2 text-sm">
+          <Btn icon={Eye} onClick={() => setDetailCard(c)}>Details</Btn>
           <Btn icon={FlaskConical} onClick={() => void onTest(c)} loading={testingId === c.id}>
             {testingId === c.id ? "testing…" : "Test-run"}
           </Btn>
@@ -694,6 +697,17 @@ export function Cards() {
             void refresh();
             if (liveNudge && liveNudge.lineId === pushLine.id) setLiveNudge(null);
           }}
+        />
+      )}
+
+      {detailCard && (
+        <CardDetails
+          card={detailCard}
+          template={templates.find((t) => t.id === detailCard.templateId) ?? null}
+          line={lines.find((l) => l.id === detailCard.lineId) ?? null}
+          graphs={cardGraphs[detailCard.id] ?? []}
+          bankReady={!!banks[detailCard.lineId]?.ready}
+          onClose={() => setDetailCard(null)}
         />
       )}
     </div>
