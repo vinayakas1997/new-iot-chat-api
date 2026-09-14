@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { ArrowDownToLine, ChevronDown, Copy } from "lucide-react";
+import { Btn } from "./ui";
 
 const EXAMPLES: { key: string; title: string; sql: string }[] = [
   {
@@ -53,9 +55,10 @@ export function SqlHint({ onInsert }: { onInsert: (sql: string) => void }) {
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
-          className="text-xs text-accent-500"
+          className="inline-flex items-center gap-1 text-xs text-accent-500 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60"
         >
-          {open ? "hide examples ▴" : "show examples ▾"}
+          {open ? "hide examples" : "show examples"}
+          <ChevronDown size={12} className={`transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
         </button>
       </div>
       {open && (
@@ -69,21 +72,25 @@ export function SqlHint({ onInsert }: { onInsert: (sql: string) => void }) {
             <div key={e.key} className="rounded bg-slate-100 p-2 dark:bg-ink-800">
               <div className="flex items-center gap-2">
                 <span className="text-xs font-medium">{e.title}</span>
-                <span className="ml-auto flex gap-2">
-                  <button
+                <span className="ml-auto flex gap-1">
+                  <Btn
+                    variant="ghost"
+                    size="sm"
+                    icon={Copy}
                     type="button"
                     onClick={() => void copy(e.sql, e.key)}
-                    className="text-xs text-accent-500"
                   >
                     {copied === e.key ? "copied ✓" : "copy"}
-                  </button>
-                  <button
+                  </Btn>
+                  <Btn
+                    variant="ghost"
+                    size="sm"
+                    icon={ArrowDownToLine}
                     type="button"
                     onClick={() => onInsert(e.sql)}
-                    className="text-xs text-accent-500"
                   >
                     insert ↓
-                  </button>
+                  </Btn>
                 </span>
               </div>
               <pre className="mt-1 overflow-auto font-mono text-xs">{e.sql}</pre>

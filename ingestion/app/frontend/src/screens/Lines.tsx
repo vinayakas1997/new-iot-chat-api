@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { Brain, Layers, Pencil, Pause, Play, Plus, Save, Search } from "lucide-react";
 import { api, bankApi, cardApi, type BankOverviewEntry, type Connection, type Line, type TableRef } from "../lib/api";
 import { AlertBanner, StatusChip } from "../components/chips";
 import { PushToHindsight } from "../components/PushToHindsight";
 import { FormattedText } from "../components/FormattedText";
+import { Btn, EmptyState } from "../components/ui";
 
 type Draft = { id: string; name: string; connectionId: string; memberTables: string[] };
 
@@ -119,12 +121,15 @@ export function Lines() {
       {error && <div className="mt-4"><AlertBanner tone="bad" title="Request failed" detail={error} /></div>}
 
       <div className="mt-6 flex items-center gap-3">
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Search by line, or by table name…"
-          className="w-80 rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-ink-700"
-        />
+        <div className="relative">
+          <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search by line, or by table name…"
+            className="w-80 rounded-lg border border-slate-300 bg-transparent py-2 pl-9 pr-3 text-sm focus:border-accent-500 focus:outline-none dark:border-ink-700"
+          />
+        </div>
         <select
           value={connFilter}
           onChange={(e) => setConnFilter(e.target.value)}
@@ -133,9 +138,9 @@ export function Lines() {
           <option value="">all connections</option>
           {conns.map((c) => <option key={c.id} value={c.id}>{c.label}</option>)}
         </select>
-        <button onClick={() => openForm()} className="rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white">
+        <Btn variant="primary" icon={Plus} onClick={() => openForm()}>
           Register line
-        </button>
+        </Btn>
       </div>
 
       <table className="mt-4 w-full text-left text-sm">
@@ -167,27 +172,30 @@ export function Lines() {
                   {l.lastTick ? new Date(l.lastTick).toLocaleString() : "—"}
                 </td>
                 <td className="py-2.5" onClick={(e) => e.stopPropagation()}>
-                  <button onClick={() => openForm(l)} className="mr-3 text-accent-500">edit</button>
+                  <span className="mr-2 inline-flex"><Btn variant="ghost" icon={Pencil} onClick={() => openForm(l)}>edit</Btn></span>
                   {(() => {
                     const b = banks[l.id];
                     const green = greenByLine[l.id] ?? 0;
                     if (b?.ready) {
-                      return <button onClick={() => setPushLine(l)} title={`bank:line-${l.id} ready — reopen to review or re-push`} className="mr-3 text-state-ok">bank ✓</button>;
+                      return <span className="mr-2 inline-flex"><Btn variant="ghost" icon={Brain} onClick={() => setPushLine(l)} title={`bank:line-${l.id} ready — reopen to review or re-push`} className="!text-state-ok">bank ✓</Btn></span>;
                     }
                     return (
-                      <button
-                        onClick={() => setPushLine(l)}
-                        disabled={green === 0}
-                        title={green === 0 ? "Needs at least one tested-green card before pushing to Hindsight" : `Preview bank:line-${l.id} and push to Hindsight`}
-                        className="mr-3 text-accent-500 disabled:opacity-40"
-                      >
-                        → hindsight
-                      </button>
+                      <span className="mr-2 inline-flex">
+                        <Btn
+                          variant="ghost"
+                          icon={Brain}
+                          onClick={() => setPushLine(l)}
+                          disabled={green === 0}
+                          title={green === 0 ? "Needs at least one tested-green card before pushing to Hindsight" : `Preview bank:line-${l.id} and push to Hindsight`}
+                        >
+                          → hindsight
+                        </Btn>
+                      </span>
                     );
                   })()}
                   {l.active
-                    ? <button onClick={() => void onDeregister(l)} className="text-state-warn">deregister</button>
-                    : <button onClick={() => void api.reregisterLine(l.id).then(() => refresh())} className="text-state-ok">re-register</button>}
+                    ? <Btn variant="ghost" icon={Pause} onClick={() => void onDeregister(l)} className="!text-state-warn">deregister</Btn>
+                    : <Btn variant="ghost" icon={Play} onClick={() => void api.reregisterLine(l.id).then(() => refresh())} className="!text-state-ok">re-register</Btn>}
                 </td>
               </tr>
               {openId === l.id && (
@@ -207,11 +215,12 @@ export function Lines() {
         </tbody>
       </table>
       {filtered.length === 0 && (
-        <div className="mt-8 rounded-xl border border-dashed border-slate-300 p-10 text-center dark:border-ink-700">
-          <div className="font-semibold">No lines registered</div>
-          <p className="mt-1 text-sm text-slate-500">Register your first production line to let the pipeline ingest for it.</p>
-          <button onClick={() => openForm()} className="mt-4 rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white">Register your first line</button>
-        </div>
+        <EmptyState
+          icon={Layers}
+          title="No lines registered"
+          body="Register your first production line to let the pipeline ingest for it."
+          action={<Btn variant="primary" icon={Plus} onClick={() => openForm()}>Register your first line</Btn>}
+        />
       )}
 
       {pushLine && (
@@ -224,8 +233,8 @@ export function Lines() {
       )}
 
       {showForm && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black/60" onClick={() => setShowForm(false)}>
-          <div className="max-h-[90vh] w-[32rem] overflow-auto rounded-xl bg-white p-6 dark:bg-ink-900" onClick={(e) => e.stopPropagation()}>
+        <div className="anim-fade-in fixed inset-0 flex items-center justify-center bg-black/60" onClick={() => setShowForm(false)}>
+          <div className="anim-pop-in max-h-[90vh] w-[32rem] overflow-auto rounded-xl bg-white p-6 dark:bg-ink-900" onClick={(e) => e.stopPropagation()}>
             <h2 className="text-lg font-bold">{editing ? `Edit ${editing.id}` : "Register line"}</h2>
             <div className="mt-4 flex flex-col gap-3">
               {!editing && (
@@ -262,8 +271,8 @@ export function Lines() {
                 </div>
               </div>
               <div className="mt-1 flex justify-end gap-2">
-                <button onClick={() => setShowForm(false)} className="rounded-lg px-4 py-2 text-sm">cancel</button>
-                <button onClick={() => void onSave()} className="rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white">Save</button>
+                <button onClick={() => setShowForm(false)} className="rounded-lg px-4 py-2 text-sm text-slate-500 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800">cancel</button>
+                <Btn variant="primary" icon={Save} onClick={() => void onSave()}>Save</Btn>
               </div>
             </div>
           </div>

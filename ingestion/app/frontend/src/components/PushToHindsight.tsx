@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import { Rocket, Save, Sparkles, X } from "lucide-react";
 import { bankApi, cardApi, type BankPlan, type BankPreview, type Card } from "../lib/api";
 import { AlertBanner, StatusChip } from "./chips";
 import { FormattedText } from "./FormattedText";
+import { Btn } from "./ui";
 
 const inp = "mt-1 w-full rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-ink-700";
 
@@ -122,13 +124,13 @@ export function PushToHindsight({ lineId, lineName, onClose, onPushed }: {
   }
 
   return (
-    <div className="fixed inset-0 z-20 flex justify-end bg-black/60" onClick={onClose}>
-      <div className="max-h-screen w-full max-w-2xl overflow-auto bg-white p-6 dark:bg-ink-900" onClick={(e) => e.stopPropagation()}>
+    <div className="anim-fade-in fixed inset-0 z-20 flex justify-end bg-black/60" onClick={onClose}>
+      <div className="anim-slide-in-right max-h-screen w-full max-w-2xl overflow-auto bg-white p-6 dark:bg-ink-900" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-2">
           <h2 className="text-lg font-bold">Push to Hindsight</h2>
           {preview?.ready && <StatusChip tone="ok">bank ready</StatusChip>}
           {preview?.draftSaved && <StatusChip tone="mute">draft restored</StatusChip>}
-          <button onClick={onClose} className="ml-auto rounded-lg px-3 py-1 text-sm">✕ close</button>
+          <button onClick={onClose} aria-label="close" className="ml-auto rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800"><X size={16} /></button>
         </div>
         <p className="mt-1 text-sm text-slate-500">
           <FormattedText
@@ -178,9 +180,7 @@ export function PushToHindsight({ lineId, lineName, onClose, onPushed }: {
             <section>
               <div className="mb-1 flex items-center">
                 <span className="text-sm font-semibold">Missions (prompts)</span>
-                <button onClick={() => void onSuggest("missions")} disabled={suggesting === "missions"} className="ml-auto text-xs text-accent-500 disabled:opacity-50">
-                  {suggesting === "missions" ? "drafting…" : "↻ Re-suggest with AI"}
-                </button>
+                <Btn variant="ghost" size="sm" icon={Sparkles} onClick={() => void onSuggest("missions")} loading={suggesting === "missions"} disabled={suggesting === "missions"} className="ml-auto">↻ Re-suggest with AI</Btn>
               </div>
               {(["retain", "observations", "reflect"] as const).map((k) => (
                 <label key={k} className="mt-2 block text-sm capitalize">{k}
@@ -201,9 +201,7 @@ export function PushToHindsight({ lineId, lineName, onClose, onPushed }: {
             <section>
               <div className="mb-1 flex items-center">
                 <span className="text-sm font-semibold">LLM entities (controlled vocabulary)</span>
-                <button onClick={() => void onSuggest("entities")} disabled={suggesting === "entities"} className="ml-auto text-xs text-accent-500 disabled:opacity-50">
-                  {suggesting === "entities" ? "drafting…" : "↻ Re-suggest with AI"}
-                </button>
+                <Btn variant="ghost" size="sm" icon={Sparkles} onClick={() => void onSuggest("entities")} loading={suggesting === "entities"} disabled={suggesting === "entities"} className="ml-auto">↻ Re-suggest with AI</Btn>
               </div>
               {plan.entityLabels.map((g, gi) => (
                 <div key={gi} className="mt-2 rounded-lg border border-slate-200 p-2 dark:border-ink-700">
@@ -228,9 +226,7 @@ export function PushToHindsight({ lineId, lineName, onClose, onPushed }: {
             <section>
               <div className="mb-1 flex items-center">
                 <span className="text-sm font-semibold">Directives (hard rules)</span>
-                <button onClick={() => void onSuggest("directives")} disabled={suggesting === "directives"} className="ml-auto text-xs text-accent-500 disabled:opacity-50">
-                  {suggesting === "directives" ? "drafting…" : "↻ Re-suggest with AI"}
-                </button>
+                <Btn variant="ghost" size="sm" icon={Sparkles} onClick={() => void onSuggest("directives")} loading={suggesting === "directives"} disabled={suggesting === "directives"} className="ml-auto">↻ Re-suggest with AI</Btn>
               </div>
               {plan.directives.map((d, i) => (
                 <div key={i} className="mt-2 rounded-lg border border-slate-200 p-2 dark:border-ink-700">
@@ -247,9 +243,7 @@ export function PushToHindsight({ lineId, lineName, onClose, onPushed }: {
             <section>
               <div className="mb-1 flex items-center">
                 <span className="text-sm font-semibold">Mental-model seed</span>
-                <button onClick={() => void onSuggest("mental-model")} disabled={suggesting === "mental-model"} className="ml-auto text-xs text-accent-500 disabled:opacity-50">
-                  {suggesting === "mental-model" ? "drafting…" : "↻ Re-suggest with AI"}
-                </button>
+                <Btn variant="ghost" size="sm" icon={Sparkles} onClick={() => void onSuggest("mental-model")} loading={suggesting === "mental-model"} disabled={suggesting === "mental-model"} className="ml-auto">↻ Re-suggest with AI</Btn>
               </div>
               <label className="block text-sm">Name<input value={plan.mentalModel.name} onChange={(e) => setPlan({ ...plan, mentalModel: { ...plan.mentalModel, name: e.target.value } })} className={inp} /></label>
               <label className="mt-2 block text-sm">Source question<textarea rows={2} value={plan.mentalModel.source_query} onChange={(e) => setPlan({ ...plan, mentalModel: { ...plan.mentalModel, source_query: e.target.value } })} className={inp} />
@@ -272,12 +266,19 @@ export function PushToHindsight({ lineId, lineName, onClose, onPushed }: {
             </section>
 
             <div className="flex justify-end gap-2 pb-4">
-              <button onClick={onSaveDraft} disabled={saving} className="rounded-lg border border-slate-300 px-4 py-2 text-sm dark:border-ink-700 disabled:opacity-50">
+              <Btn icon={Save} onClick={onSaveDraft} loading={saving} disabled={saving}>
                 {saving ? "saving…" : "Save draft"}
-              </button>
-              <button onClick={() => void onPush()} disabled={pushing || !preview.hindsightConfigured} title={preview.hindsightConfigured ? "Create/configure the bank in Hindsight" : "Set the Hindsight URL in AI Services first"} className="rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40">
+              </Btn>
+              <Btn
+                variant="primary"
+                icon={Rocket}
+                onClick={() => void onPush()}
+                loading={pushing}
+                disabled={pushing || !preview.hindsightConfigured}
+                title={preview.hindsightConfigured ? "Create/configure the bank in Hindsight" : "Set the Hindsight URL in AI Services first"}
+              >
                 {pushing ? "pushing…" : preview.ready ? "Save & re-push" : "Save & push"}
-              </button>
+              </Btn>
             </div>
           </div>
         )}

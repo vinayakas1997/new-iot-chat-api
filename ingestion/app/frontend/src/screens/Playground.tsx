@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
+import { History as HistoryIcon, Play, Save } from "lucide-react";
 import { playgroundApi, type Line, type PlaygroundResult, type QueryHistoryEntry, type LineColumn } from "../lib/api";
 import { AlertBanner, StatusChip } from "../components/chips";
+import { Btn } from "../components/ui";
 
 export function Playground() {
   const [lines, setLines] = useState<Line[]>([]);
@@ -107,31 +109,34 @@ export function Playground() {
       </div>
 
       <div className="mt-3 flex gap-2">
-        <button
+        <Btn
+          variant="primary"
+          icon={Play}
           onClick={() => void onRun()}
+          loading={running}
           disabled={running || !lineId || !sql.trim()}
-          className="rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
         >
           {running ? "running…" : "Run query"}
-        </button>
+        </Btn>
         {result && (
-          <button
+          <Btn
+            icon={Save}
             onClick={() => {
               const line = lines.find((l) => l.id === lineId);
               setSaveDraft({ name: "", tables: line?.memberTables.join(", ") ?? "", granularity: "hourly", unit: "", extractHint: "" });
               setShowSave(true);
             }}
-            className="rounded-lg border border-slate-300 px-4 py-2 text-sm dark:border-ink-700"
           >
             Save as card
-          </button>
+          </Btn>
         )}
-        <button
+        <Btn
+          icon={HistoryIcon}
           onClick={() => setShowHistory(!showHistory)}
-          className="ml-auto rounded-lg border border-slate-300 px-4 py-2 text-sm dark:border-ink-700"
+          className="ml-auto"
         >
           History ({history.length})
-        </button>
+        </Btn>
       </div>
 
       {result && (
@@ -207,8 +212,10 @@ export function Playground() {
             <textarea rows={2} value={saveDraft.extractHint} onChange={(e) => setSaveDraft({ ...saveDraft, extractHint: e.target.value })} className={inp} />
           </Field>
           <div className="mt-3 flex justify-end gap-2">
-            <button onClick={() => setShowSave(false)} className="rounded-lg px-4 py-2 text-sm">cancel</button>
-            <button
+            <button onClick={() => setShowSave(false)} className="rounded-lg px-4 py-2 text-sm text-slate-500 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800">cancel</button>
+            <Btn
+              variant="primary"
+              icon={Save}
               onClick={() => void (async () => {
                 if (!saveDraft.name.trim()) return;
                 const { cardApi } = await import("../lib/api");
@@ -223,10 +230,9 @@ export function Playground() {
                 setResult(null);
               })()}
               disabled={!saveDraft.name.trim()}
-              className="rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
             >
               Save dormant card
-            </button>
+            </Btn>
           </div>
         </Modal>
       )}
@@ -242,8 +248,8 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 
 function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   return (
-    <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/60" onClick={onClose}>
-      <div className="max-h-[90vh] w-[36rem] overflow-auto rounded-xl bg-white p-6 dark:bg-ink-900" onClick={(e) => e.stopPropagation()}>
+    <div className="anim-fade-in fixed inset-0 z-10 flex items-center justify-center bg-black/60" onClick={onClose}>
+      <div className="anim-pop-in max-h-[90vh] w-[36rem] overflow-auto rounded-xl bg-white p-6 dark:bg-ink-900" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-lg font-bold">{title}</h2>
         <div className="mt-4 flex flex-col gap-3">{children}</div>
       </div>

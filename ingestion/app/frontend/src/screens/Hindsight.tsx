@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import { ExternalLink, Plug, Power, RefreshCw, Rocket, Save, Trash2 } from "lucide-react";
 import { AlertBanner, StatusChip } from "../components/chips";
 import { bankApi, type BankOverviewEntry } from "../lib/api";
 import { FormattedText } from "../components/FormattedText";
+import { Btn } from "../components/ui";
 
 interface HsStatus {
   configured: boolean;
@@ -95,8 +97,8 @@ export function Hindsight() {
           </div>
           {st.lastError && <div className="mt-4"><AlertBanner tone="bad" title="Last error" detail={st.lastError} /></div>}
           {st.live && st.url && (
-            <a href={st.url} target="_blank" rel="noreferrer" className="mt-6 inline-block rounded-lg bg-accent-500 px-6 py-3 font-semibold text-white">
-              Open Hindsight's own UI →
+            <a href={st.url} target="_blank" rel="noreferrer" className="mt-6 inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-6 py-3 font-semibold text-white transition-all duration-150 hover:bg-accent-400 active:scale-[0.98] focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60">
+              Open Hindsight's own UI <ExternalLink size={14} />
             </a>
           )}
         </div>
@@ -106,8 +108,8 @@ export function Hindsight() {
         <div className="text-sm font-semibold">Hindsight UI URL (setting, per environment)</div>
         <div className="mt-2 flex gap-2">
           <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://hindsight.example.com" className="flex-1 rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-ink-700" />
-          <button onClick={() => void save()} className="rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white">Save</button>
-          <button onClick={() => void refresh()} className="rounded-lg border border-slate-300 px-4 py-2 text-sm dark:border-ink-700">Recheck</button>
+          <Btn variant="primary" icon={Save} onClick={() => void save()}>Save</Btn>
+          <Btn icon={RefreshCw} onClick={() => void refresh()}>Recheck</Btn>
         </div>
       </div>
 
@@ -130,7 +132,9 @@ export function Hindsight() {
           <StatusChip tone="ok">● LIVE · {p.activeModel}</StatusChip>
           <div className="mt-2 text-sm text-slate-500">{p.label} · {p.baseUrl}</div>
           {p.lastError && <div className="mt-3"><AlertBanner tone="bad" title="Last error" detail={p.lastError} /></div>}
-          <button
+          <Btn
+            variant="warn"
+            icon={Power}
             onClick={() => void (async () => {
               setError(null);
               try {
@@ -138,10 +142,10 @@ export function Hindsight() {
                 await refresh();
               } catch (e) { setError((e as Error).message); }
             })()}
-            className="mt-4 rounded-lg border border-state-warn/50 px-4 py-2 text-sm text-state-warn"
+            className="mt-4"
           >
             Deactivate
-          </button>
+          </Btn>
         </div>
       ))}
       {providers.filter((p) => !p.isActive).map((p) => (
@@ -149,16 +153,18 @@ export function Hindsight() {
           <span className="font-medium">{p.label}</span>
           <span className="text-slate-400">{p.baseUrl}</span>
           {p.lastError && <span className="text-state-bad">{p.lastError}</span>}
-          <button
+          <Btn
+            variant="ghostBad"
+            icon={Trash2}
             onClick={() => void (async () => {
               if (!confirm(`Delete provider "${p.label}"?`)) return;
               await fetch(`/api/ingest/llm/${p.id}`, { method: "DELETE" });
               await refresh();
             })()}
-            className="ml-auto text-state-bad"
+            className="ml-auto"
           >
             delete
-          </button>
+          </Btn>
         </div>
       ))}
 
@@ -168,7 +174,8 @@ export function Hindsight() {
           <input value={llmLabel} onChange={(e) => setLlmLabel(e.target.value)} placeholder="label" className="w-36 rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-ink-700" />
           <input value={llmBase} onChange={(e) => setLlmBase(e.target.value)} placeholder="http://host:port" className="flex-1 rounded-lg border border-slate-300 bg-transparent px-3 py-2 font-mono text-sm dark:border-ink-700" />
           <input value={llmKey} onChange={(e) => setLlmKey(e.target.value)} type="password" placeholder="API key (optional)" className="w-44 rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-ink-700" />
-          <button
+          <Btn
+            icon={Plug}
             onClick={() => void (async () => {
               setError(null); setDetected(null); setDetecting(true);
               try {
@@ -184,11 +191,11 @@ export function Hindsight() {
               } catch (e) { setError((e as Error).message); }
               finally { setDetecting(false); }
             })()}
+            loading={detecting}
             disabled={detecting}
-            className="rounded-lg border border-slate-300 px-4 py-2 text-sm dark:border-ink-700"
           >
             {detecting ? "…" : "Connect"}
-          </button>
+          </Btn>
         </div>
         {detected?.ok && (
           <div className="mt-3 rounded-lg bg-slate-100 p-3 text-sm dark:bg-ink-900">
@@ -198,7 +205,9 @@ export function Hindsight() {
                 <option value="">pick the active model…</option>
                 {detected.models.map((m) => <option key={m} value={m}>{m}</option>)}
               </select>
-              <button
+              <Btn
+                variant="primary"
+                icon={Rocket}
                 onClick={() => void (async () => {
                   setError(null);
                   try {
@@ -214,10 +223,9 @@ export function Hindsight() {
                   } catch (e) { setError((e as Error).message); }
                 })()}
                 disabled={!picked}
-                className="rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
               >
                 Save + activate
-              </button>
+              </Btn>
             </div>
           </div>
         )}

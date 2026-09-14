@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
+import { Activity, Database, FlaskConical, Pencil, Plus, Save, Search, Trash2 } from "lucide-react";
 import { api, type Connection, type TableDetail, type TableRef } from "../lib/api";
 import { AlertBanner, StatusChip } from "../components/chips";
+import { Btn, EmptyState } from "../components/ui";
 
 type Draft = {
   label: string;
@@ -166,18 +168,18 @@ export function Connections() {
       )}
 
       <div className="mt-6 flex items-center gap-3">
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Search by name, host, database…"
-          className="w-80 rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-ink-700"
-        />
-        <button
-          onClick={() => openForm()}
-          className="rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white"
-        >
+        <div className="relative">
+          <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search by name, host, database…"
+            className="w-80 rounded-lg border border-slate-300 bg-transparent py-2 pl-9 pr-3 text-sm focus:border-accent-500 focus:outline-none dark:border-ink-700"
+          />
+        </div>
+        <Btn variant="primary" icon={Plus} onClick={() => openForm()}>
           Add connection
-        </button>
+        </Btn>
       </div>
 
       <table className="mt-4 w-full text-left text-sm">
@@ -212,15 +214,20 @@ export function Connections() {
                     {c.lastCheck ? new Date(c.lastCheck.at).toLocaleTimeString() : "—"}
                   </td>
                   <td className="py-2.5" onClick={(e) => e.stopPropagation()}>
-                    <button
-                      onClick={() => void onCheck(c)}
-                      disabled={checkingId === c.id}
-                      className="mr-3 text-accent-500 disabled:opacity-50"
-                    >
-                      {checkingId === c.id ? "checking…" : "check"}
-                    </button>
-                    <button onClick={() => openForm(c)} className="mr-3 text-accent-500">edit</button>
-                    <button onClick={() => void onDelete(c)} className="text-state-bad">delete</button>
+                    <span className="mr-2 inline-flex">
+                      <Btn
+                        variant="ghost"
+                        icon={Activity}
+                        onClick={() => void onCheck(c)}
+                        disabled={checkingId === c.id}
+                        loading={checkingId === c.id}
+                        title="Probe now and update status immediately (no wait for poller)"
+                      >
+                        {checkingId === c.id ? "checking…" : "check"}
+                      </Btn>
+                    </span>
+                    <span className="mr-2 inline-flex"><Btn variant="ghost" icon={Pencil} onClick={() => openForm(c)}>edit</Btn></span>
+                    <Btn variant="ghostBad" icon={Trash2} onClick={() => void onDelete(c)}>delete</Btn>
                   </td>
                 </tr>
                 {open && (
@@ -289,16 +296,17 @@ export function Connections() {
         </tbody>
       </table>
       {filtered.length === 0 && (
-        <div className="mt-8 rounded-xl border border-dashed border-slate-300 p-10 text-center dark:border-ink-700">
-          <div className="font-semibold">No connections yet</div>
-          <p className="mt-1 text-sm text-slate-500">Add your first plant database to let the pipeline read from it.</p>
-          <button onClick={() => openForm()} className="mt-4 rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white">Add your first connection</button>
-        </div>
+        <EmptyState
+          icon={Database}
+          title="No connections yet"
+          body="Add your first plant database to let the pipeline read from it."
+          action={<Btn variant="primary" icon={Plus} onClick={() => openForm()}>Add your first connection</Btn>}
+        />
       )}
 
       {showForm && (
-        <div className="fixed inset-0 flex items-center justify-center bg-black/60" onClick={() => setShowForm(false)}>
-          <div className="w-[28rem] rounded-xl bg-white p-6 dark:bg-ink-900" onClick={(e) => e.stopPropagation()}>
+        <div className="anim-fade-in fixed inset-0 flex items-center justify-center bg-black/60" onClick={() => setShowForm(false)}>
+          <div className="anim-pop-in w-[28rem] rounded-xl bg-white p-6 dark:bg-ink-900" onClick={(e) => e.stopPropagation()}>
             <h2 className="text-lg font-bold">{editing ? "Edit connection" : "Add connection"}</h2>
             <div className="mt-4 flex flex-col gap-3">
               <label className="text-sm">Label<input value={draft.label} onChange={(e) => setDraft({ ...draft, label: e.target.value })} className="mt-1 w-full rounded-lg border border-slate-300 bg-transparent px-3 py-2 dark:border-ink-700" /></label>
@@ -319,12 +327,12 @@ export function Connections() {
               </div>
               {testMsg && <div className={`text-sm ${testMsg.startsWith("OK") ? "text-state-ok" : "text-state-bad"}`}>{testMsg}</div>}
               <div className="mt-1 flex justify-between">
-                <button onClick={() => void onTest()} disabled={testing} className="rounded-lg border border-slate-300 px-4 py-2 text-sm dark:border-ink-700">
+                <Btn icon={FlaskConical} onClick={() => void onTest()} loading={testing} disabled={testing}>
                   {testing ? "testing…" : "Test (no save)"}
-                </button>
+                </Btn>
                 <div className="flex gap-2">
-                  <button onClick={() => setShowForm(false)} className="rounded-lg px-4 py-2 text-sm">cancel</button>
-                  <button onClick={() => void onSave()} className="rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white">Save</button>
+                  <button onClick={() => setShowForm(false)} className="rounded-lg px-4 py-2 text-sm text-slate-500 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800">cancel</button>
+                  <Btn variant="primary" icon={Save} onClick={() => void onSave()}>Save</Btn>
                 </div>
               </div>
             </div>

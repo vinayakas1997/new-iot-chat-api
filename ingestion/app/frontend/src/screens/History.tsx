@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { ChevronLeft, ChevronRight, Search, Sparkles } from "lucide-react";
 import { api, historyApi, type DayView, type Line, type RunInterpretation } from "../lib/api";
 import { AlertBanner, StatusChip } from "../components/chips";
+import { Btn } from "../components/ui";
 
 function today(): string {
   return new Date().toISOString().slice(0, 10);
@@ -83,12 +85,15 @@ export function History() {
       {error && <div className="mt-4"><AlertBanner tone="bad" title="Request failed" detail={error} /></div>}
 
       <div className="mt-6 flex items-center gap-3">
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Search line by name…"
-          className="w-80 rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-ink-700"
-        />
+        <div className="relative">
+          <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search line by name…"
+            className="w-80 rounded-lg border border-slate-300 bg-transparent py-2 pl-9 pr-3 text-sm focus:border-accent-500 focus:outline-none dark:border-ink-700"
+          />
+        </div>
       </div>
       {q && (
         <div className="mt-2 flex max-w-xl flex-col gap-1">
@@ -123,9 +128,9 @@ export function History() {
         <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-[20rem_1fr]">
           <div>
             <div className="mb-2 flex items-center gap-2">
-              <button onClick={() => void changeMonth(shiftMonth(month, -1))} className="rounded border border-slate-300 px-2 text-sm dark:border-ink-700">‹</button>
+              <button onClick={() => void changeMonth(shiftMonth(month, -1))} aria-label="previous month" className="rounded border border-slate-300 p-1 text-sm transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:border-ink-700 dark:hover:bg-ink-800"><ChevronLeft size={14} /></button>
               <span className="tnum text-sm font-semibold">{month}</span>
-              <button onClick={() => void changeMonth(shiftMonth(month, 1))} className="rounded border border-slate-300 px-2 text-sm dark:border-ink-700">›</button>
+              <button onClick={() => void changeMonth(shiftMonth(month, 1))} aria-label="next month" className="rounded border border-slate-300 p-1 text-sm transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:border-ink-700 dark:hover:bg-ink-800"><ChevronRight size={14} /></button>
             </div>
             <div className="grid grid-cols-7 gap-1 text-center text-xs">
               {["M", "T", "W", "T", "F", "S", "S"].map((d, i) => <div key={i} className="text-slate-400">{d}</div>)}
@@ -166,7 +171,7 @@ export function History() {
                       <StatusChip tone={r.kind === "test" ? "accent" : "mute"}>{r.kind}</StatusChip>
                       <StatusChip tone={r.ok ? "ok" : "bad"}>{r.ok ? "ok" : "failed"}</StatusChip>
                       <span className="tnum text-xs text-slate-400">{r.rowsPulled} rows{r.durationMs != null ? ` · ${r.durationMs}ms` : ""}</span>
-                      <button onClick={() => void historyApi.run(r.id).then(setInterp).catch((e) => setError((e as Error).message))} className="ml-auto text-accent-500">how AI interpreted →</button>
+                      <Btn variant="ghost" size="sm" icon={Sparkles} onClick={() => void historyApi.run(r.id).then(setInterp).catch((e) => setError((e as Error).message))} className="ml-auto">how AI interpreted</Btn>
                     </div>
                   ))}
                   {day.runs.length === 0 && <div className="text-sm text-slate-400">nothing ran this day</div>}
@@ -196,7 +201,7 @@ export function History() {
             <div className="mt-4 text-xs uppercase tracking-wider text-slate-400">facts out</div>
             <div className="tnum mt-1 text-2xl font-bold">{interp.factsOut.stored} <span className="text-sm font-normal text-slate-400">facts</span></div>
             <p className="mt-1 text-sm text-slate-500">{interp.factsOut.note}</p>
-            <div className="mt-4 flex justify-end"><button onClick={() => setInterp(null)} className="rounded-lg px-4 py-2 text-sm">close</button></div>
+            <div className="mt-4 flex justify-end"><button onClick={() => setInterp(null)} className="rounded-lg px-4 py-2 text-sm text-slate-500 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800">close</button></div>
           </div>
         </div>
       )}

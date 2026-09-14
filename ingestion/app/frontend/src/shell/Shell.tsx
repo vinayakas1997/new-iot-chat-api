@@ -30,7 +30,7 @@ export function Shell() {
               key={item.to}
               to={item.to}
               className={({ isActive }) =>
-                `flex items-center gap-3 rounded-lg px-3 py-2 text-sm ${
+                `flex items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 ${
                   isActive
                     ? "bg-accent-500/15 font-semibold text-accent-500"
                     : "text-slate-600 hover:bg-slate-100 dark:text-ink-300 dark:hover:bg-ink-800"
@@ -49,7 +49,7 @@ export function Shell() {
           <div className="text-xs uppercase tracking-widest text-slate-400 dark:text-ink-600">ingestion plane</div>
           <button
             onClick={toggleTheme}
-            className="rounded-lg border border-slate-200 px-3 py-1 text-xs dark:border-ink-700"
+            className="rounded-lg border border-slate-200 px-3 py-1 text-xs transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:border-ink-700 dark:hover:bg-ink-800"
           >
             {dark ? "light" : "dark"}
           </button>
