@@ -675,6 +675,18 @@ export function Cards() {
               }}
             />
             <textarea rows={5} value={tplDraft.sqlTemplate} onChange={(e) => setTplDraft({ ...tplDraft, sqlTemplate: e.target.value })} className={`${inp} font-mono`} />
+            {tplDraft.sqlTemplate.trim() && (
+              <div className="mt-1 rounded bg-slate-50 p-2 dark:bg-ink-900/50">
+                <div className="overflow-auto whitespace-pre-wrap font-mono text-xs leading-relaxed">
+                  {tokenizeSqlTables(tplDraft.sqlTemplate).map((tok, i) => (
+                    tok.kind === "text"
+                      ? <span key={i}>{tok.text}</span>
+                      : <code key={i} className="rounded bg-accent-500/10 px-1 text-accent-500 ring-1 ring-accent-500/30">{tok.ref}</code>
+                  ))}
+                </div>
+                <div className="mt-1 text-[11px] text-slate-400">highlighted words are table names — swap them per line at Instantiate → line.</div>
+              </div>
+            )}
           </Field>
           <div className="flex gap-3">
             <Field label="Granularity">
