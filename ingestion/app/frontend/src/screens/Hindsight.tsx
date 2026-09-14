@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { AlertBanner, StatusChip } from "../components/chips";
 import { bankApi, type BankOverviewEntry } from "../lib/api";
+import { FormattedText } from "../components/FormattedText";
 
 interface HsStatus {
   configured: boolean;
@@ -114,8 +115,8 @@ export function Hindsight() {
       {banks.length === 0 && <div className="mt-2 text-sm text-slate-400">no lines yet — register one in F2, then push it from the Lines tab.</div>}
       {banks.map((b) => (
         <div key={b.lineId} className="mt-2 flex max-w-2xl items-center gap-3 rounded-xl border border-slate-200 px-4 py-2 text-sm dark:border-ink-800">
-          <span className="font-mono">{b.bankId}</span>
-          <span className="text-slate-400">{b.lineName}</span>
+          <FormattedText text={b.bankId} bankId={b.bankId} />
+          <FormattedText text={b.lineName} lineName={b.lineName} />
           <span className="ml-auto flex items-center gap-2">
             <StatusChip tone={b.ready ? "ok" : b.draftSaved ? "mute" : "mute"}>{b.ready ? "ready" : b.draftSaved ? "draft" : "pending"}</StatusChip>
             <span className="tnum text-xs text-slate-400">{b.greenCards}/{b.cards} green</span>

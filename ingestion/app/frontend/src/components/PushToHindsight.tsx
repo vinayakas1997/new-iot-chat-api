@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { bankApi, cardApi, type BankPlan, type BankPreview, type Card } from "../lib/api";
 import { AlertBanner, StatusChip } from "./chips";
+import { FormattedText } from "./FormattedText";
 
 const inp = "mt-1 w-full rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-ink-700";
 
@@ -130,8 +131,11 @@ export function PushToHindsight({ lineId, lineName, onClose, onPushed }: {
           <button onClick={onClose} className="ml-auto rounded-lg px-3 py-1 text-sm">✕ close</button>
         </div>
         <p className="mt-1 text-sm text-slate-500">
-          Line <span className="font-mono">{lineId}</span> ({lineName}) → bank <span className="font-mono">bank:line-{lineId}</span>.
-          Review everything below — nothing is applied until <b>Save &amp; push</b>.
+          <FormattedText
+            text={`Line ${lineName} (${lineId}) → bank bank:line-${lineId}. Review everything below — nothing is applied until Save & push.`}
+            lineName={lineName}
+            bankId={preview?.bankId ?? `bank:line-${lineId}`}
+          />
         </p>
 
         {error && <div className="mt-4"><AlertBanner tone="bad" title="Request failed" detail={error} /></div>}
@@ -152,7 +156,7 @@ export function PushToHindsight({ lineId, lineName, onClose, onPushed }: {
             )}
 
             <div className="text-xs uppercase tracking-widest text-slate-400">
-              source columns · {preview.tables.map((t) => t.table).join(", ") || "—"}
+              source columns · <FormattedText text={preview.tables.map((t) => t.table).join(", ") || "—"} highlightTables />
             </div>
 
             <div className="rounded-lg bg-slate-100 p-2 text-xs dark:bg-ink-800">
@@ -181,6 +185,9 @@ export function PushToHindsight({ lineId, lineName, onClose, onPushed }: {
               {(["retain", "observations", "reflect"] as const).map((k) => (
                 <label key={k} className="mt-2 block text-sm capitalize">{k}
                   <textarea rows={2} value={plan.missions[k]} onChange={(e) => setPlan({ ...plan, missions: { ...plan.missions, [k]: e.target.value } })} className={inp} />
+                  <div className="mt-1 rounded bg-slate-50 px-2 py-1 text-sm dark:bg-ink-800/60">
+                    <FormattedText text={plan.missions[k]} lineName={lineName} bankId={preview.bankId} />
+                  </div>
                 </label>
               ))}
               <label className="mt-2 block text-sm">Extraction mode
@@ -245,7 +252,11 @@ export function PushToHindsight({ lineId, lineName, onClose, onPushed }: {
                 </button>
               </div>
               <label className="block text-sm">Name<input value={plan.mentalModel.name} onChange={(e) => setPlan({ ...plan, mentalModel: { ...plan.mentalModel, name: e.target.value } })} className={inp} /></label>
-              <label className="mt-2 block text-sm">Source question<textarea rows={2} value={plan.mentalModel.source_query} onChange={(e) => setPlan({ ...plan, mentalModel: { ...plan.mentalModel, source_query: e.target.value } })} className={inp} /></label>
+              <label className="mt-2 block text-sm">Source question<textarea rows={2} value={plan.mentalModel.source_query} onChange={(e) => setPlan({ ...plan, mentalModel: { ...plan.mentalModel, source_query: e.target.value } })} className={inp} />
+                <div className="mt-1 rounded bg-slate-50 px-2 py-1 text-sm dark:bg-ink-800/60">
+                  <FormattedText text={plan.mentalModel.source_query} lineName={lineName} bankId={preview.bankId} />
+                </div>
+              </label>
             </section>
 
             <section className="flex flex-wrap gap-4 text-sm">

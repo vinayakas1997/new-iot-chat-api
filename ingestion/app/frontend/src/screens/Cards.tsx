@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { cardApi, api, bankApi, graphApi, playgroundApi, type BankOverviewEntry, type Card, type CardTemplate, type Line, type ReapplyResult, type TestResult, type GraphSpec, type ChartType, type PlaygroundResult, type QueryHistoryEntry, type LineColumn } from "../lib/api";
 import { AlertBanner, StatusChip } from "../components/chips";
+import { FormattedText } from "../components/FormattedText";
 import { PushToHindsight } from "../components/PushToHindsight";
 import { SqlHint } from "../components/SqlHint";
 
@@ -146,7 +147,7 @@ export function Cards() {
 
       {liveNudge && (
         <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-state-ok/50 px-4 py-3 text-sm">
-          <span><b>{liveNudge.cardName}</b> is live ✓ — line bank <span className="font-mono">bank:line-{liveNudge.lineId}</span> is not configured yet. Ticks will retain with Hindsight defaults until you push.</span>
+          <span><b>{liveNudge.cardName}</b> is live ✓ — <FormattedText text={`line bank bank:line-${liveNudge.lineId} is not configured yet.`} bankId={`bank:line-${liveNudge.lineId}`} /> Ticks will retain with Hindsight defaults until you push.</span>
           <button onClick={() => openBankDrawer(liveNudge.lineId)} className="rounded-lg bg-accent-500 px-3 py-1 font-semibold text-white">Review &amp; push →</button>
           <button onClick={() => setLiveNudge(null)} className="text-slate-400">dismiss</button>
         </div>
@@ -187,7 +188,7 @@ export function Cards() {
                 <span className="ml-auto"><StatusChip tone={c.status === "live" ? "ok" : "mute"}>{c.status.toUpperCase()}</StatusChip></span>
               </div>
               <div className="mt-1 text-xs text-slate-400">
-                {c.granularity}{c.unit ? ` · ${c.unit}` : ""}{c.threshold != null ? ` · warn > ${c.threshold}` : ""} · tables: {c.tables.join(", ") || "—"}
+                {c.granularity}{c.unit ? ` · ${c.unit}` : ""}{c.threshold != null ? ` · warn > ${c.threshold}` : ""} · tables: <FormattedText text={c.tables.join(", ") || "—"} highlightTables />
                 <span className="tnum ml-2">≈{tickCost(c)} queries/day</span>
               </div>
               <pre className="mt-2 max-h-28 overflow-auto rounded bg-slate-100 p-2 font-mono text-xs dark:bg-ink-900">{c.sql || "(no SQL yet)"}</pre>

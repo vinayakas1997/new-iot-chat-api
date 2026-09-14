@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { api, bankApi, cardApi, type BankOverviewEntry, type Connection, type Line, type TableRef } from "../lib/api";
 import { AlertBanner, StatusChip } from "../components/chips";
 import { PushToHindsight } from "../components/PushToHindsight";
+import { FormattedText } from "../components/FormattedText";
 
 type Draft = { id: string; name: string; connectionId: string; memberTables: string[] };
 
@@ -156,7 +157,7 @@ export function Lines() {
                 onClick={() => setOpenId(openId === l.id ? null : l.id)}
                 className="cursor-pointer border-b border-slate-100 hover:bg-slate-50 dark:border-ink-800 dark:hover:bg-ink-900"
               >
-                <td className="py-2.5 pr-4"><span className="font-mono font-medium">{l.id}</span> <span className="text-slate-500">{l.name}</span></td>
+                <td className="py-2.5 pr-4"><span className="font-mono font-medium">{l.id}</span> <FormattedText text={l.name} lineName={l.name} /></td>
                 <td className="py-2.5 pr-4 text-slate-500 dark:text-ink-400">{l.connectionLabel}</td>
                 <td className="tnum py-2.5 pr-4 text-slate-500 dark:text-ink-400">{l.memberTables.length}</td>
                 <td className="py-2.5 pr-4">
@@ -194,7 +195,7 @@ export function Lines() {
                   <td colSpan={6} className="border-b border-slate-200 bg-slate-50/60 px-4 py-4 dark:border-ink-800 dark:bg-ink-900/50">
                     <div className="text-xs uppercase tracking-wider text-slate-400">member tables · <span className="tnum">{l.memberTables.length}</span></div>
                     <div className="mt-2 flex flex-wrap gap-2">
-                      {l.memberTables.map((t) => <StatusChip key={t} tone="accent">{t}</StatusChip>)}
+                      {l.memberTables.map((t) => <StatusChip key={t} tone="accent"><FormattedText text={t} highlightTables /></StatusChip>)}
                       {l.memberTables.length === 0 && <span className="text-sm text-slate-400">none — this line ingests nothing until tables are assigned</span>}
                     </div>
                     <Link to={`/setter/history?line=${l.id}`} className="mt-3 inline-block text-sm text-accent-500">view history →</Link>
