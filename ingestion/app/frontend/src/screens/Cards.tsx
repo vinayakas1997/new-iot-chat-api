@@ -383,12 +383,12 @@ export function Cards() {
               </div>
               <pre className="mt-2 max-h-28 overflow-auto rounded bg-slate-100 p-2 font-mono text-xs dark:bg-ink-900">{t.sqlTemplate || "(no SQL template)"}</pre>
               <div className="mt-3 flex flex-wrap gap-2 text-sm">
-                <button onClick={() => { setInstTpl(t); setInstLine(lines[0]?.id ?? ""); }} className="rounded-lg bg-accent-500 px-3 py-1 font-medium text-white">instantiate → line</button>
-                <button onClick={() => { setTplDraft({ name: t.name, description: t.description, sqlTemplate: t.sqlTemplate, granularity: t.granularity, unit: t.unit, extractHint: t.extractHint }); setShowTplForm(true); }} className="rounded-lg border border-slate-300 px-3 py-1 dark:border-ink-700">duplicate</button>
+                <button onClick={() => { setInstTpl(t); setInstLine(lines[0]?.id ?? ""); }} title="Stamp an independent copy of this template onto a line. The copy starts dormant and can differ freely afterwards." className="rounded-lg bg-accent-500 px-3 py-1 font-medium text-white">instantiate → line</button>
+                <button onClick={() => { setTplDraft({ name: t.name, description: t.description, sqlTemplate: t.sqlTemplate, granularity: t.granularity, unit: t.unit, extractHint: t.extractHint }); setShowTplForm(true); }} title="Copy this template as a starting point for a new, separate template." className="rounded-lg border border-slate-300 px-3 py-1 dark:border-ink-700">duplicate</button>
                 <button onClick={() => void (async () => {
                   setError(null); setReapplyOut(null);
                   try { setReapplyOut(await cardApi.reapply(t.id, { activate: false })); } catch (e) { setError((e as Error).message); }
-                })()} className="rounded-lg border border-slate-300 px-3 py-1 dark:border-ink-700">dry-run re-apply</button>
+                })()} title="Try this template on every copy. Changes nothing — safe to press anytime." className="rounded-lg border border-slate-300 px-3 py-1 dark:border-ink-700">Check all copies</button>
                 <button onClick={() => { if (confirm(`Delete template "${t.name}"? Copies keep working.`)) void act(() => cardApi.deleteTemplate(t.id)); }} className="rounded-lg border border-state-bad/50 px-3 py-1 text-state-bad">delete</button>
               </div>
             </div>
@@ -434,17 +434,21 @@ export function Cards() {
       )}
       {reapplyOut && (
         <div className="mt-4 rounded-xl border border-slate-200 p-4 dark:border-ink-800">
-          <div className="font-semibold">Re-apply dry-run <span className="tnum font-mono text-xs text-slate-400">{reapplyOut.sqlHash}</span></div>
+          <div className="font-semibold">Check results <span className="tnum font-mono text-xs text-slate-400">{reapplyOut.sqlHash}</span></div>
+          <p className="mt-1 text-sm text-slate-500">✓ works = safe to update together · ✗ fails = fix that line first · locked-live = live copies, never touched.</p>
           {reapplyOut.results.map((r) => (
             <div key={r.cardId} className="mt-1 flex items-center gap-2 text-sm">
               <span className="font-mono">{r.lineId}</span>
-              <StatusChip tone={r.status === "green" ? "ok" : r.status === "red" ? "bad" : "mute"}>{r.status}</StatusChip>
+              <StatusChip tone={r.status === "green" ? "ok" : r.status === "red" ? "bad" : "mute"}>
+                {r.status === "green" ? "✓ works" : r.status === "red" ? "✗ fails" : "locked-live"}
+              </StatusChip>
               {r.rowCount != null && <span className="tnum text-slate-400">{r.rowCount} rows</span>}
               {r.error && <span className="text-state-bad">{r.error}</span>}
             </div>
           ))}
           <button
             onClick={() => void (async () => {
+              if (!confirm("Update all passing copies to this SQL and take them live? Failing and live copies stay untouched.")) return;
               setError(null);
               try {
                 const tpl = templates.find((t) => t.id === reapplyOut.templateId)!;
@@ -453,9 +457,10 @@ export function Cards() {
                 await refresh();
               } catch (e) { setError((e as Error).message); }
             })()}
+            title="Update only the ✓ copies and take them live. Failing and live copies stay untouched."
             className="mt-3 rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white"
           >
-            Apply greens live
+            Apply to passing copies
           </button>
         </div>
       )}
