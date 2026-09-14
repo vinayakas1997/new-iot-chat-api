@@ -739,7 +739,7 @@ export function Cards() {
                         }`}
                       >
                         {!members.includes(val) && val && <option value={val}>{val}</option>}
-                        {members.map((t) => <option key={t} value={t}>{t}</option>}
+                        {members.map((t) => <option key={t} value={t}>{t}</option>)}
                       </select>
                       {guessed && <span className="font-sans text-[10px] text-state-warn" title={`Template says ${r} — guessed, please confirm`}>was:{r}?</span>}
                       {!matched && !guessed && <span className="font-sans text-[10px] text-slate-400">was:{r}</span>}
