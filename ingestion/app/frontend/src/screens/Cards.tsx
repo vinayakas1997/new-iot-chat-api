@@ -26,7 +26,8 @@ export function Cards() {
   const [error, setError] = useState<string | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testOut, setTestOut] = useState<Record<string, TestResult>>({});
-  const [reapplyOut, setReapplyOut] = useState<ReapplyResult | null>(null);
+  const [reapplyByTpl, setReapplyByTpl] = useState<Record<string, ReapplyResult>>({});
+  const [appliedByTpl, setAppliedByTpl] = useState<Record<string, boolean>>({});
   const [showTplForm, setShowTplForm] = useState(false);
   const [tplDraft, setTplDraft] = useState({ name: "", description: "", sqlTemplate: "", granularity: "hourly", unit: "", extractHint: "" });
   const [instTpl, setInstTpl] = useState<CardTemplate | null>(null);
@@ -402,8 +403,12 @@ export function Cards() {
                 <Btn
                   icon={ClipboardCheck}
                   onClick={() => void (async () => {
-                    setError(null); setReapplyOut(null);
-                    try { setReapplyOut(await cardApi.reapply(t.id, { activate: false })); } catch (e) { setError((e as Error).message); }
+                    setError(null);
+                    setAppliedByTpl((m) => ({ ...m, [t.id]: false }));
+                    try {
+                      const r = await cardApi.reapply(t.id, { activate: false });
+                      setReapplyByTpl((m) => ({ ...m, [t.id]: r }));
+                    } catch (e) { setError((e as Error).message); }
                   })()}
                   title="Try this template on every copy. Changes nothing — safe to press anytime."
                 >
@@ -411,6 +416,71 @@ export function Cards() {
                 </Btn>
                 <Btn variant="bad" icon={Trash2} onClick={() => { if (confirm(`Delete template "${t.name}"? Copies keep working.`)) void act(() => cardApi.deleteTemplate(t.id)); }}>delete</Btn>
               </div>
+              {reapplyByTpl[t.id] && (() => {
+                const out = reapplyByTpl[t.id];
+                const applied = appliedByTpl[t.id];
+                const nGreen = out.results.filter((r) => r.status === "green").length;
+                const nRed = out.results.filter((r) => r.status === "red").length;
+                const nLocked = out.results.filter((r) => r.status === "skipped-live").length;
+                return (
+                  <div className="anim-fade-in mt-3 rounded-lg border border-slate-200 p-3 dark:border-ink-700">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold">
+                        {applied
+                          ? `${nGreen} updated, ${nRed} failed, ${nLocked} locked-live`
+                          : `Checked ${out.results.length} cop${out.results.length === 1 ? "y" : "ies"}`}
+                      </span>
+                      <span className="tnum font-mono text-xs text-slate-400">{out.sqlHash}</span>
+                      <button
+                        onClick={() => setReapplyByTpl((m) => { const n = { ...m }; delete n[t.id]; return n; })}
+                        aria-label="dismiss results"
+                        className="ml-auto rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-500">✓ works = safe to update together · ✗ fails = fix that line first · locked-live = live copies, never touched.</p>
+                    {out.results.map((r) => (
+                      <div key={r.cardId} className="mt-1 flex items-center gap-2 text-sm">
+                        <span className="font-mono">{r.lineId}</span>
+                        <StatusChip tone={r.status === "green" ? "ok" : r.status === "red" ? "bad" : "mute"}>
+                          {r.status === "green" ? "✓ works" : r.status === "red" ? "✗ fails" : "locked-live"}
+                        </StatusChip>
+                        {r.rowCount != null && <span className="tnum text-slate-400">{r.rowCount} rows</span>}
+                        {r.error && <span className="text-state-bad">{r.error}</span>}
+                      </div>
+                    ))}
+                    {applied || nGreen === 0 ? (
+                      <p className="mt-2 text-sm text-slate-500">
+                        {nGreen === 0 && !applied
+                          ? "Nothing to apply — no passing dormant copies. Take a copy dormant to update it, or fix failing lines first."
+                          : nGreen === 0
+                            ? "Nothing changed — every copy was already live or failing."
+                            : "Done — passing copies updated and live."}
+                      </p>
+                    ) : (
+                      <Btn
+                        variant="primary"
+                        icon={ListChecks}
+                        onClick={() => void (async () => {
+                          if (!confirm("Update all passing copies to this SQL and take them live? Failing and live copies stay untouched.")) return;
+                          setError(null);
+                          try {
+                            const r = await cardApi.reapply(t.id, { activate: true });
+                            setReapplyByTpl((m) => ({ ...m, [t.id]: r }));
+                            setAppliedByTpl((m) => ({ ...m, [t.id]: true }));
+                            await refresh();
+                          } catch (e) { setError((e as Error).message); }
+                        })()}
+                        title="Update only the ✓ copies and take them live. Failing and live copies stay untouched."
+                        className="mt-2"
+                      >
+                        Apply to passing copies ({nGreen})
+                      </Btn>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           ))}
         </div>
@@ -451,40 +521,6 @@ export function Cards() {
           setShowSave={setPgShowSave}
           setSaveDraft={setPgSaveDraft}
         />
-      )}
-      {reapplyOut && (
-        <div className="mt-4 rounded-xl border border-slate-200 p-4 dark:border-ink-800">
-          <div className="font-semibold">Check results <span className="tnum font-mono text-xs text-slate-400">{reapplyOut.sqlHash}</span></div>
-          <p className="mt-1 text-sm text-slate-500">✓ works = safe to update together · ✗ fails = fix that line first · locked-live = live copies, never touched.</p>
-          {reapplyOut.results.map((r) => (
-            <div key={r.cardId} className="mt-1 flex items-center gap-2 text-sm">
-              <span className="font-mono">{r.lineId}</span>
-              <StatusChip tone={r.status === "green" ? "ok" : r.status === "red" ? "bad" : "mute"}>
-                {r.status === "green" ? "✓ works" : r.status === "red" ? "✗ fails" : "locked-live"}
-              </StatusChip>
-              {r.rowCount != null && <span className="tnum text-slate-400">{r.rowCount} rows</span>}
-              {r.error && <span className="text-state-bad">{r.error}</span>}
-            </div>
-          ))}
-          <Btn
-            variant="primary"
-            icon={ListChecks}
-            onClick={() => void (async () => {
-              if (!confirm("Update all passing copies to this SQL and take them live? Failing and live copies stay untouched.")) return;
-              setError(null);
-              try {
-                const tpl = templates.find((t) => t.id === reapplyOut.templateId)!;
-                const r = await cardApi.reapply(tpl.id, { activate: true });
-                setReapplyOut(r);
-                await refresh();
-              } catch (e) { setError((e as Error).message); }
-            })()}
-            title="Update only the ✓ copies and take them live. Failing and live copies stay untouched."
-            className="mt-3"
-          >
-            Apply to passing copies
-          </Btn>
-        </div>
       )}
 
       {showTplForm && (
