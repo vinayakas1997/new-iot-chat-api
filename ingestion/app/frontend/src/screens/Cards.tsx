@@ -22,24 +22,40 @@ function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Table references in FROM/JOIN positions (CTE names excluded). */
+/** Table references in FROM/JOIN positions (deduped, CTE names excluded). */
 export function sqlTableRefs(sql: string): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const t of tokenizeSqlTables(sql)) {
+    if (t.kind !== "ref") continue;
+    const k = t.ref.toLowerCase();
+    if (!seen.has(k)) { seen.add(k); out.push(t.ref); }
+  }
+  return out;
+}
+
+export type SqlToken = { kind: "text"; text: string } | { kind: "ref"; ref: string };
+
+/** Split SQL into plain segments + table tokens (with CTE names excluded). */
+export function tokenizeSqlTables(sql: string): SqlToken[] {
   const ctes = new Set<string>();
   const cteRe = /(?:\bWITH\b|,)\s*([A-Za-z_]\w*)\s+AS\s*\(/gi;
   let cm;
   while ((cm = cteRe.exec(sql))) ctes.add(cm[1].toLowerCase());
-  const out: string[] = [];
-  const seen = new Set<string>();
+  const toks: SqlToken[] = [];
   const re = /\b(?:FROM|JOIN)\s+([A-Za-z_][\w$#]*(?:\.[A-Za-z_][\w$#]*)?)/gi;
   let m;
+  let pos = 0;
   while ((m = re.exec(sql))) {
     const t = m[1];
-    const k = t.toLowerCase();
-    if (ctes.has(k) || seen.has(k)) continue;
-    seen.add(k);
-    out.push(t);
+    if (ctes.has(t.toLowerCase())) continue;
+    const start = m.index + m[0].length - t.length;
+    toks.push({ kind: "text", text: sql.slice(pos, start) });
+    toks.push({ kind: "ref", ref: t });
+    pos = start + t.length;
   }
-  return out;
+  toks.push({ kind: "text", text: sql.slice(pos) });
+  return toks;
 }
 
 /** Best member-table match for a template ref: exact, then bare-name, else null. */
@@ -698,31 +714,39 @@ export function Cards() {
           {refs.length > 0 && (
             <div className="rounded-lg bg-slate-50 p-2 text-sm dark:bg-ink-900/50">
               <div className="tnum text-xs uppercase tracking-wider text-slate-400">
-                table mapping · {refs.length - missing.length} match, {missing.length} to map
+                tables in this query · {refs.length - missing.length} match, {missing.length} to map — click a table name to swap it
               </div>
               {missing.length === 0 && (
                 <div className="mt-1 text-xs text-state-ok">all template tables exist on this line — one click, no edits.</div>
               )}
-              {missing.map((r) => (
-                <div key={r} className="mt-2 flex items-center gap-2">
-                  <span className="shrink-0 font-mono text-xs">{r}</span>
-                  <span className="text-xs text-slate-400">→</span>
-                  <select
-                    value={mapping[r]}
-                    onChange={(e) => setInstMap((m) => ({ ...m, [r.toLowerCase()]: e.target.value }))}
-                    className="min-w-0 flex-1 rounded-lg border border-state-warn/50 bg-transparent px-2 py-1 font-mono text-xs focus:border-accent-500 focus:outline-none dark:border-ink-700"
-                    title="Pick the replacement table on the target line"
-                  >
-                    {members.map((t) => <option key={t} value={t}>{t}</option>)}
-                  </select>
-                  {!matchMember(r, members) && mapping[r] === members[0] && !(r.toLowerCase() in instMap) && (
-                    <span className="shrink-0 text-xs text-state-warn" title="Guessed from the line's first table — please confirm">check</span>
-                  )}
-                </div>
-              ))}
-              {missing.length > 0 && (
-                <pre className="mt-2 overflow-auto rounded bg-slate-100 p-2 font-mono text-xs dark:bg-ink-800">{preview || "(preview unavailable)"}</pre>
-              )}
+              <div className="mt-2 overflow-auto whitespace-pre-wrap rounded bg-slate-100 p-2 font-mono text-xs leading-relaxed dark:bg-ink-800">
+                {tokenizeSqlTables(instTpl.sqlTemplate).map((tok, i) => {
+                  if (tok.kind === "text") return <span key={i}>{tok.text}</span>;
+                  const r = tok.ref;
+                  const matched = !!matchMember(r, members);
+                  const val = mapping[r];
+                  const guessed = !matched && val === members[0] && !(r.toLowerCase() in instMap);
+                  return (
+                    <span key={i} className="inline-flex items-baseline gap-1">
+                      <select
+                        value={val}
+                        onChange={(e) => setInstMap((m) => ({ ...m, [r.toLowerCase()]: e.target.value }))}
+                        title={matched ? `${r} exists on this line — change to remap` : `${r} is missing on this line — pick its replacement`}
+                        className={`inline rounded px-1 font-mono text-xs focus:border-accent-500 focus:outline-none ${
+                          matched
+                            ? "bg-accent-500/10 text-accent-500 ring-1 ring-accent-500/30"
+                            : "bg-state-warn/10 text-state-warn ring-1 ring-state-warn/40"
+                        }`}
+                      >
+                        {!members.includes(val) && val && <option value={val}>{val}</option>}
+                        {members.map((t) => <option key={t} value={t}>{t}</option>}
+                      </select>
+                      {guessed && <span className="font-sans text-[10px] text-state-warn" title={`Template says ${r} — guessed, please confirm`}>was:{r}?</span>}
+                      {!matched && !guessed && <span className="font-sans text-[10px] text-slate-400">was:{r}</span>}
+                    </span>
+                  );
+                })}
+              </div>
             </div>
           )}
           <p className="text-sm text-slate-500">Creates an independent dormant copy on the line{tables.length > 0 ? ` over ${tables.join(", ")}` : ""}. Test it, then go live.</p>
