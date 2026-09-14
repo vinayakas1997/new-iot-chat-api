@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { cardApi, api, graphApi, playgroundApi, type Card, type CardTemplate, type Line, type ReapplyResult, type TestResult, type GraphSpec, type ChartType, type PlaygroundResult, type QueryHistoryEntry, type LineColumn } from "../lib/api";
 import { AlertBanner, StatusChip } from "../components/chips";
+import { SqlHint } from "../components/SqlHint";
 
 /** Ticks per day by granularity — one source query per tick per card copy. */
 export const TICKS_PER_DAY: Record<Card["granularity"], number> = { hourly: 24, shift: 3, daily: 1 };
@@ -300,7 +301,15 @@ export function Cards() {
         <Modal title="New template" onClose={() => setShowTplForm(false)}>
           <Field label="Name"><input value={tplDraft.name} onChange={(e) => setTplDraft({ ...tplDraft, name: e.target.value })} className={inp} /></Field>
           <Field label="Description"><input value={tplDraft.description} onChange={(e) => setTplDraft({ ...tplDraft, description: e.target.value })} className={inp} /></Field>
-          <Field label="SQL template ({{from}} / {{to}} for windowed test-runs)"><textarea rows={5} value={tplDraft.sqlTemplate} onChange={(e) => setTplDraft({ ...tplDraft, sqlTemplate: e.target.value })} className={`${inp} font-mono`} /></Field>
+          <Field label="SQL template ({{from}} / {{to}} for windowed test-runs)">
+            <SqlHint
+              onInsert={(sql) => {
+                if (tplDraft.sqlTemplate.trim() && !confirm("Replace the current SQL template with this example?")) return;
+                setTplDraft({ ...tplDraft, sqlTemplate: sql });
+              }}
+            />
+            <textarea rows={5} value={tplDraft.sqlTemplate} onChange={(e) => setTplDraft({ ...tplDraft, sqlTemplate: e.target.value })} className={`${inp} font-mono`} />
+          </Field>
           <div className="flex gap-3">
             <Field label="Granularity">
               <select value={tplDraft.granularity} onChange={(e) => setTplDraft({ ...tplDraft, granularity: e.target.value })} className={inp}>
@@ -343,7 +352,15 @@ export function Cards() {
           )}
           <Field label="Name"><input value={cardDraft.name} onChange={(e) => setCardDraft({ ...cardDraft, name: e.target.value })} className={inp} /></Field>
           <Field label="Tables (comma-separated schema.table, must be line members)"><input value={cardDraft.tables} onChange={(e) => setCardDraft({ ...cardDraft, tables: e.target.value })} className={`${inp} font-mono`} /></Field>
-          <Field label="SQL"><textarea rows={5} value={cardDraft.sql} onChange={(e) => setCardDraft({ ...cardDraft, sql: e.target.value })} className={`${inp} font-mono`} /></Field>
+          <Field label="SQL">
+            <SqlHint
+              onInsert={(sql) => {
+                if (cardDraft.sql.trim() && !confirm("Replace the current SQL with this example?")) return;
+                setCardDraft({ ...cardDraft, sql });
+              }}
+            />
+            <textarea rows={5} value={cardDraft.sql} onChange={(e) => setCardDraft({ ...cardDraft, sql: e.target.value })} className={`${inp} font-mono`} />
+          </Field>
           <div className="flex gap-3">
             <Field label="Granularity">
               <select value={cardDraft.granularity} onChange={(e) => setCardDraft({ ...cardDraft, granularity: e.target.value })} className={inp}>
