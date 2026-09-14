@@ -30,6 +30,7 @@ const gran = z.enum(["hourly", "shift", "daily"]);
 const tplSchema = z.object({
   name: z.string().min(1).max(120),
   description: z.string().max(2000).default(""),
+  referenceLineId: z.string().min(1).nullable().default(null),
   sqlTemplate: z.string().default(""),
   granularity: gran.default("hourly"),
   unit: z.string().max(20).default(""),
@@ -123,11 +124,16 @@ export async function cardRoutes(app: FastifyInstance) {
       activate: z.boolean().default(false),
       changeMode: z.enum(["forward", "reingest"]).default("forward"),
       reingestFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+      cardIds: z.array(z.string().min(1)).optional(),
+      lineId: z.string().min(1).optional(),
     }).safeParse(req.body ?? {});
     if (!p.success) return reply.code(400).send({ error: p.error.message });
     const sql = p.data.sql ?? tpl.sqlTemplate;
+    const onlyIds = p.data.cardIds ? new Set(p.data.cardIds) : null;
     const results = [];
     for (const copy of copiesOfTemplate(id)) {
+      if (onlyIds && !onlyIds.has(copy.id)) continue;
+      if (p.data.lineId && copy.lineId !== p.data.lineId) continue;
       if (copy.status === "live") {
         results.push({ cardId: copy.id, lineId: copy.lineId, status: "skipped-live" as const });
         continue;

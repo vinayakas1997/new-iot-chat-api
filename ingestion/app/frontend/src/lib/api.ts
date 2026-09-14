@@ -156,6 +156,7 @@ export interface CardTemplate {
   id: string;
   name: string;
   description: string;
+  referenceLineId: string | null;
   sqlTemplate: string;
   granularity: "hourly" | "shift" | "daily";
   unit: string;
@@ -207,7 +208,7 @@ export const cardApi = {
   deleteTemplate: (id: string) => req<{ ok: boolean }>(`/api/ingest/templates/${id}`, { method: "DELETE" }),
   instantiate: (id: string, input: { lineId: string; name?: string; tables?: string[]; sql?: string }) =>
     req<Card>(`/api/ingest/templates/${id}/instantiate`, { method: "POST", body: JSON.stringify(input) }),
-  reapply: (id: string, input: { sql?: string; activate?: boolean }) =>
+  reapply: (id: string, input: { sql?: string; activate?: boolean; cardIds?: string[]; lineId?: string }) =>
     req<ReapplyResult>(`/api/ingest/templates/${id}/reapply`, { method: "POST", body: JSON.stringify(input) }),
   listCards: (lineId?: string) => req<Card[]>(`/api/ingest/cards${lineId ? `?lineId=${lineId}` : ""}`),
   createCard: (input: Record<string, unknown>) =>

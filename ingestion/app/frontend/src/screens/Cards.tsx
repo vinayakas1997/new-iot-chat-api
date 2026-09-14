@@ -100,6 +100,76 @@ export function remapSql(sql: string, map: Record<string, string>): string {
   return out;
 }
 
+export interface RemapState {
+  refs: string[];
+  missing: string[];
+  mapping: Record<string, string>;
+  blocked: boolean;
+  preview: string;
+  tables: string[];
+}
+
+/** Shared mapping state: template refs → line member tables (explicit map wins, then match, then first member). */
+export function remapState(sql: string, members: string[], map: Record<string, string>): RemapState {
+  const refs = sqlTableRefs(sql);
+  const missing = refs.filter((r) => !matchMember(r, members));
+  const mapping: Record<string, string> = {};
+  for (const r of refs) {
+    mapping[r] = map[r.toLowerCase()] ?? matchMember(r, members) ?? members[0] ?? "";
+  }
+  const blocked = refs.length > 0 && Object.values(mapping).some((v) => !v);
+  return { refs, missing, mapping, blocked, preview: remapSql(sql, mapping), tables: [...new Set(Object.values(mapping).filter(Boolean))] };
+}
+
+/** Reusable table-map editor: each SQL ref becomes a dropdown of line member tables. */
+export function RemapTables({ sql, members, map, setMap }: {
+  sql: string;
+  members: string[];
+  map: Record<string, string>;
+  setMap: (m: Record<string, string>) => void;
+}) {
+  const { refs, missing, mapping } = remapState(sql, members, map);
+  if (refs.length === 0) return null;
+  return (
+    <div className="rounded-lg bg-slate-50 p-2 text-sm dark:bg-ink-900/50">
+      <div className="tnum text-xs uppercase tracking-wider text-slate-400">
+        tables in this query · {refs.length - missing.length} match, {missing.length} to map — click a table name to swap it
+      </div>
+      {missing.length === 0 && (
+        <div className="mt-1 text-xs text-state-ok">all template tables exist on this line — one click, no edits.</div>
+      )}
+      <div className="mt-2 overflow-auto whitespace-pre-wrap rounded bg-slate-100 p-2 font-mono text-xs leading-relaxed dark:bg-ink-800">
+        {tokenizeSqlTables(sql).map((tok, i) => {
+          if (tok.kind === "text") return <span key={i}>{tok.text}</span>;
+          const r = tok.ref;
+          const matched = !!matchMember(r, members);
+          const val = mapping[r];
+          const guessed = !matched && val === members[0] && !(r.toLowerCase() in map);
+          return (
+            <span key={i} className="inline-flex items-baseline gap-1">
+              <select
+                value={val}
+                onChange={(e) => setMap({ ...map, [r.toLowerCase()]: e.target.value })}
+                title={matched ? `${r} exists on this line — change to remap` : `${r} is missing on this line — pick its replacement`}
+                className={`inline rounded px-1 font-mono text-xs focus:border-accent-500 focus:outline-none ${
+                  matched
+                    ? "bg-accent-500/10 text-accent-500 ring-1 ring-accent-500/30"
+                    : "bg-state-warn/10 text-state-warn ring-1 ring-state-warn/40"
+                }`}
+              >
+                {!members.includes(val) && val && <option value={val}>{val}</option>}
+                {members.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+              {guessed && <span className="font-sans text-[10px] text-state-warn" title={`Template says ${r} — guessed, please confirm`}>was:{r}?</span>}
+              {!matched && !guessed && <span className="font-sans text-[10px] text-slate-400">was:{r}</span>}
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /** F3: template library + per-line card copies. Verdict: which cards are live, and on what? */
 export function Cards() {
   const [tab, setTab] = useState<"cards" | "templates" | "playground">("cards");
@@ -133,7 +203,19 @@ export function Cards() {
   const [grouped, setGrouped] = useState(true);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [showSuggest, setShowSuggest] = useState(false);
-  const [tablesOpenTpl, setTablesOpenTpl] = useState<string | null>(null);
+  const [copyQ, setCopyQ] = useState<Record<string, string>>({});
+  const [copyStatus, setCopyStatus] = useState<Record<string, "all" | "live" | "dormant" | "failed">>({});
+  const [checkedByTpl, setCheckedByTpl] = useState<Record<string, string[]>>({});
+  const [openCopy, setOpenCopy] = useState<Record<string, string | null>>({});
+  const [fixCard, setFixCard] = useState<{ tplId: string; cardId: string } | null>(null);
+  const [fixMap, setFixMap] = useState<Record<string, string>>({});
+  const [fixBusy, setFixBusy] = useState(false);
+  const [dupTpl, setDupTpl] = useState<CardTemplate | null>(null);
+  const [dupLine, setDupLine] = useState("");
+  const [dupName, setDupName] = useState("");
+  const [dupMap, setDupMap] = useState<Record<string, string>>({});
+  const [dupSearch, setDupSearch] = useState("");
+  const [dupSug, setDupSug] = useState(false);
   const [tplPickLine, setTplPickLine] = useState("");
   const [tplLineSearch, setTplLineSearch] = useState("");
   const [showLineSug, setShowLineSug] = useState(false);
@@ -512,162 +594,301 @@ export function Cards() {
 
       {tab === "templates" && (
         <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
-          {templates.map((t) => (
+          {templates.map((t) => {
+            const copies = cards.filter((c) => c.templateId === t.id);
+            const allIds = copies.map((c) => c.id);
+            const checked = checkedByTpl[t.id] ?? allIds;
+            const refLine = t.referenceLineId ? lines.find((l) => l.id === t.referenceLineId) : undefined;
+            return (
             <div key={t.id} className="rounded-xl border border-slate-200 p-4 dark:border-ink-800">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="font-semibold">{t.name}</span>
                 <span className="tnum text-xs text-slate-400">v{t.version}</span>
+                {t.referenceLineId && (
+                  <span className="tnum inline-flex items-center gap-1 rounded-full bg-accent-500/10 px-2 py-0.5 text-xs text-accent-500 ring-1 ring-accent-500/30" title="The line this template was written against — its tables are the reference">
+                    reference: {t.referenceLineId}{refLine ? ` · ${refLine.memberTables.length} tables` : " · line gone"}
+                  </span>
+                )}
                 <span className="ml-auto text-xs text-slate-400">{t.granularity}{t.unit ? ` · ${t.unit}` : ""}</span>
               </div>
               {t.description && <div className="mt-1 text-sm text-slate-500">{t.description}</div>}
               <div className="tnum mt-1 text-xs text-slate-400">
-                ≈{cards.filter((c) => c.templateId === t.id).reduce((s, c) => s + tickCost(c), 0)} queries/day across {cards.filter((c) => c.templateId === t.id).length} copies
+                ≈{copies.reduce((s, c) => s + tickCost(c), 0)} queries/day across {copies.length} copies
               </div>
               <pre className="mt-2 max-h-28 overflow-auto rounded bg-slate-100 p-2 font-mono text-xs dark:bg-ink-900">{t.sqlTemplate || "(no SQL template)"}</pre>
               <div className="mt-3 flex flex-wrap gap-2 text-sm">
                 <Btn variant="primary" icon={ArrowRight} onClick={() => { setInstTpl(t); setInstLine(lines[0]?.id ?? ""); setInstMap({}); }} title="Stamp an independent copy of this template onto a line. The copy starts dormant and can differ freely afterwards.">instantiate → line</Btn>
-                <Btn icon={Copy} onClick={() => { setTplDraft({ name: t.name, description: t.description, sqlTemplate: t.sqlTemplate, granularity: t.granularity, unit: t.unit, extractHint: t.extractHint }); setShowTplForm(true); }} title="Copy this template as a starting point for a new, separate template.">duplicate</Btn>
+                <Btn icon={Copy} onClick={() => { setDupTpl(t); setDupLine(t.referenceLineId ?? lines[0]?.id ?? ""); setDupName(`${t.name} copy`); setDupMap({}); setDupSearch(""); setDupSug(false); }} title="Pick a line, edit the tables, and stamp a copy there.">duplicate</Btn>
                 <Btn
                   icon={ClipboardCheck}
+                  disabled={copies.length > 0 && checked.length === 0}
                   onClick={() => void (async () => {
+                    if (checked.length === 0) return;
                     setError(null);
                     setAppliedByTpl((m) => ({ ...m, [t.id]: false }));
                     try {
-                      const r = await cardApi.reapply(t.id, { activate: false });
+                      const r = await cardApi.reapply(t.id, { activate: false, cardIds: checked });
                       setReapplyByTpl((m) => ({ ...m, [t.id]: r }));
                     } catch (e) { setError((e as Error).message); }
                   })()}
-                  title="Try this template on every copy. Changes nothing — safe to press anytime."
+                  title={checked.length === allIds.length ? "Try this template on every copy. Changes nothing — safe to press anytime." : `Try this template on the ${checked.length} checked copies only.`}
                 >
-                  Check all copies
+                  {checked.length === allIds.length ? "Check all copies" : `Check selected (${checked.length})`}
                 </Btn>
                 <Btn variant="bad" icon={Trash2} onClick={() => { if (confirm(`Delete template "${t.name}"? Copies keep working.`)) void act(() => cardApi.deleteTemplate(t.id)); }}>delete</Btn>
               </div>
-              {(() => {
-                const copies = cards.filter((c) => c.templateId === t.id);
-                if (copies.length === 0) {
-                  return <div className="mt-2 text-xs text-slate-400">not used yet — no copies on any line</div>;
-                }
-                const seen = new Map<string, Card[]>();
-                for (const c of copies) {
-                  const arr = seen.get(c.lineId) ?? [];
-                  arr.push(c);
-                  seen.set(c.lineId, arr);
-                }
-                return (
-                  <div className="mt-2 rounded-lg bg-slate-50 p-2 dark:bg-ink-900/50">
-                    <div className="tnum text-xs uppercase tracking-wider text-slate-400">
-                      copies on {seen.size} line{seen.size === 1 ? "" : "s"}
+              {copies.length === 0 ? (
+                <div className="mt-2 text-xs text-slate-400">not used yet — no copies on any line</div>
+              ) : (
+                <div className="mt-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="inline-flex items-center gap-1.5 text-xs text-slate-500" title={checked.length === allIds.length ? "Uncheck all — Check/Apply will skip everything" : "Check all copies"}>
+                      <input
+                        type="checkbox"
+                        checked={allIds.length > 0 && checked.length === allIds.length}
+                        onChange={() => setCheckedByTpl((m) => ({ ...m, [t.id]: checked.length === allIds.length ? [] : allIds }))}
+                        className="h-4 w-4 accent-teal-500"
+                      />
+                      {checked.length === allIds.length ? "all" : `${checked.length}/${allIds.length}`}
+                    </label>
+                    <div className="relative">
+                      <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input
+                        value={copyQ[t.id] ?? ""}
+                        onChange={(e) => setCopyQ((m) => ({ ...m, [t.id]: e.target.value }))}
+                        placeholder="Filter lines, tables…"
+                        className="w-48 rounded-lg border border-slate-300 bg-transparent py-1.5 pl-8 pr-2 text-sm focus:border-accent-500 focus:outline-none dark:border-ink-700"
+                      />
                     </div>
-                    {[...seen].map(([lineId, arr]) => {
-                      const l = lines.find((x) => x.id === lineId);
-                      const live = arr.filter((c) => c.status === "live").length;
-                      return (
-                        <div key={lineId} className="mt-1 flex items-center gap-2 text-xs">
-                          <FormattedText text={l?.name ?? lineId} lineName={l?.name ?? lineId} />
-                          <span className="font-mono text-slate-400">{lineId}</span>
-                          <span className="tnum text-slate-400">{l ? `${l.memberTables.length} tables` : "line gone"}</span>
-                          <StatusChip tone={live === arr.length ? "ok" : "mute"}>{live}/{arr.length} live</StatusChip>
-                          <Link
-                            to={`/setter/lines?edit=${lineId}`}
-                            title="Open this line in Lines to add/remove its tables"
-                            className="ml-auto inline-flex items-center gap-1 text-accent-500 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60"
-                          >
-                            <Pencil size={12} />edit tables
-                          </Link>
-                        </div>
-                      );
-                    })}
-                  </div>
-                );
-              })()}
-              {(() => {
-                const refs = sqlTableRefs(t.sqlTemplate);
-                const open = tablesOpenTpl === t.id;
-                return (
-                  <div className="mt-2">
-                    <button
-                      onClick={() => setTablesOpenTpl(open ? null : t.id)}
-                      className="inline-flex items-center gap-1 text-xs text-accent-500 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60"
+                    <select
+                      value={copyStatus[t.id] ?? "all"}
+                      onChange={(e) => setCopyStatus((m) => ({ ...m, [t.id]: e.target.value as "all" | "live" | "dormant" | "failed" }))}
+                      title="Filter rows by state"
+                      className="rounded-lg border border-slate-300 bg-transparent px-2 py-1.5 text-sm focus:border-accent-500 focus:outline-none dark:border-ink-700"
                     >
-                      <ChevronDown size={12} className={`transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
-                      Tables ({refs.length})
-                    </button>
-                    {open && (
-                      <div className="anim-fade-in mt-1 rounded-lg bg-slate-50 p-2 dark:bg-ink-900/50">
-                        <div className="text-xs text-slate-500">
-                          In this SQL:{" "}
-                          {refs.length === 0
-                            ? <span className="text-slate-400">no FROM/JOIN tables detected</span>
-                            : refs.map((r) => (
-                              <code key={r} className="mr-1 rounded bg-accent-500/10 px-1 font-mono text-accent-500 ring-1 ring-accent-500/30">{r}</code>
-                            ))}
-                        </div>
-                        {cards.filter((c) => c.templateId === t.id).length === 0
-                          ? <div className="mt-1 text-xs text-slate-400">no copies yet — instantiate to land these tables on a line</div>
-                          : [...new Set(cards.filter((c) => c.templateId === t.id).map((c) => c.lineId))].map((lineId) => {
-                            const l = lines.find((x) => x.id === lineId);
-                            const members = l?.memberTables ?? [];
-                            const missing = refs.filter((r) => !matchMember(r, members));
-                            return (
-                              <div key={lineId} className="mt-1 text-xs">
-                                <span className="text-slate-500">On <span className="font-mono">{lineId}</span>: </span>
-                                {members.length === 0
-                                  ? <span className="text-slate-400">line gone or no tables</span>
-                                  : members.map((m) => (
-                                    <span key={m} className="mr-1 font-mono text-slate-500 dark:text-ink-300">{m}</span>
-                                  ))}
-                                {missing.length > 0 && members.length > 0 && (
-                                  <span className="text-state-warn"> — template needs {missing.join(", ")} here</span>
-                                )}
-                              </div>
-                            );
-                          })}
-                      </div>
+                      <option value="all">all states</option>
+                      <option value="live">live</option>
+                      <option value="dormant">dormant</option>
+                      <option value="failed">failed</option>
+                    </select>
+                    {reapplyByTpl[t.id] && (
+                      <>
+                        <span className="tnum font-mono text-xs text-slate-400">{reapplyByTpl[t.id].sqlHash}</span>
+                        <button
+                          onClick={() => setReapplyByTpl((m) => { const n = { ...m }; delete n[t.id]; return n; })}
+                          aria-label="dismiss results"
+                          className="rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800"
+                        >
+                          <X size={14} />
+                        </button>
+                      </>
                     )}
                   </div>
-                );
-              })()}
+                  {(() => {
+                    const q = (copyQ[t.id] ?? "").trim().toLowerCase();
+                    const stf = copyStatus[t.id] ?? "all";
+                    const resByCard = new Map((reapplyByTpl[t.id]?.results ?? []).map((r) => [r.cardId, r]));
+                    const failedOf = (c: Card) => {
+                      const r = resByCard.get(c.id);
+                      return r ? r.status === "red" : (c.lastTest != null && !c.lastTest.ok);
+                    };
+                    const visible = copies.filter((c) => {
+                      if (stf === "live" && c.status !== "live") return false;
+                      if (stf === "dormant" && c.status !== "dormant") return false;
+                      if (stf === "failed" && !failedOf(c)) return false;
+                      if (q && !`${c.lineId} ${lineNameOf(c.lineId)} ${c.name} ${c.tables.join(" ")}`.toLowerCase().includes(q)) return false;
+                      return true;
+                    });
+                    if (visible.length === 0) return <div className="mt-2 text-xs text-slate-400">no copies match this filter</div>;
+                    const gmap = new Map<string, Card[]>();
+                    for (const c of visible) {
+                      const a = gmap.get(c.lineId) ?? [];
+                      a.push(c);
+                      gmap.set(c.lineId, a);
+                    }
+                    const ordered = [
+                      ...lines.map((l) => l.id).filter((id) => gmap.has(id)),
+                      ...[...gmap.keys()].filter((id) => !lines.some((l) => l.id === id)),
+                    ];
+                    return (
+                      <div>
+                        {ordered.map((lineId) => {
+                          const items = gmap.get(lineId)!;
+                          const l = lines.find((x) => x.id === lineId);
+                          const live = items.filter((c) => c.status === "live").length;
+                          return (
+                            <div key={lineId} className="mt-2">
+                              <div className="flex items-center gap-2 text-xs">
+                                <FormattedText text={l?.name ?? lineId} lineName={l?.name ?? lineId} />
+                                <span className="font-mono text-slate-400">{lineId}</span>
+                                <span className="tnum text-slate-400">{l ? `${l.memberTables.length} tables` : "line gone"}</span>
+                                <StatusChip tone={live === items.length ? "ok" : "mute"}>{live}/{items.length} live</StatusChip>
+                                <Link
+                                  to={`/setter/lines?edit=${lineId}`}
+                                  title="Open this line in Lines to add/remove its tables"
+                                  className="ml-auto inline-flex items-center gap-1 text-accent-500 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60"
+                                >
+                                  <Pencil size={12} />edit tables
+                                </Link>
+                              </div>
+                              {items.map((c) => {
+                                const r = resByCard.get(c.id);
+                                const failed = failedOf(c);
+                                const open = openCopy[t.id] === c.id;
+                                const fixing = fixCard?.tplId === t.id && fixCard?.cardId === c.id;
+                                return (
+                                  <div key={c.id} className={`mt-1 rounded-lg border p-2 ${failed ? "border-state-bad/40 bg-state-bad/[0.06]" : c.status === "live" ? "border-state-ok/30 bg-state-ok/[0.05]" : "border-slate-200 dark:border-ink-800"}`}>
+                                    <div className="flex flex-wrap items-center gap-2 text-sm">
+                                      <input
+                                        type="checkbox"
+                                        checked={checked.includes(c.id)}
+                                        onChange={() => setCheckedByTpl((m) => {
+                                          const cur = m[t.id] ?? allIds;
+                                          return { ...m, [t.id]: cur.includes(c.id) ? cur.filter((x) => x !== c.id) : [...cur, c.id] };
+                                        })}
+                                        title={checked.includes(c.id) ? "Uncheck — skip in Check/Apply" : "Check — include in Check/Apply"}
+                                        className="h-4 w-4 accent-teal-500"
+                                      />
+                                      <span className="font-medium">{c.name}</span>
+                                      <StatusChip tone={c.status === "live" ? "ok" : "mute"}>{c.status}</StatusChip>
+                                      {failed && <StatusChip tone="bad">✗ fails</StatusChip>}
+                                      {r
+                                        ? r.status === "green"
+                                          ? <span className="tnum text-xs text-state-ok">✓ {r.rowCount} rows</span>
+                                          : r.status === "red"
+                                            ? <span className="max-w-64 truncate text-xs text-state-bad" title={r.error}>✗ {r.error}</span>
+                                            : <span className="text-xs text-slate-400">locked-live</span>
+                                        : c.lastTest
+                                          ? c.lastTest.ok
+                                            ? <span className="text-xs text-state-ok">✓ passed · {new Date(c.lastTest.at).toLocaleTimeString()}</span>
+                                            : <span className="max-w-64 truncate text-xs text-state-bad" title={c.lastTest.error ?? ""}>✗ {c.lastTest.error}</span>
+                                          : <span className="text-xs text-slate-400">never tested</span>}
+                                      <span className="ml-auto flex items-center gap-1">
+                                        {failed && c.status === "dormant" && !fixing && (
+                                          <button
+                                            onClick={() => { setFixCard({ tplId: t.id, cardId: c.id }); setFixMap({}); setOpenCopy((m) => ({ ...m, [t.id]: c.id })); }}
+                                            className="rounded-lg border border-state-bad/50 px-2 py-0.5 text-xs text-state-bad transition-colors hover:bg-state-bad/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60"
+                                          >
+                                            Fix tables
+                                          </button>
+                                        )}
+                                        {failed && c.status === "live" && (
+                                          <button
+                                            onClick={() => void act(() => cardApi.dormantCard(c.id))}
+                                            title="Live copies can't change tables — take it dormant first"
+                                            className="rounded-lg border border-state-warn/50 px-2 py-0.5 text-xs text-state-warn transition-colors hover:bg-state-warn/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60"
+                                          >
+                                            take dormant to fix
+                                          </button>
+                                        )}
+                                        <button
+                                          onClick={() => void onTest(c)}
+                                          title="Re-test this copy now"
+                                          className="rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800"
+                                        >
+                                          <FlaskConical size={14} />
+                                        </button>
+                                        <button
+                                          onClick={() => setOpenCopy((m) => ({ ...m, [t.id]: open ? null : c.id }))}
+                                          aria-label={open ? "collapse run details" : "expand run details"}
+                                          className="rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800"
+                                        >
+                                          <ChevronDown size={14} className={`transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
+                                        </button>
+                                      </span>
+                                    </div>
+                                    <div className="mt-1 flex flex-wrap gap-1">
+                                      {c.tables.length === 0 && <span className="text-xs text-slate-400">no tables</span>}
+                                      {c.tables.map((tb) => (
+                                        <code key={tb} className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-600 dark:bg-ink-800 dark:text-ink-300">{tb}</code>
+                                      ))}
+                                      {c.sql !== t.sqlTemplate && (
+                                        <span className="text-[11px] text-state-warn" title="This copy's SQL differs from the template — bulk apply skips it">per-line SQL</span>
+                                      )}
+                                    </div>
+                                    {open && !fixing && (
+                                      <div className="anim-fade-in mt-1 border-t border-slate-100 pt-1 text-xs text-slate-500 dark:border-ink-800">
+                                        {r
+                                          ? <div>check: <b>{r.status}</b>{r.rowCount != null && <> · <span className="tnum">{r.rowCount}</span> rows</>}{r.error && <div className="text-state-bad">{r.error}</div>}</div>
+                                          : c.lastTest
+                                            ? <div>last test {c.lastTest.ok ? "passed" : "failed"} · {new Date(c.lastTest.at).toLocaleString()}{c.lastTest.sqlHash && <> · <span className="tnum font-mono">{c.lastTest.sqlHash}</span></>}{c.lastTest.error && <div className="text-state-bad">{c.lastTest.error}</div>}</div>
+                                            : <div>never tested — press the flask to test.</div>}
+                                      </div>
+                                    )}
+                                    {fixing && (() => {
+                                      const ln = lines.find((x) => x.id === c.lineId);
+                                      const members = ln?.memberTables ?? [];
+                                      const fs = remapState(c.sql, members, fixMap);
+                                      return (
+                                        <div className="anim-fade-in mt-2 border-t border-slate-100 pt-2 dark:border-ink-800">
+                                          <RemapTables sql={c.sql} members={members} map={fixMap} setMap={setFixMap} />
+                                          <div className="mt-2 flex justify-end gap-2">
+                                            <button
+                                              onClick={() => { setFixCard(null); setFixMap({}); }}
+                                              className="rounded-lg px-3 py-1.5 text-sm text-slate-500 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800"
+                                            >
+                                              cancel
+                                            </button>
+                                            <Btn
+                                              variant="primary"
+                                              icon={Save}
+                                              disabled={fs.blocked || fixBusy || members.length === 0}
+                                              loading={fixBusy}
+                                              title={members.length === 0 ? "This line has no member tables" : fs.blocked ? "Map every table first" : "Save tables, re-test, refresh the row"}
+                                              onClick={() => void (async () => {
+                                                if (fs.blocked) return;
+                                                setFixBusy(true);
+                                                setError(null);
+                                                try {
+                                                  await cardApi.updateCard(c.id, { sql: fs.preview, tables: fs.tables });
+                                                  await cardApi.testCard(c.id);
+                                                  setFixCard(null);
+                                                  setFixMap({});
+                                                  await refresh();
+                                                } catch (e) { setError((e as Error).message); } finally { setFixBusy(false); }
+                                              })()}
+                                            >
+                                              {fixBusy ? "saving…" : "Save & re-test"}
+                                            </Btn>
+                                          </div>
+                                        </div>
+                                      );
+                                    })()}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
               {reapplyByTpl[t.id] && (() => {
                 const out = reapplyByTpl[t.id];
                 const applied = appliedByTpl[t.id];
-                const nGreen = out.results.filter((r) => r.status === "green").length;
-                const nRed = out.results.filter((r) => r.status === "red").length;
-                const nLocked = out.results.filter((r) => r.status === "skipped-live").length;
+                const scoped = out.results.filter((r) => checked.includes(r.cardId));
+                const nGreen = scoped.filter((r) => r.status === "green").length;
+                const nRed = scoped.filter((r) => r.status === "red").length;
+                const nLocked = scoped.filter((r) => r.status === "skipped-live").length;
+                const divergentIds = new Set(copies.filter((c) => c.sql !== t.sqlTemplate).map((c) => c.id));
+                const applyIds = scoped.filter((r) => r.status === "green" && !divergentIds.has(r.cardId)).map((r) => r.cardId);
+                const nExcluded = scoped.filter((r) => r.status === "green" && divergentIds.has(r.cardId)).length;
                 return (
                   <div className="anim-fade-in mt-3 rounded-lg border border-slate-200 p-3 dark:border-ink-700">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold">
-                        {applied
-                          ? `${nGreen} updated, ${nRed} failed, ${nLocked} locked-live`
-                          : `Checked ${out.results.length} cop${out.results.length === 1 ? "y" : "ies"}`}
-                      </span>
-                      <span className="tnum font-mono text-xs text-slate-400">{out.sqlHash}</span>
-                      <button
-                        onClick={() => setReapplyByTpl((m) => { const n = { ...m }; delete n[t.id]; return n; })}
-                        aria-label="dismiss results"
-                        className="ml-auto rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800"
-                      >
-                        <X size={14} />
-                      </button>
+                    <div className="text-sm font-semibold">
+                      {applied
+                        ? `${applyIds.length} updated, ${nRed} failed, ${nLocked} locked-live`
+                        : `Checked ${scoped.length} cop${scoped.length === 1 ? "y" : "ies"}${checked.length !== allIds.length ? " (checked only)" : ""}`}
                     </div>
-                    <p className="mt-1 text-xs text-slate-500">✓ works = safe to update together · ✗ fails = fix that line first · locked-live = live copies, never touched. Note: apply pushes identical SQL — copies with per-line table renames get overwritten; remap them after applying.</p>
-                    {out.results.map((r) => (
-                      <div key={r.cardId} className="mt-1 flex items-center gap-2 text-sm">
-                        <span className="font-mono">{r.lineId}</span>
-                        <StatusChip tone={r.status === "green" ? "ok" : r.status === "red" ? "bad" : "mute"}>
-                          {r.status === "green" ? "✓ works" : r.status === "red" ? "✗ fails" : "locked-live"}
-                        </StatusChip>
-                        {r.rowCount != null && <span className="tnum text-slate-400">{r.rowCount} rows</span>}
-                        {r.error && <span className="text-state-bad">{r.error}</span>}
-                      </div>
-                    ))}
-                    {applied || nGreen === 0 ? (
+                    <p className="mt-1 text-xs text-slate-500">✓ works = safe to update together · ✗ fails = expand the row, fix tables · locked-live = live copies, never touched.{nExcluded > 0 && ` ${nExcluded} green ${nExcluded === 1 ? "copy keeps" : "copies keep"} per-line SQL — excluded from apply.`}</p>
+                    {applied || applyIds.length === 0 ? (
                       <p className="mt-2 text-sm text-slate-500">
-                        {nGreen === 0 && !applied
-                          ? "Nothing to apply — no passing dormant copies. Take a copy dormant to update it, or fix failing lines first."
-                          : nGreen === 0
-                            ? "Nothing changed — every copy was already live or failing."
+                        {applyIds.length === 0 && !applied
+                          ? "Nothing to apply — no passing checked copies. Fix failing rows first, or check more rows."
+                          : applyIds.length === 0
+                            ? "Nothing changed — every checked copy was already live, failing, or per-line."
                             : "Done — passing copies updated and live."}
                       </p>
                     ) : (
@@ -675,26 +896,27 @@ export function Cards() {
                         variant="primary"
                         icon={ListChecks}
                         onClick={() => void (async () => {
-                          if (!confirm("Update all passing copies to this SQL and take them live? Failing and live copies stay untouched.")) return;
+                          if (!confirm(`Update ${applyIds.length} passing copies to this SQL and take them live? Failing, live, unchecked, and per-line copies stay untouched.`)) return;
                           setError(null);
                           try {
-                            const r = await cardApi.reapply(t.id, { activate: true });
+                            const r = await cardApi.reapply(t.id, { activate: true, cardIds: applyIds });
                             setReapplyByTpl((m) => ({ ...m, [t.id]: r }));
                             setAppliedByTpl((m) => ({ ...m, [t.id]: true }));
                             await refresh();
                           } catch (e) { setError((e as Error).message); }
                         })()}
-                        title="Update only the ✓ copies and take them live. Failing and live copies stay untouched."
+                        title="Update only the ✓ checked copies and take them live. Everything else stays untouched."
                         className="mt-2"
                       >
-                        Apply to passing copies ({nGreen})
+                        Apply to passing copies ({applyIds.length})
                       </Btn>
                     )}
                   </div>
                 );
               })()}
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -858,7 +1080,10 @@ export function Cards() {
           <Field label="Extraction hint (for the AI extractor)"><textarea rows={2} value={tplDraft.extractHint} onChange={(e) => setTplDraft({ ...tplDraft, extractHint: e.target.value })} className={inp} /></Field>
           <div className="mt-3 flex justify-end gap-2">
             <button onClick={() => setShowTplForm(false)} className="rounded-lg px-4 py-2 text-sm text-slate-500 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800">cancel</button>
-            <Btn variant="primary" icon={Save} onClick={() => void act(() => cardApi.createTemplate(tplDraft).then(() => setShowTplForm(false)))}>Save template</Btn>
+            <Btn variant="primary" icon={Save} onClick={() => void act(() => {
+              const ref = lines.find((l) => l.id === tplPickLine) ?? lines[0];
+              return cardApi.createTemplate({ ...tplDraft, referenceLineId: ref?.id ?? null }).then(() => setShowTplForm(false));
+            })}>Save template</Btn>
           </div>
         </Modal>
       )}
@@ -866,15 +1091,7 @@ export function Cards() {
       {instTpl && (() => {
         const line = lines.find((l) => l.id === instLine);
         const members = line?.memberTables ?? [];
-        const refs = sqlTableRefs(instTpl.sqlTemplate);
-        const missing = refs.filter((r) => !matchMember(r, members));
-        const mapping: Record<string, string> = {};
-        for (const r of refs) {
-          mapping[r] = instMap[r.toLowerCase()] ?? matchMember(r, members) ?? members[0] ?? "";
-        }
-        const blocked = refs.length > 0 && Object.values(mapping).some((v) => !v);
-        const preview = remapSql(instTpl.sqlTemplate, mapping);
-        const tables = [...new Set(Object.values(mapping).filter(Boolean))];
+        const { refs, mapping, blocked, preview, tables } = remapState(instTpl.sqlTemplate, members, instMap);
         return (
         <Modal title={`Instantiate "${instTpl.name}"`} onClose={() => setInstTpl(null)}>
           <Field label="Target line">
@@ -896,44 +1113,7 @@ export function Cards() {
               );
             })()}
           </Field>
-          {refs.length > 0 && (
-            <div className="rounded-lg bg-slate-50 p-2 text-sm dark:bg-ink-900/50">
-              <div className="tnum text-xs uppercase tracking-wider text-slate-400">
-                tables in this query · {refs.length - missing.length} match, {missing.length} to map — click a table name to swap it
-              </div>
-              {missing.length === 0 && (
-                <div className="mt-1 text-xs text-state-ok">all template tables exist on this line — one click, no edits.</div>
-              )}
-              <div className="mt-2 overflow-auto whitespace-pre-wrap rounded bg-slate-100 p-2 font-mono text-xs leading-relaxed dark:bg-ink-800">
-                {tokenizeSqlTables(instTpl.sqlTemplate).map((tok, i) => {
-                  if (tok.kind === "text") return <span key={i}>{tok.text}</span>;
-                  const r = tok.ref;
-                  const matched = !!matchMember(r, members);
-                  const val = mapping[r];
-                  const guessed = !matched && val === members[0] && !(r.toLowerCase() in instMap);
-                  return (
-                    <span key={i} className="inline-flex items-baseline gap-1">
-                      <select
-                        value={val}
-                        onChange={(e) => setInstMap((m) => ({ ...m, [r.toLowerCase()]: e.target.value }))}
-                        title={matched ? `${r} exists on this line — change to remap` : `${r} is missing on this line — pick its replacement`}
-                        className={`inline rounded px-1 font-mono text-xs focus:border-accent-500 focus:outline-none ${
-                          matched
-                            ? "bg-accent-500/10 text-accent-500 ring-1 ring-accent-500/30"
-                            : "bg-state-warn/10 text-state-warn ring-1 ring-state-warn/40"
-                        }`}
-                      >
-                        {!members.includes(val) && val && <option value={val}>{val}</option>}
-                        {members.map((t) => <option key={t} value={t}>{t}</option>)}
-                      </select>
-                      {guessed && <span className="font-sans text-[10px] text-state-warn" title={`Template says ${r} — guessed, please confirm`}>was:{r}?</span>}
-                      {!matched && !guessed && <span className="font-sans text-[10px] text-slate-400">was:{r}</span>}
-                    </span>
-                  );
-                })}
-              </div>
-            </div>
-          )}
+          <RemapTables sql={instTpl.sqlTemplate} members={members} map={instMap} setMap={setInstMap} />
           <p className="text-sm text-slate-500">Creates an independent dormant copy on the line{tables.length > 0 ? ` over ${tables.join(", ")}` : ""}. Test it, then go live.</p>
           <div className="mt-3 flex justify-end gap-2">
             <button onClick={() => setInstTpl(null)} className="rounded-lg px-4 py-2 text-sm text-slate-500 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800">cancel</button>
@@ -948,6 +1128,91 @@ export function Cards() {
               ).then(() => { setInstTpl(null); setInstMap({}); setTab("cards"); }))}
             >
               Instantiate dormant
+            </Btn>
+          </div>
+        </Modal>
+        );
+      })()}
+
+      {dupTpl && (() => {
+        const line = lines.find((l) => l.id === dupLine);
+        const members = line?.memberTables ?? [];
+        const ds = remapState(dupTpl.sqlTemplate, members, dupMap);
+        return (
+        <Modal title={`Duplicate "${dupTpl.name}" onto a line`} onClose={() => setDupTpl(null)}>
+          <Field label="Line — the new copy lives here">
+            <div className="relative">
+              <Search size={18} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                value={dupSearch}
+                onChange={(e) => { setDupSearch(e.target.value); setDupSug(true); }}
+                onFocus={() => setDupSug(true)}
+                onBlur={() => setDupSug(false)}
+                placeholder={line ? `${line.id} — ${line.name}` : "Search lines by name or id…"}
+                className="w-full rounded-lg border border-slate-300 bg-transparent py-3 pl-10 pr-3 text-base focus:border-accent-500 focus:outline-none dark:border-ink-700"
+              />
+              {dupSug && (() => {
+                const q = dupSearch.trim().toLowerCase();
+                const scored = lines.map((l) => {
+                  if (!q) return { l, score: 0 };
+                  const fields = [l.id, l.name, ...l.memberTables];
+                  let best = -1;
+                  for (const f of fields) {
+                    const fl = f.toLowerCase();
+                    if (fl.startsWith(q)) { best = Math.max(best, 2); break; }
+                    if (fl.includes(q)) best = Math.max(best, 1);
+                  }
+                  return { l, score: best };
+                }).filter((s) => (q ? s.score > 0 : true));
+                scored.sort((a, b) => b.score - a.score);
+                const hits = scored.slice(0, 8).map((s) => s.l);
+                if (hits.length === 0) return null;
+                return (
+                  <div className="absolute inset-x-0 top-full z-30 mt-1 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg dark:border-ink-700 dark:bg-ink-900">
+                    {hits.map((l) => (
+                      <button
+                        key={l.id}
+                        type="button"
+                        onMouseDown={() => { setDupLine(l.id); setDupMap({}); setDupSearch(""); setDupSug(false); }}
+                        className={`flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm transition-colors hover:bg-slate-100 focus:outline-none dark:hover:bg-ink-800 ${l.id === dupLine ? "bg-slate-50 dark:bg-ink-800/60" : ""}`}
+                      >
+                        <span className={`h-2 w-2 shrink-0 rounded-full ${l.active ? "bg-state-ok" : "bg-slate-300 dark:bg-ink-600"}`} />
+                        <span className="font-medium">{l.name}</span>
+                        <span className="font-mono text-xs text-slate-400">{l.id}</span>
+                        <span className="tnum ml-auto text-xs text-slate-400">{l.memberTables.length} tables</span>
+                      </button>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
+            {line && (
+              <div className="mt-1 text-xs text-slate-500">
+                attached tables:{" "}
+                {members.length === 0
+                  ? <span className="text-slate-400">none — add some in Lines first</span>
+                  : members.map((m) => (
+                    <span key={m} className="mr-1 font-mono text-slate-500 dark:text-ink-300">{m}</span>
+                  ))}
+              </div>
+            )}
+          </Field>
+          <Field label="Copy name"><input value={dupName} onChange={(e) => setDupName(e.target.value)} className={inp} /></Field>
+          <RemapTables sql={dupTpl.sqlTemplate} members={members} map={dupMap} setMap={setDupMap} />
+          <p className="mt-2 text-sm text-slate-500">Creates an independent dormant copy on {dupLine || "…"} — edit its tables above, test it, then go live.</p>
+          <div className="mt-3 flex justify-end gap-2">
+            <button onClick={() => setDupTpl(null)} className="rounded-lg px-4 py-2 text-sm text-slate-500 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800">cancel</button>
+            <Btn
+              variant="primary"
+              icon={Copy}
+              disabled={ds.blocked || members.length === 0 || !dupLine || !dupName.trim()}
+              title={members.length === 0 ? "This line has no member tables yet" : ds.blocked ? "Map every table above first" : "Create the dormant copy on this line"}
+              onClick={() => void act(() => cardApi.instantiate(
+                dupTpl.id,
+                ds.refs.length > 0 ? { lineId: dupLine, name: dupName.trim(), sql: ds.preview, tables: ds.tables } : { lineId: dupLine, name: dupName.trim() },
+              ).then(() => { setDupTpl(null); setDupMap({}); setTab("cards"); }))}
+            >
+              Create dormant copy
             </Btn>
           </div>
         </Modal>

@@ -176,6 +176,11 @@ export function openStore(path: string): Database.Database {
     );
     CREATE INDEX IF NOT EXISTS idx_query_history_line ON query_history(line_id, created_at);
   `);
+  // Lightweight migration: reference line a template was authored against.
+  const tplCols = db.prepare("PRAGMA table_info(card_templates)").all() as { name: string }[];
+  if (!tplCols.some((c) => c.name === "reference_line_id")) {
+    db.exec("ALTER TABLE card_templates ADD COLUMN reference_line_id TEXT");
+  }
   return db;
 }
 
@@ -440,6 +445,7 @@ export interface CardTemplate {
   id: string;
   name: string;
   description: string;
+  referenceLineId: string | null;
   sqlTemplate: string;
   granularity: Granularity;
   unit: string;
@@ -479,6 +485,7 @@ function tplRow(r: Record<string, unknown>): CardTemplate {
     id: r.id as string,
     name: r.name as string,
     description: (r.description as string) ?? "",
+    referenceLineId: (r.reference_line_id as string) ?? null,
     sqlTemplate: (r.sql_template as string) ?? "",
     granularity: r.granularity as Granularity,
     unit: (r.unit as string) ?? "",
@@ -534,10 +541,10 @@ export function createTemplate(t: Omit<CardTemplate, "id" | "version" | "created
   const now = new Date().toISOString();
   getDb()
     .prepare(
-      `INSERT INTO card_templates (id,name,description,sql_template,granularity,unit,extract_hint,version,created_at,updated_at)
-       VALUES (?,?,?,?,?,?,?,1,?,?)`
+      `INSERT INTO card_templates (id,name,description,reference_line_id,sql_template,granularity,unit,extract_hint,version,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,1,?,?)`
     )
-    .run(id, t.name, t.description, t.sqlTemplate, t.granularity, t.unit, t.extractHint, now, now);
+    .run(id, t.name, t.description, t.referenceLineId ?? null, t.sqlTemplate, t.granularity, t.unit, t.extractHint, now, now);
   return getTemplate(id)!;
 }
 
@@ -552,12 +559,13 @@ export function updateTemplate(id: string, patch: Partial<Omit<CardTemplate, "id
   const bump = patch.sqlTemplate !== undefined && patch.sqlTemplate !== cur.sqlTemplate;
   getDb()
     .prepare(
-      `UPDATE card_templates SET name=?,description=?,sql_template=?,granularity=?,unit=?,extract_hint=?,
+      `UPDATE card_templates SET name=?,description=?,reference_line_id=?,sql_template=?,granularity=?,unit=?,extract_hint=?,
        version=version+?,updated_at=? WHERE id=?`
     )
     .run(
       patch.name ?? cur.name,
       patch.description ?? cur.description,
+      patch.referenceLineId !== undefined ? patch.referenceLineId : cur.referenceLineId,
       patch.sqlTemplate ?? cur.sqlTemplate,
       patch.granularity ?? cur.granularity,
       patch.unit ?? cur.unit,
