@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { cardApi, api, graphApi, playgroundApi, type Card, type CardTemplate, type Line, type ReapplyResult, type TestResult, type GraphSpec, type ChartType, type PlaygroundResult, type QueryHistoryEntry, type LineColumn } from "../lib/api";
+import { cardApi, api, bankApi, graphApi, playgroundApi, type BankOverviewEntry, type Card, type CardTemplate, type Line, type ReapplyResult, type TestResult, type GraphSpec, type ChartType, type PlaygroundResult, type QueryHistoryEntry, type LineColumn } from "../lib/api";
 import { AlertBanner, StatusChip } from "../components/chips";
+import { PushToHindsight } from "../components/PushToHindsight";
 import { SqlHint } from "../components/SqlHint";
 
 /** Ticks per day by granularity — one source query per tick per card copy. */
@@ -30,6 +31,9 @@ export function Cards() {
   const [graphCard, setGraphCard] = useState<Card | null>(null);
   const [cardGraphs, setCardGraphs] = useState<Record<string, GraphSpec[]>>({});
   const [activeModel, setActiveModel] = useState<string | null>(null);
+  const [banks, setBanks] = useState<Record<string, BankOverviewEntry>>({});
+  const [pushLine, setPushLine] = useState<{ id: string; name: string } | null>(null);
+  const [liveNudge, setLiveNudge] = useState<{ cardId: string; cardName: string; lineId: string } | null>(null);
 
   // Playground state
   const [pgLineId, setPgLineId] = useState("");
@@ -55,6 +59,11 @@ export function Cards() {
       } catch {
         setActiveModel(null);
       }
+      bankApi.overview().then((o) => {
+        const m: Record<string, BankOverviewEntry> = {};
+        for (const b of o.banks) m[b.lineId] = b;
+        setBanks(m);
+      }).catch(() => {});
       const gMap: Record<string, GraphSpec[]> = {};
       await Promise.all(c.map(async (card) => {
         try { gMap[card.id] = await graphApi.listForCard(card.id); } catch { gMap[card.id] = []; }
@@ -105,6 +114,25 @@ export function Cards() {
     return c.status === "dormant" && c.sql.trim().length > 0;
   }
 
+  function openBankDrawer(lineId: string) {
+    const l = lines.find((x) => x.id === lineId);
+    setPushLine({ id: lineId, name: l?.name ?? lineId });
+  }
+
+  async function onActivate(c: Card) {
+    setLiveNudge(null);
+    await act(() => cardApi.activateCard(c.id));
+    try {
+      const o = await bankApi.overview();
+      const m: Record<string, BankOverviewEntry> = {};
+      for (const b of o.banks) m[b.lineId] = b;
+      setBanks(m);
+      if (!m[c.lineId]?.ready) {
+        setLiveNudge({ cardId: c.id, cardName: c.name, lineId: c.lineId });
+      }
+    } catch { /* banks overview is best-effort; activation already succeeded */ }
+  }
+
   return (
     <div>
       <h1 className="text-2xl font-bold">
@@ -115,6 +143,14 @@ export function Cards() {
       </p>
 
       {error && <div className="mt-4"><AlertBanner tone="bad" title="Request failed" detail={error} /></div>}
+
+      {liveNudge && (
+        <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-state-ok/50 px-4 py-3 text-sm">
+          <span><b>{liveNudge.cardName}</b> is live ✓ — line bank <span className="font-mono">bank:line-{liveNudge.lineId}</span> is not configured yet. Ticks will retain with Hindsight defaults until you push.</span>
+          <button onClick={() => openBankDrawer(liveNudge.lineId)} className="rounded-lg bg-accent-500 px-3 py-1 font-semibold text-white">Review &amp; push →</button>
+          <button onClick={() => setLiveNudge(null)} className="text-slate-400">dismiss</button>
+        </div>
+      )}
 
       <div className="mt-6 flex gap-2">
         {(["cards", "templates", "playground"] as const).map((t) => (
@@ -184,9 +220,26 @@ export function Cards() {
                 <button onClick={() => setGraphCard(c)} className="rounded-lg border border-slate-300 px-3 py-1 dark:border-ink-700">
                   Graph {(cardGraphs[c.id]?.length ?? 0) > 0 && <span className="tnum">({cardGraphs[c.id].length})</span>}
                 </button>
+                {(() => {
+                  const b = banks[c.lineId];
+                  if (b?.ready) {
+                    return <button onClick={() => openBankDrawer(c.lineId)} title={`bank:line-${c.lineId} ready — review or re-push`} className="rounded-lg border border-state-ok/50 px-3 py-1 text-state-ok">bank ✓</button>;
+                  }
+                  const green = c.lastTest?.ok === true;
+                  return (
+                    <button
+                      onClick={() => openBankDrawer(c.lineId)}
+                      disabled={!green}
+                      title={green ? `Preview bank:line-${c.lineId} and push to Hindsight` : "Test-run this card green first, then push its line bank"}
+                      className="rounded-lg border border-slate-300 px-3 py-1 text-accent-500 disabled:opacity-40 dark:border-ink-700"
+                    >
+                      {b?.draftSaved ? "bank draft" : "→ hindsight"}
+                    </button>
+                  );
+                })()}
                 {c.status === "dormant" ? (
                   <>
-                    <button onClick={() => void act(() => cardApi.activateCard(c.id))} disabled={!canActivate(c)} className="rounded-lg border border-state-ok/50 px-3 py-1 text-state-ok disabled:opacity-40">Go live</button>
+                    <button onClick={() => void onActivate(c)} disabled={!canActivate(c)} className="rounded-lg border border-state-ok/50 px-3 py-1 text-state-ok disabled:opacity-40">Go live</button>
                     <button onClick={() => { setEditCard(c); setCardDraft({ lineId: c.lineId, name: c.name, tables: c.tables.join(", "), sql: c.sql, granularity: c.granularity, unit: c.unit, extractHint: c.extractHint, threshold: c.threshold != null ? String(c.threshold) : "", changeMode: "forward", reingestFrom: "" }); setShowCardForm(true); }} className="rounded-lg border border-slate-300 px-3 py-1 dark:border-ink-700">edit</button>
                     <button onClick={() => { if (confirm(`Delete card "${c.name}" on ${c.lineId}?`)) void act(() => cardApi.deleteCard(c.id)); }} className="rounded-lg border border-state-bad/50 px-3 py-1 text-state-bad">delete</button>
                   </>
@@ -407,6 +460,18 @@ export function Cards() {
 
       {graphCard && (
         <GraphDesigner card={graphCard} onClose={() => { setGraphCard(null); refresh(); }} />
+      )}
+
+      {pushLine && (
+        <PushToHindsight
+          lineId={pushLine.id}
+          lineName={pushLine.name}
+          onClose={() => setPushLine(null)}
+          onPushed={() => {
+            void refresh();
+            if (liveNudge && liveNudge.lineId === pushLine.id) setLiveNudge(null);
+          }}
+        />
       )}
     </div>
   );

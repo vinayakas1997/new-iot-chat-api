@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { bankApi, type BankPlan, type BankPreview } from "../lib/api";
+import { bankApi, cardApi, type BankPlan, type BankPreview, type Card } from "../lib/api";
 import { AlertBanner, StatusChip } from "./chips";
 
 const inp = "mt-1 w-full rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-ink-700";
@@ -33,12 +33,14 @@ export function PushToHindsight({ lineId, lineName, onClose, onPushed }: {
   const [saving, setSaving] = useState(false);
   const [pushing, setPushing] = useState(false);
   const [result, setResult] = useState<{ bankId: string; directivesCreated: number; mentalModelOp: string | null; warnings: string[] } | null>(null);
+  const [lineCards, setLineCards] = useState<Card[] | null>(null);
 
   useEffect(() => {
     bankApi.preview(lineId).then((p) => {
       setPreview(p);
       setPlan(planFromPreview(p));
     }).catch((e) => setError((e as Error).message));
+    cardApi.listCards().then((all) => setLineCards(all.filter((c) => c.lineId === lineId))).catch(() => setLineCards([]));
   }, [lineId]);
 
   async function onSuggest(kind: SuggestKind) {
@@ -151,6 +153,22 @@ export function PushToHindsight({ lineId, lineName, onClose, onPushed }: {
 
             <div className="text-xs uppercase tracking-widest text-slate-400">
               source columns · {preview.tables.map((t) => t.table).join(", ") || "—"}
+            </div>
+
+            <div className="rounded-lg bg-slate-100 p-2 text-xs dark:bg-ink-800">
+              <span className="uppercase tracking-widest text-slate-400">cards feeding this bank · </span>
+              {lineCards === null && <span className="text-slate-400">loading…</span>}
+              {lineCards !== null && lineCards.length === 0 && <span className="text-slate-400">none yet</span>}
+              {lineCards !== null && lineCards.map((c) => (
+                <span key={c.id} className="mr-2 inline-flex items-center gap-1">
+                  <span className="font-medium">{c.name}</span>
+                  <span className="tnum text-slate-400">v{c.version}</span>
+                  <StatusChip tone={c.status === "live" ? "ok" : "mute"}>{c.status}</StatusChip>
+                  {c.lastTest
+                    ? <span className={c.lastTest.ok ? "text-state-ok" : "text-state-bad"}>{c.lastTest.ok ? "green" : "red"}</span>
+                    : <span className="text-slate-400">untested</span>}
+                </span>
+              ))}
             </div>
 
             <section>
