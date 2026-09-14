@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { cardApi, api, graphApi, playgroundApi, type Card, type CardTemplate, type Line, type ReapplyResult, type TestResult, type GraphSpec, type ChartType, type PlaygroundResult, type QueryHistoryEntry, type LineColumn } from "../lib/api";
 import { AlertBanner, StatusChip } from "../components/chips";
 
@@ -27,6 +28,7 @@ export function Cards() {
   const [editCard, setEditCard] = useState<Card | null>(null);
   const [graphCard, setGraphCard] = useState<Card | null>(null);
   const [cardGraphs, setCardGraphs] = useState<Record<string, GraphSpec[]>>({});
+  const [activeModel, setActiveModel] = useState<string | null>(null);
 
   // Playground state
   const [pgLineId, setPgLineId] = useState("");
@@ -46,6 +48,12 @@ export function Cards() {
       setCards(c);
       setTemplates(t);
       setLines(l.filter((x) => x.active));
+      try {
+        const a = await fetch("/api/ingest/llm/active").then((r) => r.json() as Promise<{ active: { activeModel: string } | null }>);
+        setActiveModel(a.active?.activeModel ?? null);
+      } catch {
+        setActiveModel(null);
+      }
       const gMap: Record<string, GraphSpec[]> = {};
       await Promise.all(c.map(async (card) => {
         try { gMap[card.id] = await graphApi.listForCard(card.id); } catch { gMap[card.id] = []; }
@@ -117,7 +125,14 @@ export function Cards() {
             {t === "cards" ? `Cards (${cards.length})` : t === "templates" ? `Templates (${templates.length})` : "Playground"}
           </button>
         ))}
-        <div className="ml-auto flex gap-2">
+        <div className="ml-auto flex items-center gap-2">
+          <Link
+            to="/setter/hindsight"
+            title={activeModel ? `Active LLM: ${activeModel}` : "No LLM active — connect one"}
+            className="rounded-lg border border-slate-300 px-4 py-2 text-sm dark:border-ink-700"
+          >
+            <span className={activeModel ? "text-state-ok" : "text-slate-400"}>●</span> AI settings{activeModel ? ` · ${activeModel}` : ""}
+          </Link>
             {tab === "cards"
             ? <button onClick={() => { setEditCard(null); setCardDraft({ lineId: lines[0]?.id ?? "", name: "", tables: "", sql: "", granularity: "hourly", unit: "", extractHint: "", threshold: "", changeMode: "forward", reingestFrom: "" }); setShowCardForm(true); }} className="rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white">New card</button>
             : <button onClick={() => { setTplDraft({ name: "", description: "", sqlTemplate: "", granularity: "hourly", unit: "", extractHint: "" }); setShowTplForm(true); }} className="rounded-lg bg-accent-500 px-4 py-2 text-sm font-semibold text-white">New template</button>}
