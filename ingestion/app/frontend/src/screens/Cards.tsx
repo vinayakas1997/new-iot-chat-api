@@ -135,6 +135,8 @@ export function Cards() {
   const [showSuggest, setShowSuggest] = useState(false);
   const [tablesOpenTpl, setTablesOpenTpl] = useState<string | null>(null);
   const [tplPickLine, setTplPickLine] = useState("");
+  const [tplLineSearch, setTplLineSearch] = useState("");
+  const [showLineSug, setShowLineSug] = useState(false);
   const tplSqlRef = useRef<HTMLTextAreaElement>(null);
 
   // Playground state
@@ -403,7 +405,7 @@ export function Cards() {
           </Link>
             {tab === "cards"
             ? <Btn variant="primary" icon={Plus} onClick={() => { setEditCard(null); setCardDraft({ lineId: lines[0]?.id ?? "", name: "", tables: "", sql: "", granularity: "hourly", unit: "", extractHint: "", threshold: "", changeMode: "forward", reingestFrom: "" }); setShowCardForm(true); }}>New card</Btn>
-            : <Btn variant="primary" icon={Plus} onClick={() => { setTplDraft({ name: "", description: "", sqlTemplate: "", granularity: "hourly", unit: "", extractHint: "" }); setShowTplForm(true); }}>New template</Btn>}
+            : <Btn variant="primary" icon={Plus} onClick={() => { setTplDraft({ name: "", description: "", sqlTemplate: "", granularity: "hourly", unit: "", extractHint: "" }); setTplPickLine(""); setTplLineSearch(""); setShowTplForm(true); }}>New template</Btn>}
         </div>
       </div>
 
@@ -737,35 +739,68 @@ export function Cards() {
         <Modal title="New template" onClose={() => setShowTplForm(false)}>
           <Field label="Name"><input value={tplDraft.name} onChange={(e) => setTplDraft({ ...tplDraft, name: e.target.value })} className={inp} /></Field>
           <Field label="Description"><input value={tplDraft.description} onChange={(e) => setTplDraft({ ...tplDraft, description: e.target.value })} className={inp} /></Field>
-          <Field label="SQL template ({{from}} / {{to}} for windowed test-runs)">
-            <SqlHint
-              onInsert={(sql) => {
-                if (tplDraft.sqlTemplate.trim() && !confirm("Replace the current SQL template with this example?")) return;
-                setTplDraft({ ...tplDraft, sqlTemplate: sql });
-              }}
-            />
-            <textarea ref={tplSqlRef} rows={5} value={tplDraft.sqlTemplate} onChange={(e) => setTplDraft({ ...tplDraft, sqlTemplate: e.target.value })} className={`${inp} font-mono`} />
+          <Field label="Line — the tables below come from here">
+            <div className="relative">
+              <Search size={18} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                value={tplLineSearch}
+                onChange={(e) => { setTplLineSearch(e.target.value); setShowLineSug(true); }}
+                onFocus={() => setShowLineSug(true)}
+                onBlur={() => setShowLineSug(false)}
+                placeholder="Search lines by name or id…"
+                className="w-full rounded-lg border border-slate-300 bg-transparent py-3 pl-10 pr-3 text-base focus:border-accent-500 focus:outline-none dark:border-ink-700"
+              />
+              {showLineSug && (() => {
+                const q = tplLineSearch.trim().toLowerCase();
+                const scored = lines.map((l) => {
+                  if (!q) return { l, score: 0 };
+                  const fields = [l.id, l.name, ...l.memberTables];
+                  let best = -1;
+                  for (const f of fields) {
+                    const fl = f.toLowerCase();
+                    if (fl.startsWith(q)) { best = Math.max(best, 2); break; }
+                    if (fl.includes(q)) best = Math.max(best, 1);
+                  }
+                  return { l, score: best };
+                }).filter((s) => (q ? s.score > 0 : true));
+                scored.sort((a, b) => b.score - a.score);
+                const hits = scored.slice(0, 8).map((s) => s.l);
+                if (hits.length === 0) return null;
+                return (
+                  <div className="absolute inset-x-0 top-full z-30 mt-1 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg dark:border-ink-700 dark:bg-ink-900">
+                    {hits.map((l) => (
+                      <button
+                        key={l.id}
+                        type="button"
+                        onMouseDown={() => { setTplPickLine(l.id); setTplLineSearch(`${l.id} — ${l.name}`); setShowLineSug(false); }}
+                        className={`flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm transition-colors hover:bg-slate-100 focus:outline-none dark:hover:bg-ink-800 ${l.id === tplPickLine ? "bg-slate-50 dark:bg-ink-800/60" : ""}`}
+                      >
+                        <span className={`h-2 w-2 shrink-0 rounded-full ${l.active ? "bg-state-ok" : "bg-slate-300 dark:bg-ink-600"}`} title={l.active ? "ingesting" : "deregistered"} />
+                        <span className="font-medium">{l.name}</span>
+                        <span className="font-mono text-xs text-slate-400">{l.id}</span>
+                        <span className="tnum ml-auto text-xs text-slate-400">{l.memberTables.length} tables</span>
+                      </button>
+                    ))}
+                  </div>
+                );
+              })()}
+            </div>
             {(() => {
               const pick = lines.find((l) => l.id === tplPickLine) ?? lines[0];
               if (!pick) return null;
               return (
-                <div className="mt-1 flex flex-wrap items-center gap-1 text-xs">
-                  <select
-                    value={pick.id}
-                    onChange={(e) => setTplPickLine(e.target.value)}
-                    title="Pick a line to see its tables"
-                    className="rounded border border-slate-300 bg-transparent px-1.5 py-0.5 text-slate-500 focus:border-accent-500 focus:outline-none dark:border-ink-700"
-                  >
-                    {lines.map((l) => <option key={l.id} value={l.id}>{l.id}</option>)}
-                  </select>
-                  {pick.memberTables.length === 0 && <span className="text-slate-400">no tables on this line</span>}
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  <span className="tnum text-sm text-slate-500">
+                    <span className="font-mono">{pick.id}</span> · {pick.memberTables.length} tables — click to insert:
+                  </span>
+                  {pick.memberTables.length === 0 && <span className="text-sm text-slate-400">no tables on this line — add some in Lines first</span>}
                   {pick.memberTables.map((m) => (
                     <button
                       key={m}
                       type="button"
                       onClick={() => insertAtCursor(tplSqlRef, tplDraft.sqlTemplate, (v) => setTplDraft({ ...tplDraft, sqlTemplate: v }), m)}
                       title={`Insert ${m} at cursor`}
-                      className="rounded border border-slate-200 px-1.5 py-0.5 font-mono transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:border-ink-700 dark:hover:bg-ink-800"
+                      className="rounded-lg border border-slate-200 px-2.5 py-1 font-mono text-sm transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:border-ink-700 dark:hover:bg-ink-800"
                     >
                       {m}
                     </button>
@@ -773,18 +808,44 @@ export function Cards() {
                 </div>
               );
             })()}
-            {tplDraft.sqlTemplate.trim() && (
-              <div className="mt-1 rounded bg-slate-50 p-2 dark:bg-ink-900/50">
-                <div className="overflow-auto whitespace-pre-wrap font-mono text-xs leading-relaxed">
-                  {tokenizeSqlTables(tplDraft.sqlTemplate).map((tok, i) => (
-                    tok.kind === "text"
-                      ? <span key={i}>{tok.text}</span>
-                      : <code key={i} className="rounded bg-accent-500/10 px-1 text-accent-500 ring-1 ring-accent-500/30">{tok.ref}</code>
-                  ))}
+          </Field>
+          <Field label="SQL template ({{from}} / {{to}} for windowed test-runs)">
+            <SqlHint
+              onInsert={(sql) => {
+                if (tplDraft.sqlTemplate.trim() && !confirm("Replace the current SQL template with this example?")) return;
+                setTplDraft({ ...tplDraft, sqlTemplate: sql });
+              }}
+            />
+            {(() => {
+              const pick = lines.find((l) => l.id === tplPickLine) ?? lines[0];
+              const members = pick?.memberTables ?? [];
+              return (
+                <div className="relative rounded-lg border border-slate-300 transition-colors focus-within:border-accent-500 dark:border-ink-700">
+                  <pre
+                    aria-hidden
+                    className="m-0 min-h-[10rem] whitespace-pre-wrap break-words p-3 font-mono text-sm leading-relaxed text-slate-800 dark:text-ink-100"
+                  >
+                    {tokenizeSqlTables(tplDraft.sqlTemplate).map((tok, i) => (
+                      tok.kind === "text"
+                        ? <span key={i}>{tok.text}</span>
+                        : matchMember(tok.ref, members)
+                          ? <code key={i} className="rounded bg-accent-500/15 px-1 text-accent-500 ring-1 ring-accent-500/40">{tok.ref}</code>
+                          : <code key={i} className="rounded bg-state-warn/15 px-1 text-state-warn ring-1 ring-state-warn/40" title="not on the picked line">{tok.ref}</code>
+                    ))}
+                    {"\n"}
+                  </pre>
+                  <textarea
+                    ref={tplSqlRef}
+                    value={tplDraft.sqlTemplate}
+                    onChange={(e) => setTplDraft({ ...tplDraft, sqlTemplate: e.target.value })}
+                    placeholder="SELECT avg(temp_c) FROM readings_temp WHERE ts >= '{{from}}' AND ts < '{{to}}'"
+                    spellCheck={false}
+                    className="absolute inset-0 h-full w-full resize-none overflow-hidden bg-transparent p-3 font-mono text-sm leading-relaxed text-transparent caret-slate-800 selection:bg-accent-500/30 focus:outline-none dark:caret-slate-100 dark:selection:bg-accent-500/40 placeholder:text-slate-400"
+                  />
                 </div>
-                <div className="mt-1 text-[11px] text-slate-400">highlighted words are table names — swap them per line at Instantiate → line.</div>
-              </div>
-            )}
+              );
+            })()}
+            <div className="mt-1 text-[11px] text-slate-400">table names light up inside the box — teal = on the picked line, amber = missing there. Swap per line at Instantiate → line.</div>
           </Field>
           <div className="flex gap-3">
             <Field label="Granularity">
