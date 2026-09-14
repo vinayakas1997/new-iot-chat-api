@@ -7,6 +7,7 @@ import {
   lastCheck,
   linesBoundTo,
   listConnections,
+  recordCheck,
   redact,
   updateConnection,
 } from "../db/store.js";
@@ -70,11 +71,15 @@ export async function connectionRoutes(app: FastifyInstance) {
 
   // Test: read-only probe, never saves (F1 lock). Body may carry an
   // unsaved connection draft OR {id} of a stored one.
+  // When {id} is given (explicit per-row Check), the result is also
+  // recorded via recordCheck() so Status + Last check update immediately
+  // without waiting for the poller. Draft probes stay pure (no record).
   app.post("/api/ingest/connections/test", async (req, reply) => {
     const body = req.body as { id?: string } & Record<string, unknown>;
+    const storedId = body.id;
     let conn;
-    if (body.id) {
-      const stored = getConnection(body.id);
+    if (storedId) {
+      const stored = getConnection(storedId);
       if (!stored) return reply.code(404).send({ error: "not found" });
       conn = stored;
     } else {
@@ -93,9 +98,30 @@ export async function connectionRoutes(app: FastifyInstance) {
     }
     try {
       const r = await driverFor(conn).probe(conn);
+      if (storedId) {
+        recordCheck({
+          connectionId: storedId,
+          at: new Date().toISOString(),
+          ok: true,
+          latencyMs: r.latencyMs,
+          tableCount: r.tables.length,
+          error: null,
+        });
+      }
       return { ok: true, latencyMs: r.latencyMs, tableCount: r.tables.length };
     } catch (e) {
-      return reply.code(502).send({ ok: false, error: (e as Error).message });
+      const error = (e as Error).message;
+      if (storedId) {
+        recordCheck({
+          connectionId: storedId,
+          at: new Date().toISOString(),
+          ok: false,
+          latencyMs: null,
+          tableCount: null,
+          error,
+        });
+      }
+      return reply.code(502).send({ ok: false, error });
     }
   });
 

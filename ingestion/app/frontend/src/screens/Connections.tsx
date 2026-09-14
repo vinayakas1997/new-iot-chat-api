@@ -31,6 +31,7 @@ export function Connections() {
   const [draft, setDraft] = useState<Draft>(EMPTY);
   const [testing, setTesting] = useState(false);
   const [testMsg, setTestMsg] = useState<string | null>(null);
+  const [checkingId, setCheckingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const [tables, setTables] = useState<TableRef[] | null>(null);
@@ -99,6 +100,20 @@ export function Connections() {
     await api.deleteConnection(c.id);
     if (openId === c.id) setOpenId(null);
     await refresh();
+  }
+
+  async function onCheck(c: Connection) {
+    setCheckingId(c.id);
+    setError(null);
+    try {
+      await api.testConnection({ id: c.id });
+      await refresh();
+    } catch (e) {
+      await refresh();
+      setError((e as Error).message);
+    } finally {
+      setCheckingId(null);
+    }
   }
 
   async function openRow(c: Connection) {
@@ -197,6 +212,13 @@ export function Connections() {
                     {c.lastCheck ? new Date(c.lastCheck.at).toLocaleTimeString() : "—"}
                   </td>
                   <td className="py-2.5" onClick={(e) => e.stopPropagation()}>
+                    <button
+                      onClick={() => void onCheck(c)}
+                      disabled={checkingId === c.id}
+                      className="mr-3 text-accent-500 disabled:opacity-50"
+                    >
+                      {checkingId === c.id ? "checking…" : "check"}
+                    </button>
                     <button onClick={() => openForm(c)} className="mr-3 text-accent-500">edit</button>
                     <button onClick={() => void onDelete(c)} className="text-state-bad">delete</button>
                   </td>
