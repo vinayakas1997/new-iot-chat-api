@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  ArrowRight, Brain, ChartLine, ClipboardCheck, Copy, Eye, FlaskConical, History as HistoryIcon,
+  ArrowRight, Brain, ChartLine, ChevronDown, ClipboardCheck, Copy, Eye, FlaskConical, History as HistoryIcon,
   ListChecks, Pause, Pencil, Play, Plus, Rocket, Save, Search, Trash2, X,
 } from "lucide-react";
 import { Btn, Segmented, Spinner } from "../components/ui";
@@ -12,6 +12,26 @@ import { FormattedText } from "../components/FormattedText";
 import { PushToHindsight } from "../components/PushToHindsight";
 import { SqlHint } from "../components/SqlHint";
 
+/** Insert text at the textarea cursor (falls back to append). */
+export function insertAtCursor(
+  ref: React.RefObject<HTMLTextAreaElement>,
+  cur: string,
+  set: (v: string) => void,
+  text: string,
+) {
+  const el = ref.current;
+  if (!el) {
+    set(cur ? `${cur} ${text}` : text);
+    return;
+  }
+  const s = el.selectionStart ?? cur.length;
+  const e = el.selectionEnd ?? cur.length;
+  set(`${cur.slice(0, s)}${text}${cur.slice(e)}`);
+  requestAnimationFrame(() => {
+    el.focus();
+    el.selectionStart = el.selectionEnd = s + text.length;
+  });
+}
 /** Ticks per day by granularity — one source query per tick per card copy. */
 export const TICKS_PER_DAY: Record<Card["granularity"], number> = { hourly: 24, shift: 3, daily: 1 };
 export function tickCost(c: Pick<Card, "granularity">): number {
@@ -113,6 +133,9 @@ export function Cards() {
   const [grouped, setGrouped] = useState(true);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [showSuggest, setShowSuggest] = useState(false);
+  const [tablesOpenTpl, setTablesOpenTpl] = useState<string | null>(null);
+  const [tplPickLine, setTplPickLine] = useState("");
+  const tplSqlRef = useRef<HTMLTextAreaElement>(null);
 
   // Playground state
   const [pgLineId, setPgLineId] = useState("");
@@ -556,6 +579,53 @@ export function Cards() {
                   </div>
                 );
               })()}
+              {(() => {
+                const refs = sqlTableRefs(t.sqlTemplate);
+                const open = tablesOpenTpl === t.id;
+                return (
+                  <div className="mt-2">
+                    <button
+                      onClick={() => setTablesOpenTpl(open ? null : t.id)}
+                      className="inline-flex items-center gap-1 text-xs text-accent-500 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60"
+                    >
+                      <ChevronDown size={12} className={`transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
+                      Tables ({refs.length})
+                    </button>
+                    {open && (
+                      <div className="anim-fade-in mt-1 rounded-lg bg-slate-50 p-2 dark:bg-ink-900/50">
+                        <div className="text-xs text-slate-500">
+                          In this SQL:{" "}
+                          {refs.length === 0
+                            ? <span className="text-slate-400">no FROM/JOIN tables detected</span>
+                            : refs.map((r) => (
+                              <code key={r} className="mr-1 rounded bg-accent-500/10 px-1 font-mono text-accent-500 ring-1 ring-accent-500/30">{r}</code>
+                            ))}
+                        </div>
+                        {cards.filter((c) => c.templateId === t.id).length === 0
+                          ? <div className="mt-1 text-xs text-slate-400">no copies yet — instantiate to land these tables on a line</div>
+                          : [...new Set(cards.filter((c) => c.templateId === t.id).map((c) => c.lineId))].map((lineId) => {
+                            const l = lines.find((x) => x.id === lineId);
+                            const members = l?.memberTables ?? [];
+                            const missing = refs.filter((r) => !matchMember(r, members));
+                            return (
+                              <div key={lineId} className="mt-1 text-xs">
+                                <span className="text-slate-500">On <span className="font-mono">{lineId}</span>: </span>
+                                {members.length === 0
+                                  ? <span className="text-slate-400">line gone or no tables</span>
+                                  : members.map((m) => (
+                                    <span key={m} className="mr-1 font-mono text-slate-500 dark:text-ink-300">{m}</span>
+                                  ))}
+                                {missing.length > 0 && members.length > 0 && (
+                                  <span className="text-state-warn"> — template needs {missing.join(", ")} here</span>
+                                )}
+                              </div>
+                            );
+                          })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
               {reapplyByTpl[t.id] && (() => {
                 const out = reapplyByTpl[t.id];
                 const applied = appliedByTpl[t.id];
@@ -674,7 +744,35 @@ export function Cards() {
                 setTplDraft({ ...tplDraft, sqlTemplate: sql });
               }}
             />
-            <textarea rows={5} value={tplDraft.sqlTemplate} onChange={(e) => setTplDraft({ ...tplDraft, sqlTemplate: e.target.value })} className={`${inp} font-mono`} />
+            <textarea ref={tplSqlRef} rows={5} value={tplDraft.sqlTemplate} onChange={(e) => setTplDraft({ ...tplDraft, sqlTemplate: e.target.value })} className={`${inp} font-mono`} />
+            {(() => {
+              const pick = lines.find((l) => l.id === tplPickLine) ?? lines[0];
+              if (!pick) return null;
+              return (
+                <div className="mt-1 flex flex-wrap items-center gap-1 text-xs">
+                  <select
+                    value={pick.id}
+                    onChange={(e) => setTplPickLine(e.target.value)}
+                    title="Pick a line to see its tables"
+                    className="rounded border border-slate-300 bg-transparent px-1.5 py-0.5 text-slate-500 focus:border-accent-500 focus:outline-none dark:border-ink-700"
+                  >
+                    {lines.map((l) => <option key={l.id} value={l.id}>{l.id}</option>)}
+                  </select>
+                  {pick.memberTables.length === 0 && <span className="text-slate-400">no tables on this line</span>}
+                  {pick.memberTables.map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => insertAtCursor(tplSqlRef, tplDraft.sqlTemplate, (v) => setTplDraft({ ...tplDraft, sqlTemplate: v }), m)}
+                      title={`Insert ${m} at cursor`}
+                      className="rounded border border-slate-200 px-1.5 py-0.5 font-mono transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:border-ink-700 dark:hover:bg-ink-800"
+                    >
+                      {m}
+                    </button>
+                  ))}
+                </div>
+              );
+            })()}
             {tplDraft.sqlTemplate.trim() && (
               <div className="mt-1 rounded bg-slate-50 p-2 dark:bg-ink-900/50">
                 <div className="overflow-auto whitespace-pre-wrap font-mono text-xs leading-relaxed">
@@ -722,6 +820,20 @@ export function Cards() {
             <select value={instLine} onChange={(e) => { setInstLine(e.target.value); setInstMap({}); }} className={inp}>
               {lines.map((l) => <option key={l.id} value={l.id}>{l.id} — {l.name}</option>)}
             </select>
+            {(() => {
+              const tl = lines.find((l) => l.id === instLine);
+              if (!tl) return null;
+              return (
+                <div className="mt-1 text-xs text-slate-500">
+                  attached tables:{" "}
+                  {tl.memberTables.length === 0
+                    ? <span className="text-slate-400">none — add some in Lines first</span>
+                    : tl.memberTables.map((m) => (
+                      <span key={m} className="mr-1 font-mono text-slate-500 dark:text-ink-300">{m}</span>
+                    ))}
+                </div>
+              );
+            })()}
           </Field>
           {refs.length > 0 && (
             <div className="rounded-lg bg-slate-50 p-2 text-sm dark:bg-ink-900/50">
@@ -920,9 +1032,12 @@ function PlaygroundTab({ lines, lineId, setLineId, sql, setSql, result, error, r
   setShowSave: (v: boolean) => void;
   setSaveDraft: (f: (d: typeof saveDraft) => typeof saveDraft) => void;
 }) {
+  const [tblPick, setTblPick] = useState("");
+  const sqlRef = useRef<HTMLTextAreaElement>(null);
+  const pgLine = lines.find((l) => l.id === lineId);
   return (
     <div>
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <label className="block text-sm">
           Line
           <select value={lineId} onChange={(e) => setLineId(e.target.value)} className="ml-2 w-64 rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-ink-700">
@@ -930,6 +1045,23 @@ function PlaygroundTab({ lines, lineId, setLineId, sql, setSql, result, error, r
             {lines.map((l) => <option key={l.id} value={l.id}>{l.id} — {l.name}</option>)}
           </select>
         </label>
+        {pgLine && pgLine.memberTables.length > 0 && (
+          <label className="block text-sm">
+            Tables <span className="tnum text-xs text-slate-400">({pgLine.memberTables.length} attached)</span>
+            <select
+              value={tblPick}
+              onChange={(e) => {
+                if (e.target.value) insertAtCursor(sqlRef, sql, setSql, e.target.value);
+                setTblPick("");
+              }}
+              title="Pick a table to insert its name into the query"
+              className="ml-2 w-64 rounded-lg border border-slate-300 bg-transparent px-3 py-2 font-mono text-sm focus:border-accent-500 focus:outline-none dark:border-ink-700"
+            >
+              <option value="">— insert table… —</option>
+              {pgLine.memberTables.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </label>
+        )}
         {cols.length > 0 && (
           <div className="flex flex-wrap items-end gap-1 text-xs text-slate-400 dark:text-ink-500">
             {cols.slice(0, 12).map((c) => (
@@ -940,7 +1072,7 @@ function PlaygroundTab({ lines, lineId, setLineId, sql, setSql, result, error, r
         )}
       </div>
       <div className="mt-3">
-        <textarea rows={6} value={sql} onChange={(e) => setSql(e.target.value)} placeholder="SELECT * FROM readings_temp LIMIT 50" className="w-full rounded-lg border border-slate-300 bg-transparent p-3 font-mono text-sm dark:border-ink-700" onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onRun(); }} />
+        <textarea ref={sqlRef} rows={6} value={sql} onChange={(e) => setSql(e.target.value)} placeholder="SELECT * FROM readings_temp LIMIT 50" className="w-full rounded-lg border border-slate-300 bg-transparent p-3 font-mono text-sm dark:border-ink-700" onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onRun(); }} />
         <div className="mt-1 flex items-center gap-3 text-xs text-slate-400 dark:text-ink-500">
           <span>Ctrl+Enter to run</span><span>·</span><span>SELECT/WITH/SHOW/EXPLAIN only</span><span>·</span><span>no multi-statement</span>
         </div>
