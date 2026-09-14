@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  ArrowRight, Brain, ChartLine, ChevronDown, ClipboardCheck, Copy, Eye, FlaskConical, History as HistoryIcon,
+  ArrowRight, Brain, ChartLine, ClipboardCheck, Copy, Eye, FlaskConical, History as HistoryIcon,
   ListChecks, Pause, Pencil, Play, Plus, Rocket, Save, Search, Trash2, X,
 } from "lucide-react";
 import { Btn, Segmented, Spinner } from "../components/ui";
@@ -206,7 +206,7 @@ export function Cards() {
   const [copyQ, setCopyQ] = useState<Record<string, string>>({});
   const [copyStatus, setCopyStatus] = useState<Record<string, "all" | "live" | "dormant" | "failed">>({});
   const [checkedByTpl, setCheckedByTpl] = useState<Record<string, string[]>>({});
-  const [openCopy, setOpenCopy] = useState<Record<string, string | null>>({});
+  const [sqlViewCard, setSqlViewCard] = useState<Card | null>(null);
   const [fixCard, setFixCard] = useState<{ tplId: string; cardId: string } | null>(null);
   const [fixMap, setFixMap] = useState<Record<string, string>>({});
   const [fixBusy, setFixBusy] = useState(false);
@@ -366,6 +366,12 @@ export function Cards() {
     return c.status === "dormant" && c.sql.trim().length > 0;
   }
 
+  function openEditCard(c: Card) {
+    setEditCard(c);
+    setCardDraft({ lineId: c.lineId, name: c.name, tables: c.tables.join(", "), sql: c.sql, granularity: c.granularity, unit: c.unit, extractHint: c.extractHint, threshold: c.threshold != null ? String(c.threshold) : "", changeMode: "forward", reingestFrom: "" });
+    setShowCardForm(true);
+  }
+
   function openBankDrawer(lineId: string) {
     const l = lines.find((x) => x.id === lineId);
     setPushLine({ id: lineId, name: l?.name ?? lineId });
@@ -437,7 +443,7 @@ export function Cards() {
           {c.status === "dormant" ? (
             <>
               <Btn variant="ok" icon={Rocket} onClick={() => void onActivate(c)} disabled={!canActivate(c)}>Go live</Btn>
-              <Btn icon={Pencil} onClick={() => { setEditCard(c); setCardDraft({ lineId: c.lineId, name: c.name, tables: c.tables.join(", "), sql: c.sql, granularity: c.granularity, unit: c.unit, extractHint: c.extractHint, threshold: c.threshold != null ? String(c.threshold) : "", changeMode: "forward", reingestFrom: "" }); setShowCardForm(true); }}>edit</Btn>
+              <Btn icon={Pencil} onClick={() => openEditCard(c)}>edit</Btn>
               <Btn variant="bad" icon={Trash2} onClick={() => { if (confirm(`Delete card "${c.name}" on ${c.lineId}?`)) void act(() => cardApi.deleteCard(c.id)); }}>delete</Btn>
             </>
           ) : (
@@ -593,7 +599,7 @@ export function Cards() {
       )}
 
       {tab === "templates" && (
-        <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <div className="mt-4 flex flex-col gap-4">
           {templates.map((t) => {
             const copies = cards.filter((c) => c.templateId === t.id);
             const allIds = copies.map((c) => c.id);
@@ -639,106 +645,91 @@ export function Cards() {
               </div>
               {copies.length === 0 ? (
                 <div className="mt-2 text-xs text-slate-400">not used yet — no copies on any line</div>
-              ) : (
-                <div className="mt-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <label className="inline-flex items-center gap-1.5 text-xs text-slate-500" title={checked.length === allIds.length ? "Uncheck all — Check/Apply will skip everything" : "Check all copies"}>
-                      <input
-                        type="checkbox"
-                        checked={allIds.length > 0 && checked.length === allIds.length}
-                        onChange={() => setCheckedByTpl((m) => ({ ...m, [t.id]: checked.length === allIds.length ? [] : allIds }))}
-                        className="h-4 w-4 accent-teal-500"
-                      />
-                      {checked.length === allIds.length ? "all" : `${checked.length}/${allIds.length}`}
-                    </label>
-                    <div className="relative">
-                      <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                      <input
-                        value={copyQ[t.id] ?? ""}
-                        onChange={(e) => setCopyQ((m) => ({ ...m, [t.id]: e.target.value }))}
-                        placeholder="Filter lines, tables…"
-                        className="w-48 rounded-lg border border-slate-300 bg-transparent py-1.5 pl-8 pr-2 text-sm focus:border-accent-500 focus:outline-none dark:border-ink-700"
-                      />
+              ) : (() => {
+                const q = (copyQ[t.id] ?? "").trim().toLowerCase();
+                const stf = copyStatus[t.id] ?? "all";
+                const resByCard = new Map((reapplyByTpl[t.id]?.results ?? []).map((r) => [r.cardId, r]));
+                const failedOf = (c: Card) => {
+                  const r = resByCard.get(c.id);
+                  return r ? r.status === "red" : (c.lastTest != null && !c.lastTest.ok);
+                };
+                const visible = copies.filter((c) => {
+                  if (stf === "live" && c.status !== "live") return false;
+                  if (stf === "dormant" && c.status !== "dormant") return false;
+                  if (stf === "failed" && !failedOf(c)) return false;
+                  if (q && !`${c.lineId} ${lineNameOf(c.lineId)} ${c.name} ${c.tables.join(" ")}`.toLowerCase().includes(q)) return false;
+                  return true;
+                });
+                return (
+                  <div className="mt-3">
+                    <div className="mb-2 flex flex-wrap items-center gap-2">
+                      <label className="inline-flex items-center gap-1.5 text-xs text-slate-500" title={checked.length === allIds.length ? "Uncheck all — Check/Apply will skip everything" : "Check all copies"}>
+                        <input
+                          type="checkbox"
+                          checked={allIds.length > 0 && checked.length === allIds.length}
+                          onChange={() => setCheckedByTpl((m) => ({ ...m, [t.id]: checked.length === allIds.length ? [] : allIds }))}
+                          className="h-4 w-4 accent-teal-500"
+                        />
+                        {checked.length === allIds.length ? "all" : `${checked.length}/${allIds.length}`}
+                      </label>
+                      <div className="relative">
+                        <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <input
+                          value={copyQ[t.id] ?? ""}
+                          onChange={(e) => setCopyQ((m) => ({ ...m, [t.id]: e.target.value }))}
+                          placeholder="Filter lines, tables…"
+                          className="w-48 rounded-lg border border-slate-300 bg-transparent py-1.5 pl-8 pr-2 text-sm focus:border-accent-500 focus:outline-none dark:border-ink-700"
+                        />
+                      </div>
+                      <select
+                        value={copyStatus[t.id] ?? "all"}
+                        onChange={(e) => setCopyStatus((m) => ({ ...m, [t.id]: e.target.value as "all" | "live" | "dormant" | "failed" }))}
+                        title="Filter rows by state"
+                        className="rounded-lg border border-slate-300 bg-transparent px-2 py-1.5 text-sm focus:border-accent-500 focus:outline-none dark:border-ink-700"
+                      >
+                        <option value="all">all states</option>
+                        <option value="live">live</option>
+                        <option value="dormant">dormant</option>
+                        <option value="failed">failed</option>
+                      </select>
+                      {reapplyByTpl[t.id] && (
+                        <>
+                          <span className="tnum font-mono text-xs text-slate-400">{reapplyByTpl[t.id].sqlHash}</span>
+                          <button
+                            onClick={() => setReapplyByTpl((m) => { const n = { ...m }; delete n[t.id]; return n; })}
+                            aria-label="dismiss results"
+                            className="rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800"
+                          >
+                            <X size={14} />
+                          </button>
+                        </>
+                      )}
                     </div>
-                    <select
-                      value={copyStatus[t.id] ?? "all"}
-                      onChange={(e) => setCopyStatus((m) => ({ ...m, [t.id]: e.target.value as "all" | "live" | "dormant" | "failed" }))}
-                      title="Filter rows by state"
-                      className="rounded-lg border border-slate-300 bg-transparent px-2 py-1.5 text-sm focus:border-accent-500 focus:outline-none dark:border-ink-700"
-                    >
-                      <option value="all">all states</option>
-                      <option value="live">live</option>
-                      <option value="dormant">dormant</option>
-                      <option value="failed">failed</option>
-                    </select>
-                    {reapplyByTpl[t.id] && (
-                      <>
-                        <span className="tnum font-mono text-xs text-slate-400">{reapplyByTpl[t.id].sqlHash}</span>
-                        <button
-                          onClick={() => setReapplyByTpl((m) => { const n = { ...m }; delete n[t.id]; return n; })}
-                          aria-label="dismiss results"
-                          className="rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800"
-                        >
-                          <X size={14} />
-                        </button>
-                      </>
-                    )}
-                  </div>
-                  {(() => {
-                    const q = (copyQ[t.id] ?? "").trim().toLowerCase();
-                    const stf = copyStatus[t.id] ?? "all";
-                    const resByCard = new Map((reapplyByTpl[t.id]?.results ?? []).map((r) => [r.cardId, r]));
-                    const failedOf = (c: Card) => {
-                      const r = resByCard.get(c.id);
-                      return r ? r.status === "red" : (c.lastTest != null && !c.lastTest.ok);
-                    };
-                    const visible = copies.filter((c) => {
-                      if (stf === "live" && c.status !== "live") return false;
-                      if (stf === "dormant" && c.status !== "dormant") return false;
-                      if (stf === "failed" && !failedOf(c)) return false;
-                      if (q && !`${c.lineId} ${lineNameOf(c.lineId)} ${c.name} ${c.tables.join(" ")}`.toLowerCase().includes(q)) return false;
-                      return true;
-                    });
-                    if (visible.length === 0) return <div className="mt-2 text-xs text-slate-400">no copies match this filter</div>;
-                    const gmap = new Map<string, Card[]>();
-                    for (const c of visible) {
-                      const a = gmap.get(c.lineId) ?? [];
-                      a.push(c);
-                      gmap.set(c.lineId, a);
-                    }
-                    const ordered = [
-                      ...lines.map((l) => l.id).filter((id) => gmap.has(id)),
-                      ...[...gmap.keys()].filter((id) => !lines.some((l) => l.id === id)),
-                    ];
-                    return (
-                      <div>
-                        {ordered.map((lineId) => {
-                          const items = gmap.get(lineId)!;
-                          const l = lines.find((x) => x.id === lineId);
-                          const live = items.filter((c) => c.status === "live").length;
-                          return (
-                            <div key={lineId} className="mt-2">
-                              <div className="flex items-center gap-2 text-xs">
-                                <FormattedText text={l?.name ?? lineId} lineName={l?.name ?? lineId} />
-                                <span className="font-mono text-slate-400">{lineId}</span>
-                                <span className="tnum text-slate-400">{l ? `${l.memberTables.length} tables` : "line gone"}</span>
-                                <StatusChip tone={live === items.length ? "ok" : "mute"}>{live}/{items.length} live</StatusChip>
-                                <Link
-                                  to={`/setter/lines?edit=${lineId}`}
-                                  title="Open this line in Lines to add/remove its tables"
-                                  className="ml-auto inline-flex items-center gap-1 text-accent-500 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60"
-                                >
-                                  <Pencil size={12} />edit tables
-                                </Link>
-                              </div>
-                              {items.map((c) => {
-                                const r = resByCard.get(c.id);
-                                const failed = failedOf(c);
-                                const open = openCopy[t.id] === c.id;
-                                const fixing = fixCard?.tplId === t.id && fixCard?.cardId === c.id;
-                                return (
-                                  <div key={c.id} className={`mt-1 rounded-lg border p-2 ${failed ? "border-state-bad/40 bg-state-bad/[0.06]" : c.status === "live" ? "border-state-ok/30 bg-state-ok/[0.05]" : "border-slate-200 dark:border-ink-800"}`}>
-                                    <div className="flex flex-wrap items-center gap-2 text-sm">
+                    {visible.length === 0 ? (
+                      <div className="text-xs text-slate-400">no copies match this filter</div>
+                    ) : (
+                      <div className="overflow-x-auto rounded-lg border border-slate-200 dark:border-ink-800">
+                        <table className="w-full border-collapse text-sm">
+                          <thead>
+                            <tr className="border-b border-slate-200 text-left text-[11px] uppercase tracking-wider text-slate-400 dark:border-ink-800">
+                              <th className="w-8 px-2 py-2 font-medium"> </th>
+                              <th className="px-2 py-2 font-medium">Line</th>
+                              <th className="w-12 px-1 py-2 text-center font-medium" title="View query">SQL</th>
+                              <th className="w-12 px-1 py-2 text-center font-medium" title="Edit card">Edit</th>
+                              <th className="w-12 px-1 py-2 text-center font-medium" title="Run test">Run</th>
+                              <th className="px-2 py-2 font-medium">Status</th>
+                              <th className="w-14 px-1 py-2 text-center font-medium" title="Delete copy">Delete</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {visible.map((c) => {
+                              const r = resByCard.get(c.id);
+                              const failed = failedOf(c);
+                              const fixing = fixCard?.tplId === t.id && fixCard?.cardId === c.id;
+                              return (
+                                <Fragment key={c.id}>
+                                  <tr className={`border-b border-slate-100 align-top transition-colors dark:border-ink-800 ${failed ? "bg-state-bad/[0.06]" : c.status === "live" ? "bg-state-ok/[0.05]" : ""}`}>
+                                    <td className="px-2 py-2.5">
                                       <input
                                         type="checkbox"
                                         checked={checked.includes(c.id)}
@@ -749,78 +740,110 @@ export function Cards() {
                                         title={checked.includes(c.id) ? "Uncheck — skip in Check/Apply" : "Check — include in Check/Apply"}
                                         className="h-4 w-4 accent-teal-500"
                                       />
-                                      <span className="font-medium">{c.name}</span>
-                                      <StatusChip tone={c.status === "live" ? "ok" : "mute"}>{c.status}</StatusChip>
-                                      {failed && <StatusChip tone="bad">✗ fails</StatusChip>}
-                                      {r
-                                        ? r.status === "green"
-                                          ? <span className="tnum text-xs text-state-ok">✓ {r.rowCount} rows</span>
-                                          : r.status === "red"
-                                            ? <span className="max-w-64 truncate text-xs text-state-bad" title={r.error}>✗ {r.error}</span>
-                                            : <span className="text-xs text-slate-400">locked-live</span>
-                                        : c.lastTest
-                                          ? c.lastTest.ok
-                                            ? <span className="text-xs text-state-ok">✓ passed · {new Date(c.lastTest.at).toLocaleTimeString()}</span>
-                                            : <span className="max-w-64 truncate text-xs text-state-bad" title={c.lastTest.error ?? ""}>✗ {c.lastTest.error}</span>
-                                          : <span className="text-xs text-slate-400">never tested</span>}
-                                      <span className="ml-auto flex items-center gap-1">
-                                        {failed && c.status === "dormant" && !fixing && (
-                                          <button
-                                            onClick={() => { setFixCard({ tplId: t.id, cardId: c.id }); setFixMap({}); setOpenCopy((m) => ({ ...m, [t.id]: c.id })); }}
-                                            className="rounded-lg border border-state-bad/50 px-2 py-0.5 text-xs text-state-bad transition-colors hover:bg-state-bad/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60"
-                                          >
-                                            Fix tables
-                                          </button>
+                                    </td>
+                                    <td className="px-2 py-2.5">
+                                      <Link
+                                        to={`/setter/lines?edit=${c.lineId}`}
+                                        title="Open this line in Lines to add/remove its tables"
+                                        className="font-medium text-accent-500 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60"
+                                      >
+                                        {lineNameOf(c.lineId)}
+                                      </Link>
+                                      <div className="font-mono text-xs text-slate-400">{c.lineId}</div>
+                                      <div className="mt-1 flex flex-wrap gap-1">
+                                        {c.tables.length === 0 && <span className="text-xs text-slate-400">no tables</span>}
+                                        {c.tables.map((tb) => (
+                                          <code key={tb} className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-600 dark:bg-ink-800 dark:text-ink-300">{tb}</code>
+                                        ))}
+                                        {c.sql !== t.sqlTemplate && (
+                                          <span className="text-[11px] text-state-warn" title="This copy's SQL differs from the template — bulk apply skips it">per-line SQL</span>
                                         )}
-                                        {failed && c.status === "live" && (
-                                          <button
-                                            onClick={() => void act(() => cardApi.dormantCard(c.id))}
-                                            title="Live copies can't change tables — take it dormant first"
-                                            className="rounded-lg border border-state-warn/50 px-2 py-0.5 text-xs text-state-warn transition-colors hover:bg-state-warn/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60"
-                                          >
-                                            take dormant to fix
-                                          </button>
-                                        )}
-                                        <button
-                                          onClick={() => void onTest(c)}
-                                          title="Re-test this copy now"
-                                          className="rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800"
-                                        >
-                                          <FlaskConical size={14} />
-                                        </button>
-                                        <button
-                                          onClick={() => setOpenCopy((m) => ({ ...m, [t.id]: open ? null : c.id }))}
-                                          aria-label={open ? "collapse run details" : "expand run details"}
-                                          className="rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800"
-                                        >
-                                          <ChevronDown size={14} className={`transition-transform duration-150 ${open ? "rotate-180" : ""}`} />
-                                        </button>
-                                      </span>
-                                    </div>
-                                    <div className="mt-1 flex flex-wrap gap-1">
-                                      {c.tables.length === 0 && <span className="text-xs text-slate-400">no tables</span>}
-                                      {c.tables.map((tb) => (
-                                        <code key={tb} className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-600 dark:bg-ink-800 dark:text-ink-300">{tb}</code>
-                                      ))}
-                                      {c.sql !== t.sqlTemplate && (
-                                        <span className="text-[11px] text-state-warn" title="This copy's SQL differs from the template — bulk apply skips it">per-line SQL</span>
-                                      )}
-                                    </div>
-                                    {open && !fixing && (
-                                      <div className="anim-fade-in mt-1 border-t border-slate-100 pt-1 text-xs text-slate-500 dark:border-ink-800">
-                                        {r
-                                          ? <div>check: <b>{r.status}</b>{r.rowCount != null && <> · <span className="tnum">{r.rowCount}</span> rows</>}{r.error && <div className="text-state-bad">{r.error}</div>}</div>
-                                          : c.lastTest
-                                            ? <div>last test {c.lastTest.ok ? "passed" : "failed"} · {new Date(c.lastTest.at).toLocaleString()}{c.lastTest.sqlHash && <> · <span className="tnum font-mono">{c.lastTest.sqlHash}</span></>}{c.lastTest.error && <div className="text-state-bad">{c.lastTest.error}</div>}</div>
-                                            : <div>never tested — press the flask to test.</div>}
                                       </div>
-                                    )}
-                                    {fixing && (() => {
-                                      const ln = lines.find((x) => x.id === c.lineId);
-                                      const members = ln?.memberTables ?? [];
-                                      const fs = remapState(c.sql, members, fixMap);
-                                      return (
-                                        <div className="anim-fade-in mt-2 border-t border-slate-100 pt-2 dark:border-ink-800">
+                                    </td>
+                                    <td className="px-1 py-2.5 text-center">
+                                      <button
+                                        onClick={() => setSqlViewCard(c)}
+                                        title="View query"
+                                        aria-label="View query"
+                                        className="rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-accent-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800"
+                                      >
+                                        <Eye size={16} />
+                                      </button>
+                                    </td>
+                                    <td className="px-1 py-2.5 text-center">
+                                      <button
+                                        onClick={() => openEditCard(c)}
+                                        disabled={c.status === "live"}
+                                        title={c.status === "live" ? "Live copy — take it dormant before editing" : "Edit this card's fields (SQL, tables, hints…)"}
+                                        aria-label="Edit card"
+                                        className="rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-accent-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 disabled:cursor-not-allowed disabled:opacity-30 dark:hover:bg-ink-800"
+                                      >
+                                        <Pencil size={16} />
+                                      </button>
+                                    </td>
+                                    <td className="px-1 py-2.5 text-center">
+                                      <button
+                                        onClick={() => void onTest(c)}
+                                        disabled={testingId === c.id}
+                                        title="Run a test now"
+                                        aria-label="Run test"
+                                        className="rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-accent-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 disabled:opacity-50 dark:hover:bg-ink-800"
+                                      >
+                                        {testingId === c.id ? <Spinner size={16} /> : <Play size={16} />}
+                                      </button>
+                                    </td>
+                                    <td className="px-2 py-2.5">
+                                      <div className="flex flex-wrap items-center gap-1.5">
+                                        <StatusChip tone={c.status === "live" ? "ok" : "mute"}>{c.status}</StatusChip>
+                                        {r
+                                          ? r.status === "green"
+                                            ? <span className="tnum text-xs text-state-ok">✓ {r.rowCount} rows</span>
+                                            : r.status === "red"
+                                              ? <span className="max-w-56 truncate text-xs text-state-bad" title={r.error}>✗ {r.error}</span>
+                                              : <span className="text-xs text-slate-400">locked-live</span>
+                                          : c.lastTest
+                                            ? c.lastTest.ok
+                                              ? <span className="text-xs text-state-ok">✓ passed · {new Date(c.lastTest.at).toLocaleTimeString()}</span>
+                                              : <span className="max-w-56 truncate text-xs text-state-bad" title={c.lastTest.error ?? ""}>✗ {c.lastTest.error}</span>
+                                            : <span className="text-xs text-slate-400">never tested</span>}
+                                      </div>
+                                      {failed && c.status === "dormant" && !fixing && (
+                                        <button
+                                          onClick={() => { setFixCard({ tplId: t.id, cardId: c.id }); setFixMap({}); }}
+                                          className="anim-fade-in mt-1 rounded-lg border border-state-bad/50 px-2 py-0.5 text-xs text-state-bad transition-colors hover:bg-state-bad/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60"
+                                        >
+                                          Fix tables
+                                        </button>
+                                      )}
+                                      {failed && c.status === "live" && (
+                                        <button
+                                          onClick={() => void act(() => cardApi.dormantCard(c.id))}
+                                          title="Live copies can't change tables — take it dormant first"
+                                          className="anim-fade-in mt-1 rounded-lg border border-state-warn/50 px-2 py-0.5 text-xs text-state-warn transition-colors hover:bg-state-warn/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60"
+                                        >
+                                          take dormant to fix
+                                        </button>
+                                      )}
+                                    </td>
+                                    <td className="px-1 py-2.5 text-center">
+                                      <button
+                                        onClick={() => { if (confirm(`Delete copy "${c.name}" on ${c.lineId}? This cannot be undone.`)) void act(() => cardApi.deleteCard(c.id)); }}
+                                        disabled={c.status === "live"}
+                                        title={c.status === "live" ? "Live copy — take it dormant before deleting" : "Delete this copy"}
+                                        aria-label="Delete copy"
+                                        className="rounded p-1 text-slate-400 transition-colors hover:bg-state-bad/10 hover:text-state-bad focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 disabled:cursor-not-allowed disabled:opacity-30 dark:hover:bg-ink-800"
+                                      >
+                                        <Trash2 size={16} />
+                                      </button>
+                                    </td>
+                                  </tr>
+                                  {fixing && (() => {
+                                    const ln = lines.find((x) => x.id === c.lineId);
+                                    const members = ln?.memberTables ?? [];
+                                    const fs = remapState(c.sql, members, fixMap);
+                                    return (
+                                      <tr className="border-b border-slate-100 bg-slate-50/60 dark:border-ink-800 dark:bg-ink-900/40">
+                                        <td colSpan={7} className="px-3 py-2">
                                           <RemapTables sql={c.sql} members={members} map={fixMap} setMap={setFixMap} />
                                           <div className="mt-2 flex justify-end gap-2">
                                             <button
@@ -851,20 +874,20 @@ export function Cards() {
                                               {fixBusy ? "saving…" : "Save & re-test"}
                                             </Btn>
                                           </div>
-                                        </div>
-                                      );
-                                    })()}
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          );
-                        })}
+                                        </td>
+                                      </tr>
+                                    );
+                                  })()}
+                                </Fragment>
+                              );
+                            })}
+                          </tbody>
+                        </table>
                       </div>
-                    );
-                  })()}
-                </div>
-              )}
+                    )}
+                  </div>
+                );
+              })()}
               {reapplyByTpl[t.id] && (() => {
                 const out = reapplyByTpl[t.id];
                 const applied = appliedByTpl[t.id];
@@ -1304,6 +1327,41 @@ export function Cards() {
           }}
         />
       )}
+
+      {sqlViewCard && (() => {
+        const tpl = templates.find((t) => t.id === sqlViewCard.templateId) ?? null;
+        const l = lines.find((x) => x.id === sqlViewCard.lineId);
+        const differs = tpl != null && sqlViewCard.sql !== tpl.sqlTemplate;
+        return (
+          <Modal title={`Query — ${sqlViewCard.name}`} onClose={() => setSqlViewCard(null)}>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+              <span>line <span className="font-mono">{sqlViewCard.lineId}</span>{l ? ` · ${l.name}` : ""}</span>
+              <span className="tnum">v{sqlViewCard.version}</span>
+              <StatusChip tone={sqlViewCard.status === "live" ? "ok" : "mute"}>{sqlViewCard.status}</StatusChip>
+              {tpl && <span>from template <b>{tpl.name}</b> v{tpl.version}</span>}
+            </div>
+            <pre className="max-h-72 overflow-auto rounded-lg bg-slate-100 p-3 font-mono text-xs leading-relaxed dark:bg-ink-900">{sqlViewCard.sql || "(no SQL yet)"}</pre>
+            <div className="flex flex-wrap gap-1">
+              {sqlViewCard.tables.length === 0 && <span className="text-xs text-slate-400">no tables</span>}
+              {sqlViewCard.tables.map((tb) => (
+                <code key={tb} className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-600 dark:bg-ink-800 dark:text-ink-300">{tb}</code>
+              ))}
+            </div>
+            <div className="text-xs text-slate-500">
+              {sqlViewCard.lastTest
+                ? <>last test {sqlViewCard.lastTest.ok ? "passed" : "failed"} · {new Date(sqlViewCard.lastTest.at).toLocaleString()}{sqlViewCard.lastTest.sqlHash && <> · <span className="tnum font-mono">{sqlViewCard.lastTest.sqlHash}</span></>}{sqlViewCard.lastTest.error && <div className="mt-1 text-state-bad">{sqlViewCard.lastTest.error}</div>}</>
+                : "never tested"}
+            </div>
+            {differs && tpl && (
+              <div className="rounded-lg border border-state-warn/40 p-3">
+                <div className="text-sm font-medium text-state-warn">Differs from template v{tpl.version}</div>
+                <p className="mt-1 text-xs text-slate-500">This copy has per-line SQL, so bulk apply skips it. Template SQL:</p>
+                <pre className="mt-2 max-h-40 overflow-auto rounded bg-slate-100 p-2 font-mono text-xs dark:bg-ink-900">{tpl.sqlTemplate || "(no SQL template)"}</pre>
+              </div>
+            )}
+          </Modal>
+        );
+      })()}
 
       {detailCard && (
         <CardDetails
