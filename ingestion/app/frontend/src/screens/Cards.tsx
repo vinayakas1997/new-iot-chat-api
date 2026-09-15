@@ -2,11 +2,16 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   ArrowRight, Brain, ChartLine, ClipboardCheck, Copy, Eye, FlaskConical, History as HistoryIcon,
-  ListChecks, Pause, Pencil, Play, Plus, Rocket, Save, Search, Trash2, X,
+  ListChecks, Pause, Pencil, Play, Plus, Rocket, Save, Search, Sparkles, Trash2, X,
 } from "lucide-react";
 import { Btn, Segmented, Spinner } from "../components/ui";
 import { CardDetails } from "../components/CardDetails";
-import { cardApi, api, bankApi, graphApi, playgroundApi, type BankOverviewEntry, type Card, type CardTemplate, type Line, type ReapplyResult, type TestResult, type GraphSpec, type ChartType, type PlaygroundResult, type QueryHistoryEntry, type LineColumn } from "../lib/api";
+import { Chart, defaultChartType, isTemporalName, numericColumns } from "../components/Chart";
+import { ChartPreviewModal } from "../components/ChartPreviewModal";
+import { LinePreview } from "../components/LinePreview";
+import { windowForResolution, type Resolution } from "../components/Chart";
+import { isTradingEligible, TradingChart } from "../components/TradingChart";
+import { cardApi, api, bankApi, chartApi, graphApi, playgroundApi, llmReasonText, type BankOverviewEntry, type Card, type CardTemplate, type ChartSuggestion, type Line, type MergeProposal, type ReapplyResult, type TestResult, type GraphSpec, type ChartType, type PlaygroundResult, type QueryHistoryEntry, type LineColumn } from "../lib/api";
 import { AlertBanner, StatusChip } from "../components/chips";
 import { FormattedText } from "../components/FormattedText";
 import { PushToHindsight } from "../components/PushToHindsight";
@@ -197,6 +202,7 @@ export function Cards() {
   const [banks, setBanks] = useState<Record<string, BankOverviewEntry>>({});
   const [pushLine, setPushLine] = useState<{ id: string; name: string } | null>(null);
   const [detailCard, setDetailCard] = useState<Card | null>(null);
+  const [previewCopy, setPreviewCopy] = useState<{ tpl: CardTemplate; line: Line } | null>(null);
   const [liveNudge, setLiveNudge] = useState<{ cardId: string; cardName: string; lineId: string } | null>(null);
   // Umbrella view: search + filters + group-by-line.
   const [cardQ, setCardQ] = useState("");
@@ -208,7 +214,6 @@ export function Cards() {
   const [copyQ, setCopyQ] = useState<Record<string, string>>({});
   const [copyStatus, setCopyStatus] = useState<Record<string, "all" | "live" | "dormant" | "failed" | "stale">>({});
   const [checkedByTpl, setCheckedByTpl] = useState<Record<string, string[]>>({});
-  const [sqlViewCard, setSqlViewCard] = useState<Card | null>(null);
   const [fixCard, setFixCard] = useState<{ tplId: string; cardId: string } | null>(null);
   const [fixMap, setFixMap] = useState<Record<string, string>>({});
   const [fixBusy, setFixBusy] = useState(false);
@@ -654,6 +659,7 @@ export function Cards() {
                 ≈{copies.reduce((s, c) => s + tickCost(c), 0)} queries/day across {copies.length} copies
               </div>
               <pre className="mt-2 max-h-28 overflow-auto rounded bg-slate-100 p-2 font-mono text-xs dark:bg-ink-900">{t.sqlTemplate || "(no SQL template)"}</pre>
+              <TemplateCharts template={t} onChanged={() => void refresh()} />
               <div className="mt-3 flex flex-wrap gap-2 text-sm">
                 <Btn variant="primary" icon={ArrowRight} onClick={() => { setInstTpl(t); setInstLine(lines[0]?.id ?? ""); setInstMap({}); }} title="Stamp an independent copy of this template onto a line. The copy starts dormant and can differ freely afterwards.">instantiate → line</Btn>
                 <Btn icon={Copy} onClick={() => { setDupTpl(t); setDupLine(t.referenceLineId ?? lines[0]?.id ?? ""); setDupName(`${t.name} copy`); setDupMap({}); setDupSearch(""); setDupSug(false); }} title="Pick a line, edit the tables, and stamp a copy there.">duplicate</Btn>
@@ -760,7 +766,7 @@ export function Cards() {
                             <tr className="border-b border-slate-200 text-left text-[11px] uppercase tracking-wider text-slate-400 dark:border-ink-800">
                               <th className="w-8 px-2 py-2 font-medium"> </th>
                               <th className="px-2 py-2 font-medium">Line</th>
-                              <th className="w-12 px-1 py-2 text-center font-medium" title="View query">SQL</th>
+                              <th className="w-12 px-1 py-2 text-center font-medium" title="Open this copy's charts — same preview screen">Details</th>
                               <th className="w-12 px-1 py-2 text-center font-medium" title="Edit card">Edit</th>
                               <th className="w-12 px-1 py-2 text-center font-medium" title="Run test">Run</th>
                               <th className="px-2 py-2 font-medium">Status</th>
@@ -811,12 +817,15 @@ export function Cards() {
                                     </td>
                                     <td className="px-1 py-2.5 text-center">
                                       <button
-                                        onClick={() => setSqlViewCard(c)}
-                                        title="View query"
-                                        aria-label="View query"
+                                        onClick={() => {
+                                          const ln = lines.find((x) => x.id === c.lineId);
+                                          if (ln) setPreviewCopy({ tpl: t, line: ln });
+                                        }}
+                                        title="Open this copy's charts on its line — same preview screen"
+                                        aria-label="Copy details"
                                         className="rounded p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-accent-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800"
                                       >
-                                        <Eye size={16} />
+                                        <ChartLine size={16} />
                                       </button>
                                     </td>
                                     <td className="px-1 py-2.5 text-center">
@@ -892,7 +901,7 @@ export function Cards() {
                                     const fs = remapState(c.sql, members, fixMap);
                                     return (
                                       <tr className="border-b border-slate-100 bg-slate-50/60 dark:border-ink-800 dark:bg-ink-900/40">
-                                        <td colSpan={7} className="px-3 py-2">
+                                        <td colSpan={8} className="px-3 py-2">
                                           <RemapTables sql={c.sql} members={members} map={fixMap} setMap={setFixMap} />
                                           <div className="mt-2 flex justify-end gap-2">
                                             <button
@@ -1371,6 +1380,14 @@ export function Cards() {
         <GraphDesigner card={graphCard} onClose={() => { setGraphCard(null); refresh(); }} />
       )}
 
+      {previewCopy && (
+        <LinePreview
+          line={previewCopy.line}
+          initialTemplateId={previewCopy.tpl.id}
+          onClose={() => setPreviewCopy(null)}
+        />
+      )}
+
       {pushLine && (
         <PushToHindsight
           lineId={pushLine.id}
@@ -1382,41 +1399,6 @@ export function Cards() {
           }}
         />
       )}
-
-      {sqlViewCard && (() => {
-        const tpl = templates.find((t) => t.id === sqlViewCard.templateId) ?? null;
-        const l = lines.find((x) => x.id === sqlViewCard.lineId);
-        const differs = tpl != null && sqlViewCard.sql !== tpl.sqlTemplate;
-        return (
-          <Modal title={`Query — ${sqlViewCard.name}`} onClose={() => setSqlViewCard(null)}>
-            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-              <span>line <span className="font-mono">{sqlViewCard.lineId}</span>{l ? ` · ${l.name}` : ""}</span>
-              <span className="tnum">v{sqlViewCard.version}</span>
-              <StatusChip tone={sqlViewCard.status === "live" ? "ok" : "mute"}>{sqlViewCard.status}</StatusChip>
-              {tpl && <span>from template <b>{tpl.name}</b> v{tpl.version}</span>}
-            </div>
-            <pre className="max-h-72 overflow-auto rounded-lg bg-slate-100 p-3 font-mono text-xs leading-relaxed dark:bg-ink-900">{sqlViewCard.sql || "(no SQL yet)"}</pre>
-            <div className="flex flex-wrap gap-1">
-              {sqlViewCard.tables.length === 0 && <span className="text-xs text-slate-400">no tables</span>}
-              {sqlViewCard.tables.map((tb) => (
-                <code key={tb} className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-600 dark:bg-ink-800 dark:text-ink-300">{tb}</code>
-              ))}
-            </div>
-            <div className="text-xs text-slate-500">
-              {sqlViewCard.lastTest
-                ? <>last test {sqlViewCard.lastTest.ok ? "passed" : "failed"} · {new Date(sqlViewCard.lastTest.at).toLocaleString()}{sqlViewCard.lastTest.sqlHash && <> · <span className="tnum font-mono">{sqlViewCard.lastTest.sqlHash}</span></>}{sqlViewCard.lastTest.error && <div className="mt-1 text-state-bad">{sqlViewCard.lastTest.error}</div>}</>
-                : "never tested"}
-            </div>
-            {differs && tpl && (
-              <div className="rounded-lg border border-state-warn/40 p-3">
-                <div className="text-sm font-medium text-state-warn">Differs from template v{tpl.version}</div>
-                <p className="mt-1 text-xs text-slate-500">This copy has per-line SQL, so bulk apply skips it. Template SQL:</p>
-                <pre className="mt-2 max-h-40 overflow-auto rounded bg-slate-100 p-2 font-mono text-xs dark:bg-ink-900">{tpl.sqlTemplate || "(no SQL template)"}</pre>
-              </div>
-            )}
-          </Modal>
-        );
-      })()}
 
       {testPopup && (
         <Modal title={`Test result — ${testPopup.card.name}`} onClose={() => setTestPopup(null)}>
@@ -1464,6 +1446,7 @@ export function Cards() {
           graphs={cardGraphs[detailCard.id] ?? []}
           bankReady={!!banks[detailCard.lineId]?.ready}
           onClose={() => setDetailCard(null)}
+          onGraphsChanged={(gs) => setCardGraphs((m) => ({ ...m, [detailCard.id]: gs }))}
         />
       )}
     </div>
@@ -1608,6 +1591,172 @@ function PlaygroundTab({ lines, lineId, setLineId, sql, setSql, result, error, r
   );
 }
 
+/** Template chart suggestions: one-time LLM recommendation per feature.
+ *  Runs against the reference line; stored on the template; enabled ones are
+ *  inherited by cards at instantiate time (top-2 enabled feed RAG). */
+function TemplateCharts({ template, onChanged }: { template: CardTemplate; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [meta, setMeta] = useState<{ model: string | null; heuristic: boolean; reason: string | null } | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [sample, setSample] = useState<TestResult | null>(null);
+  const [sampledAt, setSampledAt] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [sampleError, setSampleError] = useState<string | null>(null);
+  const [resolution, setResolution] = useState<Resolution>("hourly");
+
+  async function onRecommend() {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await chartApi.recommendTemplate(template.id);
+      setMeta({ model: r.model, heuristic: r.heuristic, reason: r.reason });
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onToggle(i: number, on: boolean) {
+    const next = (template.chartSuggestions ?? []).map((s, j) => (j === i ? on : s.enabled !== false));
+    try {
+      await chartApi.setSuggestions(template.id, next);
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function loadSample(res: Resolution = resolution) {
+    setPreviewLoading(true);
+    setSampleError(null);
+    try {
+      const w = windowForResolution(res);
+      setSample(await chartApi.sampleTemplate(template.id, w.from, w.to));
+      setSampledAt(new Date().toISOString());
+    } catch (e) {
+      setSampleError((e as Error).message);
+      setSample(null);
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  function openPreview() {
+    setModalOpen(true);
+    void loadSample("hourly");
+  }
+
+  function changeResolution(res: Resolution) {
+    setResolution(res);
+    void loadSample(res);
+  }
+
+  const sug = template.chartSuggestions ?? [];
+  // Rank among enabled only — top-2 enabled feed RAG on new cards.
+  const enabledRank = new Map<number, number>();
+  sug.forEach((s, i) => {
+    if (s.enabled !== false) enabledRank.set(i, enabledRank.size);
+  });
+  const enabledCount = enabledRank.size;
+
+  return (
+    <div className="mt-3 rounded-lg border border-slate-200 p-3 dark:border-ink-800">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="text-sm font-semibold">Chart suggestions</div>
+        {meta && (
+          <span
+            className="rounded-full bg-accent-500/10 px-2 py-0.5 text-xs text-accent-500 ring-1 ring-accent-500/30"
+            title={meta.heuristic ? `Heuristic fallback — ${llmReasonText(meta.reason)}` : `Recommended by ${meta.model ?? "LLM"}`}
+          >
+            {meta.heuristic ? "heuristic" : `LLM · ${meta.model}`}
+          </span>
+        )}
+        {sug.length > 0 && <span className="text-xs text-slate-400">{sug.length} ranked · checked ones inherit to new cards</span>}
+        <div className="ml-auto flex gap-2">
+          {sug.length > 0 && (
+            <Btn size="sm" icon={Eye} onClick={openPreview} title="Open the separate preview screen: big charts, explanations, refreshable data.">
+              Preview charts
+            </Btn>
+          )}
+          <Btn size="sm" icon={Sparkles} onClick={() => void onRecommend()} loading={busy} disabled={busy} title={template.referenceLineId ? "Recommend once from the reference line's data. Stores ranked candidates on this feature." : "Set a reference line first — recommendations run on its data."}>
+            {sug.length > 0 ? "Re-recommend" : "Recommend charts"}
+          </Btn>
+        </div>
+      </div>
+      {error && <div className="mt-2 text-xs text-state-bad">{error}</div>}
+      {!template.referenceLineId && sug.length === 0 && (
+        <div className="mt-1 text-xs text-slate-400">Set a reference line on this feature first — recommendations run once on its sample rows.</div>
+      )}
+      {sug.length > 0 && (
+        <div className="mt-2 flex flex-col gap-1.5">
+          {sug.map((s, i) => {
+            const on = s.enabled !== false;
+            const rank = enabledRank.get(i);
+            return (
+              <label key={i} className={`anim-pop-in flex cursor-pointer items-start gap-2 rounded-lg border p-2 text-sm transition-colors ${on ? "border-accent-500/50 bg-accent-500/5" : "border-slate-200 opacity-60 dark:border-ink-800"}`}>
+                <input
+                  type="checkbox"
+                  checked={on}
+                  onChange={() => void onToggle(i, !on)}
+                  title="Inherit this suggestion on new cards"
+                  className="mt-1 h-4 w-4 shrink-0 accent-teal-500"
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <StatusChip tone="accent">{s.chartType}</StatusChip>
+                    {rank != null && rank < 2 && <span className="rounded-full bg-state-ok/10 px-1.5 py-px text-[10px] text-state-ok ring-1 ring-state-ok/30">auto top-{rank + 1}</span>}
+                    <span className="font-medium">{s.title}</span>
+                    <span className="text-xs text-slate-400">x:{s.xColumn} y:{s.yColumns.join(",") || "—"}</span>
+                  </div>
+                  {s.rationale && <div className="mt-0.5 text-xs text-slate-500">{s.rationale}</div>}
+                  {s.conditions && <div className="mt-0.5 text-xs text-accent-500/90">◷ {s.conditions}</div>}
+                </div>
+              </label>
+            );
+          })}
+        </div>
+      )}
+      {modalOpen && (
+        <ChartPreviewModal
+          title={`Preview — ${template.name}`}
+          subtitle={`Feature charts on reference line ${template.referenceLineId ?? "—"} · same specs inherit to cards`}
+          items={sug.map((s, i) => {
+            const on = s.enabled !== false;
+            const rank = enabledRank.get(i);
+            return {
+              key: `${i}`,
+              chartType: s.chartType,
+              xColumn: s.xColumn,
+              yColumns: s.yColumns,
+              title: s.title,
+              rationale: s.rationale,
+              conditions: s.conditions,
+              badges: rank != null && rank < 2 ? [{ text: `auto top-${rank + 1}`, tone: "ok" as const }] : [],
+              checked: on,
+              onToggle: (v: boolean) => void onToggle(i, v),
+              xLabel: s.xColumn,
+              yLabel: s.yColumns.length > 0 ? `${s.yColumns.join(", ")}${template.unit ? ` (${template.unit})` : ""}` : undefined,
+              units: template.unit || undefined,
+            };
+          })}
+          sample={sample}
+          sampledAt={sampledAt}
+          loadingSample={previewLoading}
+          sampleError={sampleError}
+          summary={`${enabledCount} of ${sug.length} checked`}
+          resolution={resolution}
+          onResolutionChange={changeResolution}
+          onRefresh={() => void loadSample()}
+          onClose={() => setModalOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
 /** Graph designer: pick chart type + axes from a card's test-run results, save spec. */
 function GraphDesigner({ card, onClose }: { card: Card; onClose: () => void }) {
   const [graphs, setGraphs] = useState<GraphSpec[]>([]);
@@ -1618,6 +1767,13 @@ function GraphDesigner({ card, onClose }: { card: Card; onClose: () => void }) {
     name: "", chartType: "table" as ChartType, xColumn: "", yColumns: [] as string[], title: "",
   });
   const [editing, setEditing] = useState<string | null>(null);
+  // One-time LLM suggestion state: candidates from the card's own test-run.
+  const [suggesting, setSuggesting] = useState(false);
+  const [candidates, setCandidates] = useState<{ list: ChartSuggestion[]; model: string | null; heuristic: boolean; reason: string | null } | null>(null);
+  const [checkedCand, setCheckedCand] = useState<number[]>([]);
+  // Merge optimizer state for the card's line.
+  const [optimizing, setOptimizing] = useState(false);
+  const [proposals, setProposals] = useState<{ list: MergeProposal[]; note?: string; skipped?: string[] } | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -1630,19 +1786,109 @@ function GraphDesigner({ card, onClose }: { card: Card; onClose: () => void }) {
       setTestResult(t);
       setLoading(false);
       if (t && t.columns.length > 0) {
-        setDraft((d) => ({ ...d, xColumn: d.xColumn || t.columns[0] }));
+        // Render by default: temporal X -> line, else bar; first numeric Y.
+        const nums = numericColumns(t.rows, t.columns);
+        setDraft((d) => {
+          if (d.xColumn || d.yColumns.length > 0) return d;
+          const x = t.columns.find(isTemporalName) ?? t.columns[0];
+          const y = nums.slice(0, 1);
+          return { ...d, xColumn: x, yColumns: y, chartType: defaultChartType(x, y.length > 0) };
+        });
       }
     });
   }, [card.id]);
 
   const cols = testResult?.columns ?? [];
+  const numCols = testResult ? numericColumns(testResult.rows, cols) : [];
 
-  function numericCols(): string[] {
-    if (!testResult) return [];
-    return cols.filter((c) => {
-      const v = testResult.rows[0]?.[c];
-      return typeof v === "number" || (typeof v === "string" && !isNaN(Number(v)));
-    });
+  async function onRecommend() {
+    setSuggesting(true);
+    setError(null);
+    try {
+      const r = await chartApi.recommendCard(card.id);
+      setCandidates({ list: r.suggestions, model: r.model, heuristic: r.heuristic, reason: r.reason });
+      // Top-2 pre-selected for RAG; user adjusts freely.
+      setCheckedCand(r.suggestions.map((_, i) => i).filter((i) => i < 2));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSuggesting(false);
+    }
+  }
+
+  async function onSaveCandidates() {
+    try {
+      for (const i of checkedCand) {
+        const c = candidates?.list[i];
+        if (!c) continue;
+        await graphApi.create(card.id, {
+          name: c.title || `Suggested ${c.chartType}`,
+          chartType: c.chartType,
+          xColumn: c.xColumn,
+          yColumns: c.yColumns,
+          title: c.title,
+          config: {
+            source: "ai-recommended",
+            selected_for_rag: true,
+            rationale: c.rationale,
+            conditions: c.conditions,
+            units: card.unit || undefined,
+            threshold: card.threshold,
+          },
+        });
+      }
+      setGraphs(await graphApi.listForCard(card.id));
+      setCandidates(null);
+      setCheckedCand([]);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function onOptimize() {
+    setOptimizing(true);
+    setError(null);
+    try {
+      const r = await chartApi.optimizeLine(card.lineId);
+      setProposals({ list: r.proposals, note: r.note, skipped: r.skipped });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setOptimizing(false);
+    }
+  }
+
+  async function onAcceptProposal(p: MergeProposal) {
+    try {
+      await graphApi.create(p.primaryCardId, {
+        name: p.title,
+        chartType: p.chartType,
+        xColumn: p.xColumn,
+        yColumns: [...new Set(p.series.map((s) => s.column))],
+        title: p.title,
+        config: {
+          source: "ai-recommended",
+          merged: true,
+          cardIds: p.cardIds,
+          series: p.series,
+          rationale: p.rationale,
+          selected_for_rag: true,
+        },
+      });
+      setGraphs(await graphApi.listForCard(card.id));
+      setProposals((prev) => prev && { ...prev, list: prev.list.filter((x) => x !== p) });
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function onToggleRag(g: GraphSpec, on: boolean) {
+    try {
+      const updated = await graphApi.update(g.id, { config: { ...g.config, selected_for_rag: on } });
+      setGraphs((gs) => gs.map((x) => (x.id === g.id ? updated : x)));
+    } catch (e) {
+      setError((e as Error).message);
+    }
   }
 
   function startEdit(g: GraphSpec) {
@@ -1659,10 +1905,14 @@ function GraphDesigner({ card, onClose }: { card: Card; onClose: () => void }) {
 
   async function onSave() {
     try {
+      // Scaffolding travels with the spec so the prompt builder later gets
+      // rows + spec + meaning without new plumbing.
+      const config = { units: card.unit || undefined, threshold: card.threshold };
       if (editing) {
-        await graphApi.update(editing, draft);
+        const cur = graphs.find((g) => g.id === editing);
+        await graphApi.update(editing, { ...draft, config: { ...cur?.config, ...config } });
       } else {
-        await graphApi.create(card.id, draft);
+        await graphApi.create(card.id, { ...draft, config: { source: "manual", selected_for_rag: true, ...config } });
       }
       const g = await graphApi.listForCard(card.id);
       setGraphs(g);
@@ -1721,7 +1971,7 @@ function GraphDesigner({ card, onClose }: { card: Card; onClose: () => void }) {
               </Field>
               <Field label="Y axis (series, click to toggle)">
                 <div className="mt-1 flex flex-wrap gap-1">
-                  {numericCols().map((c) => (
+                  {numCols.map((c) => (
                     <button
                       key={c}
                       onClick={() => toggleY(c)}
@@ -1730,7 +1980,7 @@ function GraphDesigner({ card, onClose }: { card: Card; onClose: () => void }) {
                       {c}
                     </button>
                   ))}
-                  {numericCols().length === 0 && <span className="text-xs text-slate-400">no numeric columns</span>}
+                  {numCols.length === 0 && <span className="text-xs text-slate-400">no numeric columns</span>}
                 </div>
               </Field>
             </div>
@@ -1742,7 +1992,11 @@ function GraphDesigner({ card, onClose }: { card: Card; onClose: () => void }) {
             {draft.chartType !== "table" && draft.xColumn && draft.yColumns.length > 0 && (
               <div className="mt-4 rounded-lg border border-slate-200 p-4 dark:border-ink-800">
                 <div className="text-xs font-semibold text-slate-400">Preview</div>
-                <ChartPreview rows={testResult.rows} x={draft.xColumn} yCols={draft.yColumns} type={draft.chartType} title={draft.title} />
+                {isTradingEligible(testResult.rows, draft.xColumn, draft.yColumns, draft.chartType) ? (
+                  <TradingChart rows={testResult.rows} x={draft.xColumn} yCols={draft.yColumns} type={draft.chartType as "line" | "area"} title={draft.title} threshold={card.threshold} height={220} units={card.unit || undefined} />
+                ) : (
+                  <Chart rows={testResult.rows} x={draft.xColumn} yCols={draft.yColumns} type={draft.chartType} title={draft.title} threshold={card.threshold} />
+                )}
               </div>
             )}
             {draft.chartType === "table" && (
@@ -1758,87 +2012,124 @@ function GraphDesigner({ card, onClose }: { card: Card; onClose: () => void }) {
           </div>
         )}
 
-        {graphs.length > 0 && (
-          <div className="mt-4">
-            <div className="text-sm font-semibold">Saved graphs ({graphs.length})</div>
-            {graphs.map((g) => (
-              <div key={g.id} className="mt-2 flex items-center gap-2 rounded-lg border border-slate-100 p-2 text-sm dark:border-ink-800">
-                <StatusChip tone="accent">{g.chartType}</StatusChip>
-                <span className="font-medium">{g.name || g.title || "Untitled"}</span>
-                <span className="text-xs text-slate-400">x:{g.xColumn} y:{g.yColumns.join(",")}</span>
-                <span className="tnum text-xs text-slate-400">v{g.version}</span>
-                <div className="ml-auto flex gap-1">
-                  <Btn size="sm" icon={Pencil} onClick={() => startEdit(g)}>edit</Btn>
-                  <Btn size="sm" variant="bad" icon={Trash2} onClick={() => void onDelete(g.id)}>del</Btn>
+        {testResult && (
+          <div className="mt-4 rounded-lg border border-accent-500/30 bg-accent-500/5 p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="text-sm font-semibold">Chart suggestions</div>
+              {candidates && (
+                <span
+                  className="rounded-full bg-accent-500/10 px-2 py-0.5 text-xs text-accent-500 ring-1 ring-accent-500/30"
+                  title={candidates.heuristic ? `Heuristic fallback — ${llmReasonText(candidates.reason)}` : `Recommended by ${candidates.model ?? "LLM"}`}
+                >
+                  {candidates.heuristic ? "heuristic" : `LLM · ${candidates.model}`}
+                </span>
+              )}
+              <div className="ml-auto flex gap-2">
+                <Btn size="sm" icon={Sparkles} onClick={() => void onRecommend()} loading={suggesting} disabled={suggesting} title="One-time LLM recommendation for this card's data shape. Never auto-stores.">
+                  {candidates ? "Re-recommend" : "Recommend charts"}
+                </Btn>
+                <Btn size="sm" icon={ChartLine} onClick={() => void onOptimize()} loading={optimizing} disabled={optimizing} title="One-time cross-feature merge optimizer for this line. Proposes combinations that lose no information.">
+                  Optimize line
+                </Btn>
+              </div>
+            </div>
+            {!candidates && !proposals && (
+              <div className="mt-1 text-xs text-slate-500">Ranked candidates with reasoning appear here — check the ones RAG should use (top-2 pre-checked). Optimize compares this line's features and proposes merges.</div>
+            )}
+            {candidates && (
+              <div className="mt-3 flex flex-col gap-2">
+                {candidates.list.map((c, i) => (
+                  <label key={i} className={`anim-pop-in flex cursor-pointer items-start gap-2 rounded-lg border p-2.5 text-sm transition-colors ${checkedCand.includes(i) ? "border-accent-500/50 bg-accent-500/5" : "border-slate-200 dark:border-ink-800"}`}>
+                    <input
+                      type="checkbox"
+                      checked={checkedCand.includes(i)}
+                      onChange={() => setCheckedCand((s) => (s.includes(i) ? s.filter((x) => x !== i) : [...s, i]))}
+                      className="mt-1 h-4 w-4 accent-teal-500"
+                    />
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <StatusChip tone="accent">{c.chartType}</StatusChip>
+                        {i < 2 && <span className="rounded-full bg-state-ok/10 px-1.5 py-px text-[10px] text-state-ok ring-1 ring-state-ok/30">auto top-{i + 1}</span>}
+                        <span className="font-medium">{c.title}</span>
+                        <span className="text-xs text-slate-400">x:{c.xColumn} y:{c.yColumns.join(",") || "—"}</span>
+                      </div>
+                      {c.rationale && <div className="mt-0.5 text-xs text-slate-500">{c.rationale}</div>}
+                      {c.conditions && <div className="mt-0.5 text-xs text-accent-500/90">◷ {c.conditions}</div>}
+                    </div>
+                  </label>
+                ))}
+                <div className="flex justify-end">
+                  <Btn variant="primary" size="sm" icon={Save} onClick={() => void onSaveCandidates()} disabled={checkedCand.length === 0}>
+                    Save {checkedCand.length} selected as specs
+                  </Btn>
                 </div>
               </div>
-            ))}
+            )}
+            {proposals && (
+              <div className="mt-3 flex flex-col gap-2">
+                {proposals.note && <div className="text-xs text-slate-500">{proposals.note}</div>}
+                {proposals.skipped && proposals.skipped.length > 0 && (
+                  <div className="text-xs text-state-warn" title="These groups were not judged — merges may exist that the optimizer did not evaluate">
+                    skipped: {proposals.skipped.join(" · ")}
+                  </div>
+                )}
+                {proposals.list.map((p, i) => (
+                  <div key={i} className="anim-pop-in rounded-lg border border-violet-500/40 bg-violet-500/5 p-2.5 text-sm">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <StatusChip tone="accent">{p.chartType}</StatusChip>
+                      <span className="rounded-full bg-violet-500/10 px-1.5 py-px text-[10px] text-violet-400 ring-1 ring-violet-500/30">merge · {p.series.length} series</span>
+                      <span className="font-medium">{p.title}</span>
+                      <Btn size="sm" variant="primary" onClick={() => void onAcceptProposal(p)} className="ml-auto">Accept merge</Btn>
+                    </div>
+                    <div className="tnum mt-1 text-xs text-slate-400">{p.series.map((s) => `${s.cardName}.${s.column}`).join(" · ")}</div>
+                    {p.rationale && <div className="mt-0.5 text-xs text-slate-500">{p.rationale}</div>}
+                  </div>
+                ))}
+                {proposals.list.length === 0 && !proposals.note && <div className="text-xs text-slate-500">No merges proposed — keeping separate charts loses nothing.</div>}
+              </div>
+            )}
+          </div>
+        )}
+
+        {graphs.length > 0 && (
+          <div className="mt-4">
+            <div className="text-sm font-semibold">Saved graphs ({graphs.length}) <span className="font-normal text-xs text-slate-400">— checked feeds RAG prompts</span></div>
+            {graphs.map((g) => {
+              const cfg = (g.config ?? {}) as Record<string, unknown>;
+              const rag = cfg.selected_for_rag !== false;
+              const merged = cfg.merged === true;
+              return (
+                <div key={g.id} className="mt-2 rounded-lg border border-slate-100 p-2 text-sm dark:border-ink-800">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={rag}
+                      onChange={() => void onToggleRag(g, !rag)}
+                      title="Feed this chart to RAG prompts"
+                      className="h-4 w-4 accent-teal-500"
+                    />
+                    <StatusChip tone="accent">{g.chartType}</StatusChip>
+                    {merged && <span className="rounded-full bg-violet-500/10 px-1.5 py-px text-[10px] text-violet-400 ring-1 ring-violet-500/30">merged</span>}
+                    {(cfg.source as string) === "ai-recommended" && <span className="rounded-full bg-accent-500/10 px-1.5 py-px text-[10px] text-accent-500 ring-1 ring-accent-500/30">AI</span>}
+                    <span className="font-medium">{g.name || g.title || "Untitled"}</span>
+                    <span className="text-xs text-slate-400">x:{g.xColumn} y:{g.yColumns.join(",")}</span>
+                    <span className="tnum text-xs text-slate-400">v{g.version}</span>
+                    <div className="ml-auto flex gap-1">
+                      <Btn size="sm" icon={Pencil} onClick={() => startEdit(g)}>edit</Btn>
+                      <Btn size="sm" variant="bad" icon={Trash2} onClick={() => void onDelete(g.id)}>del</Btn>
+                    </div>
+                  </div>
+                  {typeof cfg.rationale === "string" && cfg.rationale && <div className="ml-6 mt-0.5 text-xs text-slate-500">{cfg.rationale}</div>}
+                  {testResult && !merged && (
+                    <div className="ml-6 mt-1 max-w-md"><Chart rows={testResult.rows} x={g.xColumn} yCols={g.yColumns} type={g.chartType} height={90} compact /></div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
         {loading && <div className="mt-4 flex items-center gap-2 text-sm text-slate-400"><Spinner /> Loading test data…</div>}
       </div>
     </div>
-  );
-}
-
-/** Minimal SVG chart preview — line, bar, area. No library needed. */
-function ChartPreview({ rows, x, yCols, type, title }: { rows: Record<string, unknown>[]; x: string; yCols: string[]; type: string; title: string }) {
-  if (rows.length === 0) return <div className="text-xs text-slate-400">No data to preview</div>;
-
-  const W = 400, H = 160, PAD = 30;
-  const xVals = rows.map((r) => String(r[x] ?? ""));
-  const numCols = yCols.filter((c) => rows.some((r) => typeof r[c] === "number" || !isNaN(Number(r[c]))));
-  if (numCols.length === 0) return <div className="text-xs text-slate-400">No numeric Y columns</div>;
-
-  const allNums = rows.map((r) => numCols.map((c) => Number(r[c] ?? 0))).flat();
-  const yMin = Math.min(...allNums);
-  const yMax = Math.max(...allNums) || 1;
-  const yRange = yMax - yMin || 1;
-
-  function xi(i: number) { return PAD + (i / Math.max(xVals.length - 1, 1)) * (W - 2 * PAD); }
-  function yi(v: number) { return H - PAD - ((v - yMin) / yRange) * (H - 2 * PAD); }
-
-  const COLORS = ["#14b8a6", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899"];
-
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full mt-2">
-      {title && <text x={W / 2} y={14} textAnchor="middle" className="fill-slate-500 text-xs">{title}</text>}
-      {/* grid lines */}
-      {[0, 0.25, 0.5, 0.75, 1].map((f) => (
-        <g key={f}>
-          <line x1={PAD} x2={W - PAD} y1={yi(yMin + f * yRange)} y2={yi(yMin + f * yRange)} className="stroke-slate-200 dark:stroke-ink-800" strokeWidth={0.5} />
-          <text x={PAD - 4} y={yi(yMin + f * yRange) + 3} textAnchor="end" className="fill-slate-400 text-[8px]">{(yMin + f * yRange).toFixed(1)}</text>
-        </g>
-      ))}
-      {/* x labels */}
-      {xVals.filter((_, i) => i % Math.max(1, Math.floor(xVals.length / 6)) === 0).map((v, _, arr) => {
-        const i = xVals.indexOf(v);
-        return <text key={i} x={xi(i)} y={H - 8} textAnchor="middle" className="fill-slate-400 text-[8px]">{v.length > 8 ? v.slice(0, 8) + "…" : v}</text>;
-      })}
-      {type === "line" && numCols.map((col, ci) => {
-        const pts = rows.map((r, i) => `${xi(i)},${yi(Number(r[col] ?? 0))}`).join(" ");
-        return <polyline key={col} points={pts} fill="none" stroke={COLORS[ci % COLORS.length]} strokeWidth={1.5} />;
-      })}
-      {type === "area" && numCols.map((col, ci) => {
-        const pts = rows.map((r, i) => `${xi(i)},${yi(Number(r[col] ?? 0))}`);
-        const d = `M${pts.join(" L")} L${xi(rows.length - 1)},${yi(yMin)} L${xi(0)},${yi(yMin)} Z`;
-        return <path key={col} d={d} fill={COLORS[ci % COLORS.length]} fillOpacity={0.15} />;
-      })}
-      {type === "bar" && rows.map((r, i) => {
-        const bw = (W - 2 * PAD) / Math.max(rows.length * numCols.length, 1) * 0.7;
-        return numCols.map((col, ci) => {
-          const v = Number(r[col] ?? 0);
-          const barH = ((v - yMin) / yRange) * (H - 2 * PAD);
-          return <rect key={`${i}-${ci}`} x={xi(i) - bw / 2 + ci * (bw + 1)} y={yi(v)} width={bw} height={barH} fill={COLORS[ci % COLORS.length]} rx={1} />;
-        });
-      })}
-      {/* legend */}
-      {numCols.map((col, ci) => (
-        <g key={col} transform={`translate(${PAD + ci * 80}, ${H - 2})`}>
-          <rect width={8} height={8} fill={COLORS[ci % COLORS.length]} rx={1} />
-          <text x={12} y={8} className="fill-slate-400 text-[8px]">{col}</text>
-        </g>
-      ))}
-    </svg>
   );
 }

@@ -6,11 +6,13 @@ import { startPoller } from "./poller.js";
 import { connectionRoutes } from "./routes/connections.js";
 import { bankRoutes } from "./routes/banks.js";
 import { cardRoutes } from "./routes/cards.js";
+import { chartRoutes } from "./routes/charts.js";
 import { graphRoutes } from "./routes/graphs.js";
 import { hindsightRoutes } from "./routes/hindsight.js";
 import { historyRoutes } from "./routes/history.js";
 import { lineRoutes } from "./routes/lines.js";
 import { llmRoutes } from "./routes/llm.js";
+import { llmCallRoutes } from "./routes/llmcalls.js";
 import { playgroundRoutes } from "./routes/playground.js";
 import { runTick, startTicker } from "./ticker.js";
 
@@ -30,10 +32,12 @@ async function main() {
   await app.register(bankRoutes);
   await app.register(lineRoutes);
   await app.register(cardRoutes);
+  await app.register(chartRoutes);
   await app.register(graphRoutes);
   await app.register(historyRoutes);
   await app.register(hindsightRoutes);
   await app.register(llmRoutes);
+  await app.register(llmCallRoutes);
   await app.register(playgroundRoutes);
 
   // Manual tick trigger (setter action + verification hook).

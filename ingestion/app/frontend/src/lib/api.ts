@@ -114,7 +114,7 @@ export interface BankPreview {
   hindsightConfigured: boolean;
   tables: { table: string; columns: { name: string; type: string }[]; error?: string }[];
   missions: { retain: string; observations: string; reflect: string };
-  extractionMode: "concise" | "verbose";
+  extractionMode: "chunks" | "concise" | "verbose";
   entityLabels: { key: string; description: string; type: "value" | "multi-values"; values: { value: string; description: string }[]; tag: boolean }[];
   directives: { name: string; content: string; tags: string[] }[];
   disposition: { skepticism: number; literalism: number; empathy: number };
@@ -126,7 +126,7 @@ export interface BankPreview {
 
 export interface BankPlan {
   missions: { retain: string; observations: string; reflect: string };
-  extractionMode: "concise" | "verbose";
+  extractionMode: "chunks" | "concise" | "verbose";
   entityLabels: BankPreview["entityLabels"];
   directives: { name: string; content: string; tags: string[] }[];
   disposition: { skepticism: number; literalism: number; empathy: number };
@@ -139,7 +139,7 @@ export const bankApi = {
     req<{ hindsight: { configured: boolean; base: string | null }; banks: BankOverviewEntry[] }>("/api/ingest/banks"),
   preview: (lineId: string) => req<BankPreview>(`/api/ingest/banks/preview/${lineId}`),
   suggest: (lineId: string, kind: "entities" | "missions" | "mental-model" | "directives") =>
-    req<{ kind: string; text: string; parsed: unknown; model: string; latencyMs: number }>("/api/ingest/banks/suggest", {
+    req<{ kind: string; text: string; parsed: unknown; model: string | null; latencyMs: number; attempts: number; reason: string | null }>("/api/ingest/banks/suggest", {
       method: "POST",
       body: JSON.stringify({ lineId, kind }),
     }),
@@ -152,6 +152,19 @@ export const bankApi = {
     ),
 };
 
+export interface ChartSuggestion {
+  chartType: ChartType;
+  xColumn: string;
+  yColumns: string[];
+  title: string;
+  rationale: string;
+  conditions: string;
+  enabled?: boolean;
+  resolutions?: string[];
+  xCondition?: { column: string; bucket: string } | null;
+  yConditions?: { column: string; op: string; value: number }[];
+}
+
 export interface CardTemplate {
   id: string;
   name: string;
@@ -161,6 +174,7 @@ export interface CardTemplate {
   granularity: "hourly" | "shift" | "daily";
   unit: string;
   extractHint: string;
+  chartSuggestions: ChartSuggestion[];
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -348,4 +362,119 @@ export const graphApi = {
     }),
   delete: (id: string) =>
     req<{ ok: boolean }>(`/api/ingest/graphs/${id}`, { method: "DELETE" }),
+};
+
+/* ---- F6 AI Logs: every backend LLM call, success or failure ---- */
+
+export interface LlmCallAttempt {
+  n: number;
+  outcome: "ok" | "failed" | "rejected";
+  detail: string;
+  latencyMs: number;
+  temperature?: number;
+}
+
+export interface LlmCallRecord {
+  id: number;
+  at: string;
+  route: string;
+  lineId: string | null;
+  cardId: string | null;
+  templateId: string | null;
+  model: string;
+  success: boolean;
+  reason: string | null;
+  attempts: number;
+  latencyMs: number;
+  attemptsJson: LlmCallAttempt[];
+  prompt: string;
+  responseText: string;
+  parsedJson: unknown | null;
+}
+
+export interface LlmCallStats {
+  last24h: number;
+  okRate: number | null;
+  avgLatencyMs: number;
+  retries24h: number;
+  retained: number;
+  cap: number;
+}
+
+export interface LlmCallFilter {
+  route?: string;
+  line?: string;
+  date?: string;
+  ok?: "true" | "false" | "all";
+  q?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export const aiLogsApi = {
+  stats: () => req<LlmCallStats>("/api/ingest/llm/calls/stats"),
+  list: (f: LlmCallFilter) => {
+    const p = new URLSearchParams();
+    if (f.route) p.set("route", f.route);
+    if (f.line) p.set("line", f.line);
+    if (f.date) p.set("date", f.date);
+    if (f.ok && f.ok !== "all") p.set("ok", f.ok);
+    if (f.q) p.set("q", f.q);
+    p.set("limit", String(f.limit ?? 50));
+    p.set("offset", String(f.offset ?? 0));
+    return req<{ rows: LlmCallRecord[]; total: number }>(`/api/ingest/llm/calls?${p.toString()}`);
+  },
+  get: (id: number) => req<LlmCallRecord>(`/api/ingest/llm/calls/${id}`),
+};
+
+/* ---- Chart recommendations (one-time LLM steps) ---- */
+
+export interface RecommendResponse {
+  suggestions: ChartSuggestion[];
+  stored: boolean;
+  model: string | null;
+  heuristic: boolean;
+  /** Why the heuristic was used; null on an LLM-backed result. */
+  reason: string | null;
+}
+
+/** Human-readable cause for an LLM fallback — shown in badge tooltips. */
+export function llmReasonText(reason: string | null | undefined): string {
+  switch (reason) {
+    case "no-provider": return "no LLM provider active";
+    case "timeout": return "LLM timed out — retries exhausted";
+    case "http-5xx": return "LLM server error — retries exhausted";
+    case "http-4xx": return "LLM rejected the request";
+    case "network": return "could not reach the LLM";
+    case "empty": return "LLM returned nothing — retries exhausted";
+    case "bad-json": return "LLM output was not parseable JSON — retries exhausted";
+    case "schema-reject": return "LLM output failed validation — retries exhausted";
+    case "no-valid-candidates": return "LLM answered but nothing survived validation";
+    default: return "heuristic fallback";
+  }
+}
+
+export interface MergeProposal {
+  primaryCardId: string;
+  cardIds: string[];
+  chartType: "line" | "bar" | "area";
+  xColumn: string;
+  series: { cardId: string; cardName: string; column: string }[];
+  title: string;
+  rationale: string;
+}
+
+export const chartApi = {
+  recommendTemplate: (id: string) =>
+    req<RecommendResponse>(`/api/ingest/templates/${id}/recommend-charts`, { method: "POST", body: JSON.stringify({}) }),
+  sampleTemplate: (id: string, from?: string, to?: string) =>
+    req<TestResult>(`/api/ingest/templates/${id}/sample`, { method: "POST", body: JSON.stringify({ from, to }) }),
+  setSuggestions: (id: string, enabled: boolean[]) =>
+    req<CardTemplate>(`/api/ingest/templates/${id}/suggestions`, { method: "PATCH", body: JSON.stringify({ enabled }) }),
+  recommendCard: (id: string) =>
+    req<RecommendResponse>(`/api/ingest/cards/${id}/recommend-charts`, { method: "POST", body: JSON.stringify({}) }),
+  optimizeLine: (lineId: string) =>
+    req<{ proposals: MergeProposal[]; note?: string; skipped?: string[] }>(`/api/ingest/lines/${lineId}/optimize-charts`, { method: "POST", body: JSON.stringify({}) }),
+  querySample: (lineId: string, sql: string, from?: string, to?: string) =>
+    req<TestResult>(`/api/ingest/lines/${lineId}/query-sample`, { method: "POST", body: JSON.stringify({ sql, from, to }) }),
 };

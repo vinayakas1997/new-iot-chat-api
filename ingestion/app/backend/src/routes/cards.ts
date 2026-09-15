@@ -27,6 +27,19 @@ import { getConnection } from "../db/store.js";
 
 const gran = z.enum(["hourly", "shift", "daily"]);
 
+const suggestionSchema = z.object({
+  chartType: z.enum(["table", "line", "bar", "area"]),
+  xColumn: z.string(),
+  yColumns: z.array(z.string()),
+  title: z.string().max(200).default(""),
+  rationale: z.string().max(1000).default(""),
+  conditions: z.string().max(500).default(""),
+  enabled: z.boolean().default(true),
+  resolutions: z.array(z.string()).default([]),
+  xCondition: z.object({ column: z.string(), bucket: z.string() }).nullable().default(null),
+  yConditions: z.array(z.object({ column: z.string(), op: z.string(), value: z.number() })).default([]),
+});
+
 const tplSchema = z.object({
   name: z.string().min(1).max(120),
   description: z.string().max(2000).default(""),
@@ -35,6 +48,7 @@ const tplSchema = z.object({
   granularity: gran.default("hourly"),
   unit: z.string().max(20).default(""),
   extractHint: z.string().max(2000).default(""),
+  chartSuggestions: z.array(suggestionSchema).default([]),
 });
 
 const cardSchema = z.object({

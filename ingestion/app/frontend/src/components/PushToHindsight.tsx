@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Rocket, Save, Sparkles, X } from "lucide-react";
-import { bankApi, cardApi, type BankPlan, type BankPreview, type Card } from "../lib/api";
+import { bankApi, cardApi, llmReasonText, type BankPlan, type BankPreview, type Card } from "../lib/api";
 import { AlertBanner, StatusChip } from "./chips";
 import { FormattedText } from "./FormattedText";
 import { Btn } from "./ui";
@@ -53,7 +53,7 @@ export function PushToHindsight({ lineId, lineName, onClose, onPushed }: {
     try {
       const r = await bankApi.suggest(lineId, kind);
       const j = r.parsed as Record<string, unknown> | null;
-      if (!j) { setError("AI returned non-JSON — try again"); return; }
+      if (!j) { setError(`AI draft failed: ${llmReasonText(r.reason)}${r.attempts > 1 ? ` (${r.attempts} attempts)` : ""} — try again`); return; }
       if (kind === "entities" && Array.isArray(j.groups)) {
         const groups = (j.groups as Record<string, unknown>[]).map((g) => ({
           key: String(g.key ?? "metric"),
@@ -191,7 +191,8 @@ export function PushToHindsight({ lineId, lineName, onClose, onPushed }: {
                 </label>
               ))}
               <label className="mt-2 block text-sm">Extraction mode
-                <select value={plan.extractionMode} onChange={(e) => setPlan({ ...plan, extractionMode: e.target.value as "concise" | "verbose" })} className={inp}>
+                <select value={plan.extractionMode} onChange={(e) => setPlan({ ...plan, extractionMode: e.target.value as "chunks" | "concise" | "verbose" })} className={inp}>
+                  <option value="chunks">chunks — store our extracted facts as-is (no extra LLM call; use with slow/local models)</option>
                   <option value="concise">concise — only facts worth remembering</option>
                   <option value="verbose">verbose — more detail, more tokens</option>
                 </select>

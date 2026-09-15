@@ -1,5 +1,6 @@
-import { getConnection, getLine, listCards, listLines, recordRun, touchLineTick } from "./db/store.js";
+import { getConnection, listCards, listLines, recordRun, touchLineTick } from "./db/store.js";
 import { assertReadonly, driverFor } from "./drivers/index.js";
+import { extractAndRetain } from "./extract.js";
 import type { Logger } from "./logger.js";
 
 const TICK_INTERVAL_MS = Number(process.env.TICK_INTERVAL_MS ?? 5 * 60 * 1000);
@@ -12,9 +13,9 @@ function windowFor(granularity: "hourly" | "shift" | "daily", since: string | nu
 /**
  * Gap-3 engine v1: every interval, execute each LIVE card of each ACTIVE line
  * (dormant cards and deregistered lines are skipped), footprint every attempt
- * in the run log (kind=tick), and stamp the line's last_tick on success.
- * Extraction + Hindsight writes land in the next slice; factsStored stays 0
- * and says so in F4.
+ * in the run log (kind=tick), stamp the line's last_tick on success, and retain
+ * extracted facts in the line's bank (factsStored counts them; errors are
+ * recorded without failing the tick).
  */
 export async function runTick(log: Logger): Promise<{ cards: number; ok: number; failed: number }> {
   const now = new Date();
@@ -37,11 +38,18 @@ export async function runTick(log: Logger): Promise<{ cards: number; ok: number;
       try {
         assertReadonly(sql);
         const rows = await driverFor(conn).queryReadonly<Record<string, unknown>>(conn, sql);
+        // Extraction slice v1: LLM extracts durable facts from this result set
+        // and retains them in the line's bank. Best-effort — a Hindsight/LLM
+        // outage records the error but never fails the tick.
+        const extraction = await extractAndRetain(log, card, line, rows, w);
+        if (extraction.error) {
+          log.warn({ lineId: line.id, cardId: card.id, error: extraction.error }, "fact extraction skipped");
+        }
         recordRun({
           at: now.toISOString(), lineId: line.id, cardId: card.id,
           cardVersion: card.version, kind: "tick", ok: true,
-          rowsPulled: rows.length, unitsBuilt: rows.length, factsStored: 0,
-          durationMs: Date.now() - started, error: null,
+          rowsPulled: rows.length, unitsBuilt: rows.length, factsStored: extraction.stored,
+          durationMs: Date.now() - started, error: extraction.error,
         });
         touchLineTick(line.id, now.toISOString());
         ok++;

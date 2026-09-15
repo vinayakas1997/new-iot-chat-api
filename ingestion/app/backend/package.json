@@ -7,6 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
+    "test:llm": "tsx scripts/check-llm-parse.ts",
     "build:sqlite": "sh scripts/rebuild-sqlite.sh",
     "postinstall": "sh scripts/rebuild-sqlite.sh"
   },

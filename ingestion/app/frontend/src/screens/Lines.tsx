@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Brain, Layers, Pencil, Pause, Play, Plus, Save, Search } from "lucide-react";
+import { Brain, Eye, Layers, Pencil, Pause, Play, Plus, Save, Search } from "lucide-react";
 import { api, bankApi, cardApi, type BankOverviewEntry, type Connection, type Line, type TableRef } from "../lib/api";
 import { AlertBanner, StatusChip } from "../components/chips";
 import { PushToHindsight } from "../components/PushToHindsight";
+import { LinePreview } from "../components/LinePreview";
 import { FormattedText } from "../components/FormattedText";
 import { Btn, EmptyState } from "../components/ui";
 
@@ -25,6 +26,7 @@ export function Lines() {
   const [banks, setBanks] = useState<Record<string, BankOverviewEntry>>({});
   const [greenByLine, setGreenByLine] = useState<Record<string, number>>({});
   const [pushLine, setPushLine] = useState<Line | null>(null);
+  const [previewLine, setPreviewLine] = useState<Line | null>(null);
   const [params, setParams] = useSearchParams();
 
   async function refresh() {
@@ -183,6 +185,7 @@ export function Lines() {
                 </td>
                 <td className="py-2.5" onClick={(e) => e.stopPropagation()}>
                   <span className="mr-2 inline-flex"><Btn variant="ghost" icon={Pencil} onClick={() => openForm(l)}>edit</Btn></span>
+                  <span className="mr-2 inline-flex"><Btn variant="ghost" icon={Eye} onClick={() => setPreviewLine(l)} title="Preview a feature's charts on this line's data — same template, this line's numbers">preview</Btn></span>
                   {(() => {
                     const b = banks[l.id];
                     const green = greenByLine[l.id] ?? 0;
@@ -239,6 +242,13 @@ export function Lines() {
           lineName={pushLine.name}
           onClose={() => setPushLine(null)}
           onPushed={() => void refresh()}
+        />
+      )}
+
+      {previewLine && (
+        <LinePreview
+          line={previewLine}
+          onClose={() => setPreviewLine(null)}
         />
       )}
 

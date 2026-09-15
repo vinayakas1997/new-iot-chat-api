@@ -51,3 +51,10 @@ This box runs a custom Node 18 (ABI **109**, not stock 108), so
 `better-sqlite3`'s prebuilt binary never loads. `backend/scripts/rebuild-sqlite.sh`
 rebuilds it against `/usr/include/node` headers; it runs automatically as
 `postinstall` and via `pnpm run build:sqlite`.
+
+## Third-party attributions
+
+- Temporal line/area charts render with [TradingView Lightweight
+  Charts™](https://www.tradingview.com/lightweight-charts/) (Apache-2.0).
+  Bars, categorical series, tables, and thumbnails use the in-house SVG
+  renderer (`frontend/src/components/Chart.tsx`).

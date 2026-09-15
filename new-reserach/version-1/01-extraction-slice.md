@@ -74,6 +74,22 @@ User: card name, unit, threshold, `extractHint`, and the rows.
 - `ingestion/app/backend/src/routes/hindsight.ts` — reuse retain helper.
 - `ingestion/app/backend/src/db/store.ts` — store `factsStored`, dedup keys.
 
+## Implemented (2026-09-15)
+
+Built `backend/src/extract.ts` (LLM extract -> Hindsight retain) and hooked it
+into `ticker.ts`; `factsStored` now counts submitted facts and `lastWrite` is
+non-null. Verified live: tick rows=1, facts=1, recall returns the tagged fact.
+
+**Critical environment finding.** Hindsight's own LLM fact extraction
+(`retain_extract_facts`) times out against the local 35B model — one
+extraction-style generation took ~60s, and Hindsight's default is 120s × 4
+attempts (`HINDSIGHT_API_LLM_TIMEOUT` / `HINDSIGHT_API_LLM_MAX_RETRIES`). Fix:
+set the bank's `retain_extraction_mode` to **`chunks`**, which skips Hindsight's
+LLM entirely ("store each chunk as-is") and is correct because *our* tick
+already extracts the facts. Retain then returns in <0.5s and recall works.
+Observations / auto-consolidation are disabled in this local setup because they
+also call the LLM. UI: `chunks` is now the default option in Push to Hindsight.
+
 ## Open items
 
 - Which model extracts (active LLM, or a fixed extractor model)? Cost per tick

@@ -175,11 +175,37 @@ export function openStore(path: string): Database.Database {
       created_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_query_history_line ON query_history(line_id, created_at);
+    CREATE TABLE IF NOT EXISTS llm_calls (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      at TEXT NOT NULL,
+      route TEXT NOT NULL DEFAULT '',
+      line_id TEXT,
+      card_id TEXT,
+      template_id TEXT,
+      model TEXT NOT NULL DEFAULT '',
+      success INTEGER NOT NULL DEFAULT 0,
+      reason TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      latency_ms INTEGER NOT NULL DEFAULT 0,
+      attempts_json TEXT NOT NULL DEFAULT '[]',
+      prompt TEXT NOT NULL DEFAULT '',
+      response_text TEXT NOT NULL DEFAULT '',
+      parsed_json TEXT NOT NULL DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_llm_calls_at ON llm_calls(at DESC);
+    CREATE INDEX IF NOT EXISTS idx_llm_calls_route ON llm_calls(route, at DESC);
+    CREATE INDEX IF NOT EXISTS idx_llm_calls_line ON llm_calls(line_id, at DESC);
   `);
   // Lightweight migration: reference line a template was authored against.
   const tplCols = db.prepare("PRAGMA table_info(card_templates)").all() as { name: string }[];
   if (!tplCols.some((c) => c.name === "reference_line_id")) {
     db.exec("ALTER TABLE card_templates ADD COLUMN reference_line_id TEXT");
+  }
+  // Lightweight migration: ranked chart candidates recommended once per
+  // feature (template) by the LLM. Cards instantiated from the template
+  // inherit these as their default graph specs (top-2 selected for RAG).
+  if (!tplCols.some((c) => c.name === "chart_suggestions")) {
+    db.exec("ALTER TABLE card_templates ADD COLUMN chart_suggestions TEXT NOT NULL DEFAULT '[]'");
   }
   return db;
 }
@@ -441,6 +467,49 @@ export function touchLineTick(id: string, at: string): void {
 export type Granularity = "hourly" | "shift" | "daily";
 export type CardStatus = "live" | "dormant";
 
+/**
+ * One ranked chart candidate recommended by the LLM for a feature's data
+ * shape. Stored once per template (feature registration); inherited by cards.
+ * `conditions` states when the chart is meaningful (e.g. "breach=true").
+ */
+export interface ChartSuggestion {
+  chartType: ChartType;
+  xColumn: string;
+  yColumns: string[];
+  title: string;
+  rationale: string;
+  conditions: string;
+  /** User toggle at template level. Only enabled suggestions are inherited
+   *  by cards; top-2 enabled feed RAG. Defaults true. */
+  enabled?: boolean;
+  /**
+   * Stored chart-creation recipe (single source of truth for every renderer:
+   * UI preview, prompt builder, AI response). Fixed resolution ladder;
+   * x/y conditions state when the chart is meaningful.
+   */
+  resolutions?: string[];
+  xCondition?: { column: string; bucket: string } | null;
+  yConditions?: { column: string; op: string; value: number }[];
+}
+
+export const RESOLUTION_LADDER = ["hourly", "daily", "weekly", "monthly", "yearly"];
+
+export function parseChartSuggestions(raw: unknown): ChartSuggestion[] {
+  try {
+    const arr = JSON.parse((raw as string) ?? "[]") as unknown;
+    if (!Array.isArray(arr)) return [];
+    return arr.filter(
+      (s): s is ChartSuggestion =>
+        !!s && typeof s === "object"
+        && ["table", "line", "bar", "area"].includes((s as { chartType?: string }).chartType ?? "")
+        && typeof (s as { xColumn?: string }).xColumn === "string"
+        && Array.isArray((s as { yColumns?: unknown }).yColumns)
+    );
+  } catch {
+    return [];
+  }
+}
+
 export interface CardTemplate {
   id: string;
   name: string;
@@ -450,6 +519,7 @@ export interface CardTemplate {
   granularity: Granularity;
   unit: string;
   extractHint: string;
+  chartSuggestions: ChartSuggestion[];
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -490,6 +560,7 @@ function tplRow(r: Record<string, unknown>): CardTemplate {
     granularity: r.granularity as Granularity,
     unit: (r.unit as string) ?? "",
     extractHint: (r.extract_hint as string) ?? "",
+    chartSuggestions: parseChartSuggestions(r.chart_suggestions),
     version: r.version as number,
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
@@ -541,10 +612,10 @@ export function createTemplate(t: Omit<CardTemplate, "id" | "version" | "created
   const now = new Date().toISOString();
   getDb()
     .prepare(
-      `INSERT INTO card_templates (id,name,description,reference_line_id,sql_template,granularity,unit,extract_hint,version,created_at,updated_at)
-       VALUES (?,?,?,?,?,?,?,?,1,?,?)`
+      `INSERT INTO card_templates (id,name,description,reference_line_id,sql_template,granularity,unit,extract_hint,chart_suggestions,version,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,1,?,?)`
     )
-    .run(id, t.name, t.description, t.referenceLineId ?? null, t.sqlTemplate, t.granularity, t.unit, t.extractHint, now, now);
+    .run(id, t.name, t.description, t.referenceLineId ?? null, t.sqlTemplate, t.granularity, t.unit, t.extractHint, JSON.stringify(t.chartSuggestions ?? []), now, now);
   return getTemplate(id)!;
 }
 
@@ -559,7 +630,7 @@ export function updateTemplate(id: string, patch: Partial<Omit<CardTemplate, "id
   const bump = patch.sqlTemplate !== undefined && patch.sqlTemplate !== cur.sqlTemplate;
   getDb()
     .prepare(
-      `UPDATE card_templates SET name=?,description=?,reference_line_id=?,sql_template=?,granularity=?,unit=?,extract_hint=?,
+      `UPDATE card_templates SET name=?,description=?,reference_line_id=?,sql_template=?,granularity=?,unit=?,extract_hint=?,chart_suggestions=?,
        version=version+?,updated_at=? WHERE id=?`
     )
     .run(
@@ -570,6 +641,7 @@ export function updateTemplate(id: string, patch: Partial<Omit<CardTemplate, "id
       patch.granularity ?? cur.granularity,
       patch.unit ?? cur.unit,
       patch.extractHint ?? cur.extractHint,
+      patch.chartSuggestions !== undefined ? JSON.stringify(patch.chartSuggestions) : JSON.stringify(cur.chartSuggestions),
       bump ? 1 : 0,
       new Date().toISOString(),
       id
@@ -647,7 +719,7 @@ export function instantiateTemplate(templateId: string, lineId: string, override
   if (!tpl) throw new Error("template not found");
   const line = getLine(lineId);
   if (!line) throw new Error("line not found");
-  return createCard({
+  const card = createCard({
     lineId,
     name: overrides?.name ?? tpl.name,
     tables: overrides?.tables ?? [...line.memberTables],
@@ -657,6 +729,29 @@ export function instantiateTemplate(templateId: string, lineId: string, override
     extractHint: tpl.extractHint,
     templateId: tpl.id,
   });
+  // Inherit the feature's chart suggestions as the card's default specs.
+  // Only enabled suggestions inherit; top-2 enabled pre-selected for RAG.
+  // Tunable anytime from the card afterwards.
+  const inheritable = tpl.chartSuggestions.filter((s) => s.enabled !== false);
+  inheritable.forEach((s, i) => {
+    createGraphSpec({
+      cardId: card.id,
+      name: s.title || `Suggested ${s.chartType} ${i + 1}`,
+      chartType: s.chartType,
+      xColumn: s.xColumn,
+      yColumns: s.yColumns,
+      title: s.title,
+      config: {
+        source: "ai-recommended",
+        selected_for_rag: i < 2,
+        rationale: s.rationale,
+        conditions: s.conditions,
+        units: tpl.unit || undefined,
+        summary: tpl.description || undefined,
+      },
+    });
+  });
+  return getCard(card.id)!;
 }
 
 export type ChangeMode = "forward" | "reingest";
@@ -978,7 +1073,9 @@ export function getGraph(id: string): GraphSpec | null {
 }
 
 export function createGraphSpec(input: { cardId: string; name?: string; chartType?: ChartType; xColumn?: string; yColumns?: string[]; title?: string; config?: Record<string, unknown> }): GraphSpec {
-  const id = `gph-${Date.now().toString(36)}`;
+  // ms timestamp alone collides when several specs are created in one pass
+  // (e.g. template suggestion inherit) — add randomness.
+  const id = `gph-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
   const now = new Date().toISOString();
   getDb()
     .prepare(
@@ -1058,4 +1155,201 @@ export function queryHistory(lineId: string, limit = 20): QueryHistoryEntry[] {
       error: (x.error as string) ?? null,
       createdAt: x.created_at as string,
     }));
+}
+
+/* ---------------- LLM call audit log (F6 AI Logs) ---------------- */
+
+/** One row per llmChatJson call — success or failure, always explainable. */
+export interface LlmCallAttempt {
+  n: number;
+  outcome: "ok" | "failed" | "rejected";
+  /** Transport/parse failure, or the extraction stage on success. */
+  detail: string;
+  latencyMs: number;
+  /** Sampling temperature of this attempt (rises per retry to break loops). */
+  temperature?: number;
+}
+
+export interface LlmCallRecord {
+  id: number;
+  at: string;
+  route: string;
+  lineId: string | null;
+  cardId: string | null;
+  templateId: string | null;
+  model: string;
+  success: boolean;
+  reason: string | null;
+  attempts: number;
+  latencyMs: number;
+  attemptsJson: LlmCallAttempt[];
+  prompt: string;
+  responseText: string;
+  parsedJson: unknown | null;
+}
+
+/** Max rows retained; prune runs on every insert. */
+export const LLM_CALLS_CAP = 2000;
+/** Payload cap per text column so one wild completion can't bloat the DB. */
+export const LLM_CALL_TEXT_CAP = 8000;
+
+function capText(s: string): string {
+  return s.length > LLM_CALL_TEXT_CAP ? `${s.slice(0, LLM_CALL_TEXT_CAP)}…[truncated]` : s;
+}
+
+function llmCallRow(x: Record<string, unknown>): LlmCallRecord {
+  let attemptsJson: LlmCallAttempt[] = [];
+  try {
+    const v = JSON.parse((x.attempts_json as string) ?? "[]") as unknown;
+    if (Array.isArray(v)) attemptsJson = v as LlmCallAttempt[];
+  } catch { /* corrupt row: show empty timeline */ }
+  let parsedJson: unknown | null = null;
+  try {
+    const raw = (x.parsed_json as string) ?? "";
+    parsedJson = raw ? (JSON.parse(raw) as unknown) : null;
+  } catch {
+    parsedJson = x.parsed_json as string;
+  }
+  return {
+    id: x.id as number,
+    at: x.at as string,
+    route: (x.route as string) ?? "",
+    lineId: (x.line_id as string) ?? null,
+    cardId: (x.card_id as string) ?? null,
+    templateId: (x.template_id as string) ?? null,
+    model: (x.model as string) ?? "",
+    success: (x.success as number) === 1,
+    reason: (x.reason as string) ?? null,
+    attempts: (x.attempts as number) ?? 0,
+    latencyMs: (x.latency_ms as number) ?? 0,
+    attemptsJson,
+    prompt: (x.prompt as string) ?? "",
+    responseText: (x.response_text as string) ?? "",
+    parsedJson,
+  };
+}
+
+export function recordLlmCall(entry: {
+  route: string;
+  lineId?: string | null;
+  cardId?: string | null;
+  templateId?: string | null;
+  model: string;
+  success: boolean;
+  reason: string | null;
+  attempts: number;
+  latencyMs: number;
+  attemptsJson: LlmCallAttempt[];
+  prompt: string;
+  responseText: string;
+  parsedJson: string;
+}): number {
+  const db = getDb();
+  const r = db
+    .prepare(
+      `INSERT INTO llm_calls (at,route,line_id,card_id,template_id,model,success,reason,attempts,latency_ms,attempts_json,prompt,response_text,parsed_json)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    )
+    .run(
+      new Date().toISOString(),
+      entry.route,
+      entry.lineId ?? null,
+      entry.cardId ?? null,
+      entry.templateId ?? null,
+      entry.model,
+      entry.success ? 1 : 0,
+      entry.reason,
+      entry.attempts,
+      entry.latencyMs,
+      JSON.stringify(entry.attemptsJson),
+      capText(entry.prompt),
+      capText(entry.responseText),
+      capText(entry.parsedJson)
+    );
+  db.prepare(
+    `DELETE FROM llm_calls WHERE id NOT IN (SELECT id FROM llm_calls ORDER BY id DESC LIMIT ?)`
+  ).run(LLM_CALLS_CAP);
+  return Number(r.lastInsertRowid);
+}
+
+export interface LlmCallFilter {
+  route?: string;
+  lineId?: string;
+  /** YYYY-MM-DD day filter (UTC). */
+  date?: string;
+  ok?: boolean;
+  q?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export function listLlmCalls(f: LlmCallFilter = {}): { rows: LlmCallRecord[]; total: number } {
+  const where: string[] = [];
+  const args: unknown[] = [];
+  if (f.route) {
+    where.push("route = ?");
+    args.push(f.route);
+  }
+  if (f.lineId) {
+    where.push("line_id = ?");
+    args.push(f.lineId);
+  }
+  if (f.date) {
+    where.push("at >= ? AND at < date(?,'+1 day')");
+    args.push(f.date, f.date);
+  }
+  if (f.ok != null) {
+    where.push("success = ?");
+    args.push(f.ok ? 1 : 0);
+  }
+  if (f.q) {
+    where.push("(route LIKE ? OR model LIKE ? OR reason LIKE ? OR card_id LIKE ? OR template_id LIKE ?)");
+    const like = `%${f.q}%`;
+    args.push(like, like, like, like, like);
+  }
+  const whereSql = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
+  const total = (getDb().prepare(`SELECT COUNT(*) AS n FROM llm_calls ${whereSql}`).get(...args) as { n: number }).n;
+  const limit = Math.min(Math.max(f.limit ?? 50, 1), 200);
+  const offset = Math.max(f.offset ?? 0, 0);
+  const rows = (getDb()
+    .prepare(`SELECT * FROM llm_calls ${whereSql} ORDER BY id DESC LIMIT ? OFFSET ?`)
+    .all(...args, limit, offset) as Record<string, unknown>[])
+    .map(llmCallRow);
+  return { rows, total };
+}
+
+export function getLlmCall(id: number): LlmCallRecord | null {
+  const x = getDb().prepare("SELECT * FROM llm_calls WHERE id=?").get(id) as Record<string, unknown> | undefined;
+  return x ? llmCallRow(x) : null;
+}
+
+export interface LlmCallStats {
+  last24h: number;
+  okRate: number | null;
+  avgLatencyMs: number;
+  retries24h: number;
+  retained: number;
+  cap: number;
+}
+
+export function llmCallStats(): LlmCallStats {
+  const db = getDb();
+  const day = db
+    .prepare(
+      `SELECT COUNT(*) AS total,
+              COALESCE(SUM(success),0) AS okCount,
+              COALESCE(AVG(latency_ms),0) AS avgMs,
+              COALESCE(SUM(CASE WHEN attempts>1 THEN attempts-1 ELSE 0 END),0) AS retries
+       FROM llm_calls WHERE at >= datetime('now','-1 day')`
+    )
+    .get() as { total: number; okCount: number; avgMs: number; retries: number };
+  const retained = (db.prepare("SELECT COUNT(*) AS n FROM llm_calls").get() as { n: number }).n;
+  return {
+    last24h: day.total,
+    okRate: day.total > 0 ? day.okCount / day.total : null,
+    avgLatencyMs: Math.round(day.avgMs),
+    retries24h: day.retries,
+    retained,
+    cap: LLM_CALLS_CAP,
+  };
 }

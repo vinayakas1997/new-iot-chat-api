@@ -4,6 +4,7 @@ import { Connections } from "./screens/Connections";
 import { Cards } from "./screens/Cards";
 import { Hindsight } from "./screens/Hindsight";
 import { History } from "./screens/History";
+import { AiLogs } from "./screens/AiLogs";
 import { Lines } from "./screens/Lines";
 import { Home, Placeholder } from "./screens/misc";
 
@@ -19,6 +20,7 @@ const router = createBrowserRouter([
       { path: "cards", element: <Cards /> },
       { path: "history", element: <History /> },
       { path: "hindsight", element: <Hindsight /> },
+      { path: "ai-logs", element: <AiLogs /> },
     ],
   },
 ]);

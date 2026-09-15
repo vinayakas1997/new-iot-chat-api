@@ -9,6 +9,15 @@ services:
       POLLER_INTERVAL_MS: "300000"
       TICK_INTERVAL_MS: "300000"
       LOG_LEVEL: info
+      # Shared LLM client policy (src/llm/client.ts): every backend LLM call
+      # retries transient failures, repairs JSON, validates shape and logs
+      # the cause. Attempts cap at 3 to bound worst-case latency on slow
+      # local models; lower to 2 if the serialized queue feels heavy.
+      LLM_MAX_ATTEMPTS: "3"
+      LLM_RETRY_BACKOFF_MS: "1000"
+      LLM_TIMEOUT_MS: "90000"
+      LLM_MAX_TOKENS: "2048"
+      LLM_MERGE_BUDGET_MS: "240000"
     volumes:
       - setter-data:/data
     # Lets the backend reach host-bound services (e.g. your atlas-35b LLM on

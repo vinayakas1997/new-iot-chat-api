@@ -1,7 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
-  activeLlmProvider,
   getConnection,
   getLine,
   getSetting,
@@ -10,9 +9,10 @@ import {
   setSetting,
 } from "../db/store.js";
 import { driverFor } from "../drivers/index.js";
+import { llmChatJson } from "../llm/client.js";
+import { bankSuggestSchema, type BankSuggestKind } from "../llm/schemas.js";
 
 const HS_TIMEOUT_MS = 15000;
-const LLM_TIMEOUT_MS = 90000;
 
 export function bankIdFor(lineId: string): string {
   return `bank:line-${lineId}`;
@@ -117,7 +117,10 @@ const planSchema = z.object({
     observations: z.string().min(1).max(2000),
     reflect: z.string().min(1).max(2000),
   }),
-  extractionMode: z.enum(["concise", "verbose"]).default("concise"),
+  // "chunks" skips Hindsight's own LLM fact extraction entirely (stores our
+  // pre-extracted fact text as-is) — required when the backing LLM is a slow
+  // local model that blows past Hindsight's per-call timeout.
+  extractionMode: z.enum(["concise", "verbose", "verbatim", "chunks"]).default("chunks"),
   entityLabels: z.array(entityGroupSchema).max(8).default([]),
   directives: z.array(z.object({
     name: z.string().min(1).max(120),
@@ -188,7 +191,7 @@ export async function bankRoutes(app: FastifyInstance) {
       hindsightConfigured: !!hsBase(),
       tables: cols,
       missions,
-      extractionMode: "concise" as const,
+      extractionMode: "chunks" as const,
       entityLabels: [{
         key: "metric",
         description: "Plant measure behind a fact (for filtering recall by measure)",
@@ -223,8 +226,7 @@ export async function bankRoutes(app: FastifyInstance) {
     if (!p.success) return reply.code(400).send({ error: p.error.message });
     const line = getLine(p.data.lineId);
     if (!line) return reply.code(404).send({ error: "line not found" });
-    const active = activeLlmProvider();
-    if (!active) return reply.code(409).send({ error: "no active LLM — connect one in AI Services" });
+    const kind = p.data.kind as BankSuggestKind;
     const cols = await lineColumns(line.id);
     const colText = cols.map((t) => `${t.table}(${(t.columns.map((c) => `${c.name}:${c.type}`).join(", ") || "unreadable")})`).join("; ");
     const prompts: Record<string, string> = {
@@ -233,39 +235,25 @@ export async function bankRoutes(app: FastifyInstance) {
       "mental-model": `Propose one Hindsight mental-model seed for plant line "${line.name}" (tables: ${colText}). Reply with JSON only: {"name":"...","source_query":"..."}. The query should ask for the line's normal operating envelope.`,
       directives: `Propose 3 hard safety rules (directives) for a plant-line memory bank that answers from retained sensor facts. Reply with JSON only: {"directives":[{"name":"...","content":"..."}]}. Rules: never invent readings, cite the hour/window, units as stored.`,
     };
-    const start = Date.now();
-    try {
-      const ctl = new AbortController();
-      const t = setTimeout(() => ctl.abort(), LLM_TIMEOUT_MS);
-      const r = await fetch(`${active.baseUrl.replace(/\/$/, "")}/v1/chat/completions`, {
-        method: "POST",
-        signal: ctl.signal,
-        headers: {
-          "content-type": "application/json",
-          ...(active.apiKey ? { authorization: `Bearer ${active.apiKey}` } : {}),
-        },
-        body: JSON.stringify({
-          model: active.activeModel,
-          temperature: 0.2,
-          messages: [
-            { role: "system", content: "You configure Hindsight agent-memory banks for plant data. Reply with JSON only, no prose, no fences." },
-            { role: "user", content: prompts[p.data.kind] },
-          ],
-        }),
-      });
-      clearTimeout(t);
-      if (!r.ok) throw new Error(`LLM HTTP ${r.status}`);
-      const body = (await r.json()) as { choices?: { message?: { content?: string } }[] };
-      const text = body.choices?.[0]?.message?.content ?? "";
-      let parsed: unknown = null;
-      try {
-        const m = text.match(/\{[\s\S]*\}/);
-        if (m) parsed = JSON.parse(m[0]);
-      } catch { /* return raw text */ }
-      return { kind: p.data.kind, text, parsed, model: active.activeModel, latencyMs: Date.now() - start };
-    } catch (e) {
-      return reply.code(502).send({ error: `suggest failed: ${(e as Error).message}` });
+    const r = await llmChatJson({
+      system: "You configure Hindsight agent-memory banks for plant data. Reply with JSON only, no prose, no fences.",
+      user: prompts[kind],
+      schema: bankSuggestSchema(kind),
+      context: { route: "banks-suggest", lineId: p.data.lineId, kind },
+      log: app.log,
+    });
+    if (r.reason === "no-provider") {
+      return reply.code(409).send({ error: "no active LLM — connect one in AI Services", reason: r.reason });
     }
+    return {
+      kind: p.data.kind,
+      text: r.text,
+      parsed: r.parsed,
+      model: r.model || null,
+      latencyMs: r.latencyMs,
+      attempts: r.attempts,
+      reason: r.reason,
+    };
   });
 
   // Save draft (applies nothing to Hindsight).
