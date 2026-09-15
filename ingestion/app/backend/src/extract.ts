@@ -161,6 +161,9 @@ export async function extractAndRetain(
   const items = drafts.map((d) => ({
     content: d.content,
     timestamp: w.to,
+    // Per-ingest disambiguation shown alongside the fact (Specifics panel).
+    // Omitted when empty so older Hindsight versions see a clean item.
+    ...(card.context ? { context: card.context } : {}),
     // tags are string[] in the Hindsight schema; key:value keeps them filterable.
     tags: [
       `line:${line.id}`,

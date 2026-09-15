@@ -48,6 +48,7 @@ const tplSchema = z.object({
   granularity: gran.default("hourly"),
   unit: z.string().max(20).default(""),
   extractHint: z.string().max(2000).default(""),
+  context: z.string().max(2000).default(""),
   chartSuggestions: z.array(suggestionSchema).default([]),
 });
 
@@ -59,6 +60,7 @@ const cardSchema = z.object({
   granularity: gran.default("hourly"),
   unit: z.string().max(20).default(""),
   extractHint: z.string().max(2000).default(""),
+  context: z.string().max(2000).default(""),
   threshold: z.number().nullable().default(null),
   templateId: z.string().nullable().default(null),
 });

@@ -1,8 +1,8 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  ArrowRight, Brain, ChartLine, ClipboardCheck, Copy, Eye, FlaskConical, History as HistoryIcon,
-  ListChecks, Pause, Pencil, Play, Plus, Rocket, Save, Search, Sparkles, Trash2, X,
+  ArrowRight, Brain, ChartLine, ClipboardCheck, Copy, Database, Eye, FlaskConical, History as HistoryIcon,
+  LayoutTemplate, ListChecks, Pause, Pencil, Play, Plus, Rocket, Save, Search, SlidersHorizontal, Sparkles, Table2, Trash2, X,
 } from "lucide-react";
 import { Btn, Segmented, Spinner } from "../components/ui";
 import { CardDetails } from "../components/CardDetails";
@@ -11,7 +11,7 @@ import { ChartPreviewModal } from "../components/ChartPreviewModal";
 import { LinePreview } from "../components/LinePreview";
 import { windowForResolution, type Resolution } from "../components/Chart";
 import { isTradingEligible, TradingChart } from "../components/TradingChart";
-import { cardApi, api, bankApi, chartApi, graphApi, playgroundApi, llmReasonText, type BankOverviewEntry, type Card, type CardTemplate, type ChartSuggestion, type Line, type MergeProposal, type ReapplyResult, type TestResult, type GraphSpec, type ChartType, type PlaygroundResult, type QueryHistoryEntry, type LineColumn } from "../lib/api";
+import { cardApi, api, bankApi, chartApi, graphApi, playgroundApi, llmReasonText, type BankOverviewEntry, type Card, type CardTemplate, type ChartSuggestion, type Line, type ReapplyResult, type TestResult, type GraphSpec, type ChartType, type PlaygroundResult, type QueryHistoryEntry, type LineColumn } from "../lib/api";
 import { AlertBanner, StatusChip } from "../components/chips";
 import { FormattedText } from "../components/FormattedText";
 import { PushToHindsight } from "../components/PushToHindsight";
@@ -189,14 +189,46 @@ export function Cards() {
   const [appliedByTpl, setAppliedByTpl] = useState<Record<string, boolean>>({});
   const [showTplForm, setShowTplForm] = useState(false);
   const [editTpl, setEditTpl] = useState<CardTemplate | null>(null);
-  const [tplDraft, setTplDraft] = useState({ name: "", description: "", sqlTemplate: "", granularity: "hourly", unit: "", extractHint: "" });
+  const [tplDraft, setTplDraft] = useState({ name: "", description: "", sqlTemplate: "", granularity: "hourly", unit: "", extractHint: "", context: "" });
   const [instTpl, setInstTpl] = useState<CardTemplate | null>(null);
   const [instLine, setInstLine] = useState("");
   const [instMap, setInstMap] = useState<Record<string, string>>({});
+  // Batch register: line-first multi-template attach (dormant copies).
+  const [showAdd, setShowAdd] = useState(false);
+  const [addLine, setAddLine] = useState("");
+  const [addQ, setAddQ] = useState("");
+  const [addMaps, setAddMaps] = useState<Record<string, Record<string, string>>>({});
+  const [addChecked, setAddChecked] = useState<string[]>([]);
+  const [addBusy, setAddBusy] = useState(false);
+  const [addDone, setAddDone] = useState<{ ok: string[]; failed: { id: string; name: string; error: string }[] } | null>(null);
+  // Guardrail landing: copy row to flash after jumping from the Add modal.
+  const [flashCopy, setFlashCopy] = useState<string | null>(null);
+  const flashTimer = useRef<number | null>(null);
+  useEffect(() => () => { if (flashTimer.current != null) window.clearTimeout(flashTimer.current); }, []);
+  function flashCopyRow(id: string) {
+    setFlashCopy(id);
+    if (flashTimer.current != null) window.clearTimeout(flashTimer.current);
+    flashTimer.current = window.setTimeout(() => setFlashCopy(null), 2400);
+  }
+  function goToCopy(tplId: string, cardId: string) {
+    setShowAdd(false);
+    setAddMaps({});
+    setAddChecked([]);
+    setAddDone(null);
+    setTab("templates");
+    setOpenTpl(tplId);
+    flashCopyRow(cardId);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        document.getElementById(`copy-row-${cardId}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      });
+    });
+  }
   const [showCardForm, setShowCardForm] = useState(false);
-  const [cardDraft, setCardDraft] = useState({ lineId: "", name: "", tables: "", sql: "", granularity: "hourly", unit: "", extractHint: "", threshold: "", changeMode: "forward", reingestFrom: "" });
+  const [cardDraft, setCardDraft] = useState({ lineId: "", name: "", tables: "", sql: "", granularity: "hourly", unit: "", extractHint: "", context: "", threshold: "", changeMode: "forward", reingestFrom: "" });
   const [editCard, setEditCard] = useState<Card | null>(null);
   const [graphCard, setGraphCard] = useState<Card | null>(null);
+  const [specificsCard, setSpecificsCard] = useState<Card | null>(null);
   const [cardGraphs, setCardGraphs] = useState<Record<string, GraphSpec[]>>({});
   const [activeModel, setActiveModel] = useState<string | null>(null);
   const [banks, setBanks] = useState<Record<string, BankOverviewEntry>>({});
@@ -214,6 +246,17 @@ export function Cards() {
   const [copyQ, setCopyQ] = useState<Record<string, string>>({});
   const [copyStatus, setCopyStatus] = useState<Record<string, "all" | "live" | "dormant" | "failed" | "stale">>({});
   const [checkedByTpl, setCheckedByTpl] = useState<Record<string, string[]>>({});
+  // Template registry: search + state filter + accordion (one open at a time).
+  const [tplQ, setTplQ] = useState("");
+  const [tplState, setTplState] = useState<"all" | "stale" | "no-ref" | "no-suggest">("all");
+  const [openTpl, setOpenTpl] = useState<string | null>(null);
+  const tplInit = useRef(false);
+  useEffect(() => {
+    if (!tplInit.current && templates.length > 0) {
+      tplInit.current = true;
+      setOpenTpl(templates[0].id);
+    }
+  }, [templates]);
   const [fixCard, setFixCard] = useState<{ tplId: string; cardId: string } | null>(null);
   const [fixMap, setFixMap] = useState<Record<string, string>>({});
   const [fixBusy, setFixBusy] = useState(false);
@@ -396,14 +439,14 @@ export function Cards() {
 
   function openEditCard(c: Card) {
     setEditCard(c);
-    setCardDraft({ lineId: c.lineId, name: c.name, tables: c.tables.join(", "), sql: c.sql, granularity: c.granularity, unit: c.unit, extractHint: c.extractHint, threshold: c.threshold != null ? String(c.threshold) : "", changeMode: "forward", reingestFrom: "" });
+    setCardDraft({ lineId: c.lineId, name: c.name, tables: c.tables.join(", "), sql: c.sql, granularity: c.granularity, unit: c.unit, extractHint: c.extractHint, context: c.context ?? "", threshold: c.threshold != null ? String(c.threshold) : "", changeMode: "forward", reingestFrom: "" });
     setShowCardForm(true);
   }
 
   function openEditTemplate(t: CardTemplate) {
     const ref = t.referenceLineId ? lines.find((l) => l.id === t.referenceLineId) : undefined;
     setEditTpl(t);
-    setTplDraft({ name: t.name, description: t.description, sqlTemplate: t.sqlTemplate, granularity: t.granularity, unit: t.unit, extractHint: t.extractHint });
+    setTplDraft({ name: t.name, description: t.description, sqlTemplate: t.sqlTemplate, granularity: t.granularity, unit: t.unit, extractHint: t.extractHint, context: t.context ?? "" });
     setTplPickLine(t.referenceLineId ?? "");
     setTplLineSearch(ref ? `${ref.id} — ${ref.name}` : "");
     setShowTplForm(true);
@@ -476,7 +519,9 @@ export function Cards() {
           <Btn icon={ChartLine} onClick={() => setGraphCard(c)}>
             Graph {(cardGraphs[c.id]?.length ?? 0) > 0 && <span className="tnum">({cardGraphs[c.id].length})</span>}
           </Btn>
-          {bankChipFor(c.lineId, c.lastTest?.ok === true)}
+          <Btn icon={SlidersHorizontal} onClick={() => setSpecificsCard(c)} title="Per-ingest tuning for this feature: extract hint, threshold, unit, context. Bank settings stay on the line.">
+            Specifics
+          </Btn>
           {c.status === "dormant" ? (
             <>
               <Btn variant="ok" icon={Rocket} onClick={() => void onActivate(c)} disabled={!canActivate(c)}>Go live</Btn>
@@ -529,8 +574,8 @@ export function Cards() {
             <span className={activeModel ? "text-state-ok" : "text-slate-400"}>●</span> AI settings{activeModel ? ` · ${activeModel}` : ""}
           </Link>
             {tab === "cards"
-            ? <Btn variant="primary" icon={Plus} onClick={() => { setEditCard(null); setCardDraft({ lineId: lines[0]?.id ?? "", name: "", tables: "", sql: "", granularity: "hourly", unit: "", extractHint: "", threshold: "", changeMode: "forward", reingestFrom: "" }); setShowCardForm(true); }}>New card</Btn>
-            : <Btn variant="primary" icon={Plus} onClick={() => { setEditTpl(null); setTplDraft({ name: "", description: "", sqlTemplate: "", granularity: "hourly", unit: "", extractHint: "" }); setTplPickLine(""); setTplLineSearch(""); setShowTplForm(true); }}>New template</Btn>}
+            ? <Btn variant="primary" icon={Plus} onClick={() => { setShowAdd(true); setAddLine(lines[0]?.id ?? ""); setAddQ(""); setAddMaps({}); setAddChecked([]); setAddDone(null); }} title="Register features onto a line: pick the line, see its tables, search templates, attach several at once as dormant copies. SQL and thresholds live in the template.">New card</Btn>
+            : <Btn variant="primary" icon={Plus} onClick={() => { setEditTpl(null); setTplDraft({ name: "", description: "", sqlTemplate: "", granularity: "hourly", unit: "", extractHint: "", context: "" }); setTplPickLine(""); setTplLineSearch(""); setShowTplForm(true); }}>New template</Btn>}
         </div>
       </div>
 
@@ -637,14 +682,61 @@ export function Cards() {
 
       {tab === "templates" && (
         <div className="mt-4 flex flex-col gap-4">
-          {templates.map((t) => {
+          {(() => {
+            const q = tplQ.trim().toLowerCase();
+            const visibleTpls = templates.filter((t) => {
+              const copies = cards.filter((c) => c.templateId === t.id);
+              if (tplState === "stale" && !copies.some((c) => c.templateVersion != null && c.templateVersion < t.version)) return false;
+              if (tplState === "no-ref" && t.referenceLineId) return false;
+              if (tplState === "no-suggest" && (t.chartSuggestions ?? []).length > 0) return false;
+              if (q) {
+                const refName = lines.find((l) => l.id === t.referenceLineId)?.name ?? "";
+                const hay = `${t.name} ${t.description ?? ""} ${t.referenceLineId ?? ""} ${refName} ${t.sqlTemplate ?? ""}`.toLowerCase();
+                if (!hay.includes(q)) return false;
+              }
+              return true;
+            });
+            const openId = visibleTpls.some((t) => t.id === openTpl) ? openTpl : visibleTpls[0]?.id ?? null;
+            return (
+              <>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="relative">
+                    <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      value={tplQ}
+                      onChange={(e) => setTplQ(e.target.value)}
+                      placeholder="Search templates, lines, SQL…"
+                      className="w-64 rounded-lg border border-slate-300 bg-transparent py-1.5 pl-8 pr-2 text-sm focus:border-accent-500 focus:outline-none dark:border-ink-700"
+                    />
+                  </div>
+                  <select
+                    value={tplState}
+                    onChange={(e) => setTplState(e.target.value as "all" | "stale" | "no-ref" | "no-suggest")}
+                    title="Filter templates by state"
+                    className="rounded-lg border border-slate-300 bg-transparent px-2 py-1.5 text-sm focus:border-accent-500 focus:outline-none dark:border-ink-700"
+                  >
+                    <option value="all">all states</option>
+                    <option value="stale">with stale copies</option>
+                    <option value="no-ref">missing reference line</option>
+                    <option value="no-suggest">no chart suggestions</option>
+                  </select>
+                  {(tplQ || tplState !== "all") && (
+                    <button onClick={() => { setTplQ(""); setTplState("all"); }} className="inline-flex items-center gap-1 text-xs text-accent-500 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60"><X size={12} />clear</button>
+                  )}
+                  <span className="tnum ml-auto text-xs text-slate-400">{visibleTpls.length} of {templates.length}</span>
+                </div>
+                {visibleTpls.map((t) => {
             const copies = cards.filter((c) => c.templateId === t.id);
             const allIds = copies.map((c) => c.id);
             const checked = checkedByTpl[t.id] ?? allIds;
+            const isOpen = openId === t.id;
+            const staleCount = copies.filter((c) => c.templateVersion != null && c.templateVersion < t.version).length;
+            const sugCount = (t.chartSuggestions ?? []).length;
             const refLine = t.referenceLineId ? lines.find((l) => l.id === t.referenceLineId) : undefined;
             return (
             <div key={t.id} className="rounded-xl border border-slate-200 p-4 dark:border-ink-800">
-              <div className="flex flex-wrap items-center gap-2">
+              <div onClick={() => setOpenTpl(isOpen ? null : t.id)} title={isOpen ? "Collapse — other templates stay closed" : "Expand — closes the open template"} className="flex cursor-pointer flex-wrap items-center gap-2">
+                <span className="text-slate-400">{isOpen ? "▾" : "▸"}</span>
                 <span className="font-semibold">{t.name}</span>
                 <span className="tnum text-xs text-slate-400">v{t.version}</span>
                 {t.referenceLineId && (
@@ -652,8 +744,12 @@ export function Cards() {
                     reference: {t.referenceLineId}{refLine ? ` · ${refLine.memberTables.length} tables` : " · line gone"}
                   </span>
                 )}
+                <span className="tnum text-xs text-slate-400">{copies.length} {copies.length === 1 ? "copy" : "copies"}</span>
+                {staleCount > 0 && <StatusChip tone="warn">{staleCount} stale</StatusChip>}
+                <span className="tnum text-xs text-slate-400">{sugCount} suggestions</span>
                 <span className="ml-auto text-xs text-slate-400">{t.granularity}{t.unit ? ` · ${t.unit}` : ""}</span>
               </div>
+              {isOpen && (<>
               {t.description && <div className="mt-1 text-sm text-slate-500">{t.description}</div>}
               <div className="tnum mt-1 text-xs text-slate-400">
                 ≈{copies.reduce((s, c) => s + tickCost(c), 0)} queries/day across {copies.length} copies
@@ -780,7 +876,7 @@ export function Cards() {
                               const fixing = fixCard?.tplId === t.id && fixCard?.cardId === c.id;
                               return (
                                 <Fragment key={c.id}>
-                                  <tr className={`border-b border-slate-100 align-top transition-colors dark:border-ink-800 ${failed ? "bg-state-bad/[0.06]" : c.status === "live" ? "bg-state-ok/[0.05]" : ""}`}>
+                                  <tr id={`copy-row-${c.id}`} className={`border-b border-slate-100 align-top transition-colors dark:border-ink-800 ${flashCopy === c.id ? "bg-accent-500/10 ring-1 ring-inset ring-accent-500/50" : failed ? "bg-state-bad/[0.06]" : c.status === "live" ? "bg-state-ok/[0.05]" : ""}`}>
                                     <td className="px-2 py-2.5">
                                       <input
                                         type="checkbox"
@@ -995,9 +1091,18 @@ export function Cards() {
                   </div>
                 );
               })()}
+              </>)}
             </div>
             );
           })}
+          {visibleTpls.length === 0 && (
+            <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500 dark:border-ink-700">
+              No templates match the filters. <button onClick={() => { setTplQ(""); setTplState("all"); }} className="inline-flex items-center gap-1 text-accent-500 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60"><X size={12} />clear filters</button>
+            </div>
+          )}
+          </>
+          );
+        })()}
         </div>
       )}
 
@@ -1159,6 +1264,7 @@ export function Cards() {
             <Field label="Unit"><input value={tplDraft.unit} onChange={(e) => setTplDraft({ ...tplDraft, unit: e.target.value })} placeholder="°C, pcs…" className={inp} /></Field>
           </div>
           <Field label="Extraction hint (for the AI extractor)"><textarea rows={2} value={tplDraft.extractHint} onChange={(e) => setTplDraft({ ...tplDraft, extractHint: e.target.value })} className={inp} /></Field>
+          <Field label="Retain context (shown alongside each stored fact — copies inherit this)"><input value={tplDraft.context} onChange={(e) => setTplDraft({ ...tplDraft, context: e.target.value })} placeholder="e.g. hourly temperature rollup" className={inp} /></Field>
           {editTpl && tplDraft.sqlTemplate !== editTpl.sqlTemplate && (
             <div className="rounded-lg border border-state-warn/40 px-3 py-2 text-xs text-slate-500">
               Saving this SQL bumps the template to <b>v{editTpl.version + 1}</b>. Copies keep their current SQL and show as <b>stale</b> until you Check / Apply.
@@ -1215,6 +1321,156 @@ export function Cards() {
               ).then(() => { setInstTpl(null); setInstMap({}); setTab("cards"); }))}
             >
               Instantiate dormant
+            </Btn>
+          </div>
+        </Modal>
+        );
+      })()}
+
+      {showAdd && (() => {
+        const line = lines.find((l) => l.id === addLine);
+        const members = line?.memberTables ?? [];
+        const q = addQ.trim().toLowerCase();
+        const rows = templates
+          .filter((t) => {
+            if (!q) return true;
+            return `${t.name} ${t.description ?? ""} ${t.sqlTemplate ?? ""}`.toLowerCase().includes(q);
+          })
+          .map((t) => {
+            const existing = cards.find((c) => c.templateId === t.id && c.lineId === addLine);
+            const already = !!existing;
+            const rs = remapState(t.sqlTemplate, members, addMaps[t.id] ?? {});
+            return { t, already, existingId: existing?.id ?? null, ...rs };
+          });
+        const addable = rows.filter((r) => !r.already && !r.blocked && members.length > 0 && addChecked.includes(r.t.id));
+        function closeAdd() {
+          setShowAdd(false);
+          setAddMaps({});
+          setAddChecked([]);
+          setAddDone(null);
+        }
+        return (
+        <Modal title="Add features to a line" onClose={closeAdd}>
+          <Field label="Line — copies live here">
+            <select value={addLine} onChange={(e) => { setAddLine(e.target.value); setAddMaps({}); setAddChecked([]); setAddDone(null); }} className={inp}>
+              {lines.map((l) => <option key={l.id} value={l.id}>{l.id} — {l.name}</option>)}
+            </select>
+            {line && (
+              <div className="mt-2 rounded-lg bg-slate-100 p-2.5 dark:bg-ink-800">
+                <div className="flex items-center gap-2">
+                  <span className="rounded-md bg-accent-500/15 p-1.5 text-accent-500"><Database size={15} /></span>
+                  <span className="text-sm font-semibold text-accent-500">{line.connectionLabel}</span>
+                  <span className="font-mono text-xs text-slate-400">{line.connectionId}</span>
+                </div>
+                <div className="mt-2 flex items-center gap-1.5 text-xs uppercase tracking-widest text-slate-400">
+                  <Table2 size={13} />Tables on this line · <span className="tnum">{members.length}</span>
+                </div>
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {members.length === 0
+                    ? <span className="text-xs text-slate-400">no tables — add some in Lines first</span>
+                    : members.map((m) => (
+                      <span key={m} className="inline-flex items-center gap-1 rounded-full bg-accent-500/10 px-2 py-0.5 font-mono text-xs text-accent-400 ring-1 ring-accent-500/30"><Table2 size={11} />{m}</span>
+                    ))}
+                </div>
+              </div>
+            )}
+            {lines.length === 0 && <div className="mt-1 text-xs text-slate-400">no lines yet — register one in Lines first</div>}
+          </Field>
+          <Field label="Templates — SQL, granularity and thresholds stay in the template">
+            <div className="relative">
+              <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-accent-500" />
+              <input
+                value={addQ}
+                onChange={(e) => setAddQ(e.target.value)}
+                placeholder="Search features…"
+                className="w-full rounded-xl border border-slate-200 bg-slate-100 py-2 pl-9 pr-3 text-sm shadow-sm focus:border-accent-500 focus:outline-none focus:ring-2 focus:ring-accent-500/40 dark:border-ink-700 dark:bg-ink-800"
+              />
+            </div>
+          </Field>
+          {rows.length === 0 && <div className="text-sm text-slate-400">no templates match — create one in the Templates tab first</div>}
+          <div className="flex max-h-80 flex-col gap-2 overflow-auto">
+            {rows.map((r) => {
+              const selected = addChecked.includes(r.t.id);
+              return (
+              <div key={r.t.id} className={`rounded-xl border p-3 text-sm transition-colors ${r.already ? "border-slate-200 opacity-60 dark:border-ink-800" : selected ? "border-accent-500/50 bg-accent-500/5" : "border-slate-200 hover:border-accent-500/40 dark:border-ink-800"}`}>
+                <label className={`flex cursor-pointer items-center gap-2.5 ${r.already ? "cursor-default" : ""}`}>
+                  <input
+                    type="checkbox"
+                    checked={selected}
+                    disabled={r.already || r.blocked || members.length === 0}
+                    onChange={() => setAddChecked((s) => s.includes(r.t.id) ? s.filter((x) => x !== r.t.id) : [...s, r.t.id])}
+                    className="h-4 w-4 shrink-0 accent-teal-500"
+                  />
+                  <span className={`rounded-md p-1.5 ${selected && !r.already ? "bg-accent-500/15 text-accent-500" : "bg-slate-100 text-slate-400 dark:bg-ink-800"}`}><LayoutTemplate size={16} /></span>
+                  <span className="min-w-0">
+                    <span className="block truncate font-medium">{r.t.name}</span>
+                    <span className="tnum block text-xs text-slate-400">{r.t.granularity}{r.t.unit ? ` · ${r.t.unit}` : ""}{r.t.description ? ` · ${r.t.description}` : ""}</span>
+                  </span>
+                  <span className="ml-auto shrink-0">
+                    {r.already && r.existingId
+                      ? <button onClick={(e) => { e.preventDefault(); e.stopPropagation(); goToCopy(r.t.id, r.existingId as string); }} title="Already on this line — open the existing copy instead of adding again" className="rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60"><StatusChip tone="mute">added ✓ view →</StatusChip></button>
+                      : r.already
+                        ? <StatusChip tone="mute">added ✓</StatusChip>
+                        : members.length === 0
+                          ? <StatusChip tone="mute">no tables</StatusChip>
+                          : r.blocked
+                            ? <StatusChip tone="warn">needs mapping</StatusChip>
+                            : <StatusChip tone="ok">ready</StatusChip>}
+                  </span>
+                </label>
+                {!r.already && r.refs.length > 0 && (
+                  <div className="mt-2">
+                    <RemapTables
+                      sql={r.t.sqlTemplate}
+                      members={members}
+                      map={addMaps[r.t.id] ?? {}}
+                      setMap={(m) => setAddMaps((all) => ({ ...all, [r.t.id]: m }))}
+                    />
+                  </div>
+                )}
+              </div>
+              );
+            })}
+          </div>
+          {addDone && (
+            <div className="anim-fade-in mt-2 rounded-lg border border-slate-200 p-2.5 text-sm dark:border-ink-800">
+              <span className="font-medium text-state-ok">{addDone.ok.length} added dormant</span>
+              {addDone.failed.map((f) => (
+                <div key={f.id} className="mt-1 text-xs text-state-bad">{f.name}: {f.error}</div>
+              ))}
+            </div>
+          )}
+          <div className="mt-3 flex justify-end gap-2">
+            <button onClick={closeAdd} className="rounded-lg px-4 py-2 text-sm text-slate-500 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800">close</button>
+            <Btn
+              variant="primary"
+              icon={ArrowRight}
+              disabled={addable.length === 0 || addBusy}
+              loading={addBusy}
+              title={members.length === 0 ? "This line has no member tables yet" : addable.length === 0 ? "Check ready templates above" : `Create ${addable.length} dormant ${addable.length === 1 ? "copy" : "copies"} with mapped tables`}
+              onClick={() => void (async () => {
+                setAddBusy(true);
+                setError(null);
+                const ok: string[] = [];
+                const failed: { id: string; name: string; error: string }[] = [];
+                for (const r of addable) {
+                  try {
+                    await cardApi.instantiate(
+                      r.t.id,
+                      r.refs.length > 0 ? { lineId: addLine, sql: r.preview, tables: r.tables } : { lineId: addLine },
+                    );
+                    ok.push(r.t.id);
+                  } catch (e) {
+                    failed.push({ id: r.t.id, name: r.t.name, error: (e as Error).message });
+                  }
+                }
+                setAddDone({ ok, failed });
+                setAddChecked([]);
+                setAddBusy(false);
+                await refresh();
+              })()}
+            >
+              {addBusy ? "adding…" : `Add ${addable.length} dormant`}
             </Btn>
           </div>
         </Modal>
@@ -1306,15 +1562,8 @@ export function Cards() {
         );
       })()}
 
-      {showCardForm && (
-        <Modal title={editCard ? `Edit ${editCard.name} (dormant)` : "New card (dormant)"} onClose={() => setShowCardForm(false)}>
-          {!editCard && (
-            <Field label="Line">
-              <select value={cardDraft.lineId} onChange={(e) => setCardDraft({ ...cardDraft, lineId: e.target.value })} className={inp}>
-                {lines.map((l) => <option key={l.id} value={l.id}>{l.id} — {l.name}</option>)}
-              </select>
-            </Field>
-          )}
+      {showCardForm && editCard && (
+        <Modal title={`Edit ${editCard.name} (dormant)`} onClose={() => setShowCardForm(false)}>
           <Field label="Name"><input value={cardDraft.name} onChange={(e) => setCardDraft({ ...cardDraft, name: e.target.value })} className={inp} /></Field>
           <Field label="Tables (comma-separated schema.table, must be line members)"><input value={cardDraft.tables} onChange={(e) => setCardDraft({ ...cardDraft, tables: e.target.value })} className={`${inp} font-mono`} /></Field>
           <Field label="SQL">
@@ -1336,6 +1585,7 @@ export function Cards() {
             <Field label="Threshold (optional)"><input value={cardDraft.threshold} onChange={(e) => setCardDraft({ ...cardDraft, threshold: e.target.value })} placeholder="warn above…" className={inp} /></Field>
           </div>
           <Field label="Extraction hint"><textarea rows={2} value={cardDraft.extractHint} onChange={(e) => setCardDraft({ ...cardDraft, extractHint: e.target.value })} className={inp} /></Field>
+          <Field label="Retain context (shown alongside each stored fact)"><input value={cardDraft.context} onChange={(e) => setCardDraft({ ...cardDraft, context: e.target.value })} placeholder="e.g. hourly temperature rollup" className={inp} /></Field>
           {editCard && (
             <div className="rounded-lg border border-slate-200 p-3 text-sm dark:border-ink-800">
               <div className="font-medium">On save, this SQL change applies…</div>
@@ -1356,18 +1606,17 @@ export function Cards() {
               variant="primary"
               icon={Save}
               onClick={() => void act(() => {
+                if (!editCard) return Promise.resolve();
                 const body = {
                   name: cardDraft.name,
                   tables: cardDraft.tables.split(",").map((s) => s.trim()).filter(Boolean),
                   sql: cardDraft.sql, granularity: cardDraft.granularity,
                   unit: cardDraft.unit, extractHint: cardDraft.extractHint,
+                  context: cardDraft.context,
                   threshold: cardDraft.threshold === "" ? null : Number(cardDraft.threshold),
-                  ...(editCard ? { changeMode: cardDraft.changeMode, reingestFrom: cardDraft.reingestFrom || undefined } : {}),
+                  changeMode: cardDraft.changeMode, reingestFrom: cardDraft.reingestFrom || undefined,
                 };
-                return (editCard
-                  ? cardApi.updateCard(editCard.id, body)
-                  : cardApi.createCard({ lineId: cardDraft.lineId, ...body })
-                ).then(() => setShowCardForm(false));
+                return cardApi.updateCard(editCard.id, body).then(() => setShowCardForm(false));
               })}
             >
               Save dormant
@@ -1377,7 +1626,17 @@ export function Cards() {
       )}
 
       {graphCard && (
-        <GraphDesigner card={graphCard} onClose={() => { setGraphCard(null); refresh(); }} />
+        <GraphDesigner card={graphCard} template={templates.find((t) => t.id === graphCard.templateId) ?? null} onClose={() => { setGraphCard(null); refresh(); }} />
+      )}
+
+      {specificsCard && (
+        <SpecificsModal
+          card={specificsCard}
+          templateName={specificsCard.templateId ? (templates.find((t) => t.id === specificsCard.templateId)?.name ?? specificsCard.templateId) : null}
+          line={lines.find((l) => l.id === specificsCard.lineId)}
+          onClose={() => setSpecificsCard(null)}
+          onSaved={() => { setSpecificsCard(null); void refresh(); }}
+        />
       )}
 
       {previewCopy && (
@@ -1467,6 +1726,108 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
         <div className="mt-4 flex flex-col gap-3">{children}</div>
       </div>
     </div>
+  );
+}
+
+/**
+ * Specifics — per-feature ingest tuning (per-call side of the Hindsight
+ * split). Extract hint, threshold, unit, and retain context ride on every
+ * tick's retain items; the 8 auto tags preview shows how Hindsight will
+ * file each fact. Bank settings (missions, vocab, directives) stay on the
+ * line — this panel never touches them. Dormant cards editable, live read-only.
+ */
+function SpecificsModal({ card, templateName, line, onClose, onSaved }: {
+  card: Card;
+  templateName: string | null;
+  line: Line | undefined;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const live = card.status === "live";
+  const [draft, setDraft] = useState({
+    extractHint: card.extractHint ?? "",
+    context: card.context ?? "",
+    unit: card.unit ?? "",
+    threshold: card.threshold != null ? String(card.threshold) : "",
+  });
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const tags = [
+    `line:${card.lineId}`,
+    `card:${card.name}`,
+    `cardVersion:${card.version}`,
+    `connection:${line?.connectionId ?? "…"}`,
+    "measure: per-tick",
+    `unit:${draft.unit || "none"}`,
+    `granularity:${card.granularity}`,
+    "breach: per-tick",
+  ];
+  async function onSave() {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await cardApi.updateCard(card.id, {
+        extractHint: draft.extractHint,
+        context: draft.context,
+        unit: draft.unit,
+        threshold: draft.threshold === "" ? null : Number(draft.threshold),
+      });
+      onSaved();
+    } catch (e) {
+      setSaveError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
+  const ro = "mt-1 w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600 dark:border-ink-800 dark:bg-ink-800/50 dark:text-ink-200";
+  return (
+    <Modal title={`Specifics — ${card.name}`} onClose={onClose}>
+      <div className="text-xs text-slate-500">
+        per-ingest tuning for this feature · applies to every tick's retained facts
+        {templateName && <span> · inherited from template <b>{templateName}</b> at registration (frozen — re-register to pick up template changes)</span>}
+      </div>
+      {live && (
+        <div className="rounded-lg border border-state-warn/40 bg-state-warn/10 px-3 py-2 text-xs text-state-warn">
+          Live card — read-only. Take it dormant to tune.
+        </div>
+      )}
+      {saveError && <div className="rounded-lg border border-state-bad/40 bg-state-bad/10 px-3 py-2 text-xs text-state-bad">{saveError}</div>}
+      <Field label="Extraction hint (guides the per-tick fact extractor)">
+        {live
+          ? <div className={ro}>{draft.extractHint || "—"}</div>
+          : <textarea rows={2} value={draft.extractHint} onChange={(e) => setDraft({ ...draft, extractHint: e.target.value })} className={inp} />}
+      </Field>
+      <Field label="Retain context (shown alongside each stored fact)">
+        {live
+          ? <div className={ro}>{draft.context || "—"}</div>
+          : <input value={draft.context} onChange={(e) => setDraft({ ...draft, context: e.target.value })} placeholder="e.g. hourly temperature rollup" className={inp} />}
+      </Field>
+      <div className="flex gap-3">
+        <Field label="Unit">
+          {live
+            ? <div className={ro}>{draft.unit || "—"}</div>
+            : <input value={draft.unit} onChange={(e) => setDraft({ ...draft, unit: e.target.value })} placeholder="°C, pcs…" className={inp} />}
+        </Field>
+        <Field label="Threshold (breach flag)">
+          {live
+            ? <div className={ro}>{draft.threshold || "—"}</div>
+            : <input value={draft.threshold} onChange={(e) => setDraft({ ...draft, threshold: e.target.value })} placeholder="warn above…" className={inp} />}
+        </Field>
+      </div>
+      <div className="rounded-lg border border-slate-200 p-3 text-sm dark:border-ink-800">
+        <div className="font-medium">Auto tags on every retained fact</div>
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
+          {tags.map((t) => (
+            <span key={t} className="rounded-full bg-accent-500/10 px-2 py-0.5 font-mono text-[11px] text-accent-500 ring-1 ring-accent-500/30">{t}</span>
+          ))}
+        </div>
+        <div className="mt-1 text-[11px] text-slate-400">measure + breach resolve per tick from the result rows — the rest are fixed per card.</div>
+      </div>
+      <div className="mt-1 flex justify-end gap-2">
+        <button onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-slate-500 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800">close</button>
+        {!live && <Btn variant="primary" icon={Save} onClick={() => void onSave()} loading={saving} disabled={saving}>Save specifics</Btn>}
+      </div>
+    </Modal>
   );
 }
 
@@ -1758,7 +2119,7 @@ function TemplateCharts({ template, onChanged }: { template: CardTemplate; onCha
 }
 
 /** Graph designer: pick chart type + axes from a card's test-run results, save spec. */
-function GraphDesigner({ card, onClose }: { card: Card; onClose: () => void }) {
+function GraphDesigner({ card, template, onClose }: { card: Card; template: CardTemplate | null; onClose: () => void }) {
   const [graphs, setGraphs] = useState<GraphSpec[]>([]);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1771,9 +2132,9 @@ function GraphDesigner({ card, onClose }: { card: Card; onClose: () => void }) {
   const [suggesting, setSuggesting] = useState(false);
   const [candidates, setCandidates] = useState<{ list: ChartSuggestion[]; model: string | null; heuristic: boolean; reason: string | null } | null>(null);
   const [checkedCand, setCheckedCand] = useState<number[]>([]);
-  // Merge optimizer state for the card's line.
-  const [optimizing, setOptimizing] = useState(false);
-  const [proposals, setProposals] = useState<{ list: MergeProposal[]; note?: string; skipped?: string[] } | null>(null);
+  // Template-chart preview (viewer mode): big charts rendered on this card's sample.
+  const [chartModal, setChartModal] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -1800,6 +2161,26 @@ function GraphDesigner({ card, onClose }: { card: Card; onClose: () => void }) {
 
   const cols = testResult?.columns ?? [];
   const numCols = testResult ? numericColumns(testResult.rows, cols) : [];
+  // Template-stamped cards are viewers: the template owns chart settings, so
+  // no manual draft and no card-level recommend here. Scratch (template-less)
+  // cards keep the full designer — nothing exists to contradict.
+  const isTemplated = template != null;
+  // Enabled-rank among the template's suggestions (mirrors TemplateCharts:
+  // rank < 2 feeds RAG on new cards).
+  const tplSug = template?.chartSuggestions ?? [];
+  const tplRank = new Map<number, number>();
+  tplSug.forEach((s, i) => { if (s.enabled !== false) tplRank.set(i, tplRank.size); });
+
+  async function refreshTest() {
+    setRefreshing(true);
+    try {
+      setTestResult(await cardApi.testCard(card.id));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setRefreshing(false);
+    }
+  }
 
   async function onRecommend() {
     setSuggesting(true);
@@ -1840,43 +2221,6 @@ function GraphDesigner({ card, onClose }: { card: Card; onClose: () => void }) {
       setGraphs(await graphApi.listForCard(card.id));
       setCandidates(null);
       setCheckedCand([]);
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }
-
-  async function onOptimize() {
-    setOptimizing(true);
-    setError(null);
-    try {
-      const r = await chartApi.optimizeLine(card.lineId);
-      setProposals({ list: r.proposals, note: r.note, skipped: r.skipped });
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setOptimizing(false);
-    }
-  }
-
-  async function onAcceptProposal(p: MergeProposal) {
-    try {
-      await graphApi.create(p.primaryCardId, {
-        name: p.title,
-        chartType: p.chartType,
-        xColumn: p.xColumn,
-        yColumns: [...new Set(p.series.map((s) => s.column))],
-        title: p.title,
-        config: {
-          source: "ai-recommended",
-          merged: true,
-          cardIds: p.cardIds,
-          series: p.series,
-          rationale: p.rationale,
-          selected_for_rag: true,
-        },
-      });
-      setGraphs(await graphApi.listForCard(card.id));
-      setProposals((prev) => prev && { ...prev, list: prev.list.filter((x) => x !== p) });
     } catch (e) {
       setError((e as Error).message);
     }
@@ -1933,9 +2277,12 @@ function GraphDesigner({ card, onClose }: { card: Card; onClose: () => void }) {
     <div className="anim-fade-in fixed inset-0 z-10 flex items-center justify-center bg-black/60" onClick={onClose}>
       <div className="anim-pop-in max-h-[90vh] w-[48rem] overflow-auto rounded-xl bg-white p-6 dark:bg-ink-900" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-bold">Graph Designer — {card.name}</h2>
+          <h2 className="text-lg font-bold">{isTemplated ? "Graphs" : "Graph Designer"} — {card.name}</h2>
           <button onClick={onClose} className="rounded-lg px-2 py-1 text-sm text-slate-400 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800">close</button>
         </div>
+        {isTemplated && template && (
+          <div className="mt-1 text-xs text-slate-500">charts live in the template <b>{template.name}</b> — shown here read-only, managed there.</div>
+        )}
 
         {error && <div className="mt-3"><AlertBanner tone="bad" title="Error" detail={error} /></div>}
 
@@ -1945,7 +2292,7 @@ function GraphDesigner({ card, onClose }: { card: Card; onClose: () => void }) {
           </div>
         )}
 
-        {testResult && (
+        {testResult && !isTemplated && (
           <div className="mt-4 rounded-lg border border-slate-200 p-4 dark:border-ink-800">
             <div className="text-sm font-semibold">{editing ? "Edit graph spec" : "New graph spec"}</div>
             <div className="mt-3 grid grid-cols-2 gap-3">
@@ -2015,7 +2362,7 @@ function GraphDesigner({ card, onClose }: { card: Card; onClose: () => void }) {
         {testResult && (
           <div className="mt-4 rounded-lg border border-accent-500/30 bg-accent-500/5 p-4">
             <div className="flex flex-wrap items-center gap-2">
-              <div className="text-sm font-semibold">Chart suggestions</div>
+              <div className="text-sm font-semibold">{isTemplated ? "Template charts" : "Chart suggestions"}</div>
               {candidates && (
                 <span
                   className="rounded-full bg-accent-500/10 px-2 py-0.5 text-xs text-accent-500 ring-1 ring-accent-500/30"
@@ -2025,18 +2372,25 @@ function GraphDesigner({ card, onClose }: { card: Card; onClose: () => void }) {
                 </span>
               )}
               <div className="ml-auto flex gap-2">
-                <Btn size="sm" icon={Sparkles} onClick={() => void onRecommend()} loading={suggesting} disabled={suggesting} title="One-time LLM recommendation for this card's data shape. Never auto-stores.">
-                  {candidates ? "Re-recommend" : "Recommend charts"}
-                </Btn>
-                <Btn size="sm" icon={ChartLine} onClick={() => void onOptimize()} loading={optimizing} disabled={optimizing} title="One-time cross-feature merge optimizer for this line. Proposes combinations that lose no information.">
-                  Optimize line
-                </Btn>
+                {isTemplated && tplSug.length > 0 && (
+                  <Btn size="sm" icon={Eye} onClick={() => setChartModal(true)} title="Open the big charts screen: template charts rendered on this copy's data.">
+                    Preview charts
+                  </Btn>
+                )}
+                {!isTemplated && (
+                  <Btn size="sm" icon={Sparkles} onClick={() => void onRecommend()} loading={suggesting} disabled={suggesting} title="One-time LLM recommendation for this card's data shape. Never auto-stores.">
+                    {candidates ? "Re-recommend" : "Recommend charts"}
+                  </Btn>
+                )}
               </div>
             </div>
-            {!candidates && !proposals && (
-              <div className="mt-1 text-xs text-slate-500">Ranked candidates with reasoning appear here — check the ones RAG should use (top-2 pre-checked). Optimize compares this line's features and proposes merges.</div>
+            {!candidates && !isTemplated && (
+              <div className="mt-1 text-xs text-slate-500">Ranked candidates with reasoning appear here — check the ones RAG should use (top-2 pre-checked).</div>
             )}
-            {candidates && (
+            {isTemplated && (
+              <div className="mt-1 text-xs text-slate-500">These charts live in the template — recommend and design happen there.</div>
+            )}
+            {candidates && !isTemplated && (
               <div className="mt-3 flex flex-col gap-2">
                 {candidates.list.map((c, i) => (
                   <label key={i} className={`anim-pop-in flex cursor-pointer items-start gap-2 rounded-lg border p-2.5 text-sm transition-colors ${checkedCand.includes(i) ? "border-accent-500/50 bg-accent-500/5" : "border-slate-200 dark:border-ink-800"}`}>
@@ -2065,32 +2419,66 @@ function GraphDesigner({ card, onClose }: { card: Card; onClose: () => void }) {
                 </div>
               </div>
             )}
-            {proposals && (
+            {isTemplated && template && (
               <div className="mt-3 flex flex-col gap-2">
-                {proposals.note && <div className="text-xs text-slate-500">{proposals.note}</div>}
-                {proposals.skipped && proposals.skipped.length > 0 && (
-                  <div className="text-xs text-state-warn" title="These groups were not judged — merges may exist that the optimizer did not evaluate">
-                    skipped: {proposals.skipped.join(" · ")}
-                  </div>
-                )}
-                {proposals.list.map((p, i) => (
-                  <div key={i} className="anim-pop-in rounded-lg border border-violet-500/40 bg-violet-500/5 p-2.5 text-sm">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <StatusChip tone="accent">{p.chartType}</StatusChip>
-                      <span className="rounded-full bg-violet-500/10 px-1.5 py-px text-[10px] text-violet-400 ring-1 ring-violet-500/30">merge · {p.series.length} series</span>
-                      <span className="font-medium">{p.title}</span>
-                      <Btn size="sm" variant="primary" onClick={() => void onAcceptProposal(p)} className="ml-auto">Accept merge</Btn>
+                <div className="text-xs text-slate-400">{tplSug.length} ranked · managed in the template</div>
+                {tplSug.map((s, i) => {
+                  const on = s.enabled !== false;
+                  const rank = tplRank.get(i);
+                  return (
+                    <div key={i} className={`anim-pop-in rounded-lg border p-2 text-sm ${on ? "border-accent-500/50 bg-accent-500/5" : "border-slate-200 opacity-60 dark:border-ink-800"}`}>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <StatusChip tone="accent">{s.chartType}</StatusChip>
+                        {rank != null && rank < 2 && <span className="rounded-full bg-state-ok/10 px-1.5 py-px text-[10px] text-state-ok ring-1 ring-state-ok/30">auto top-{rank + 1}</span>}
+                        <span className="font-medium">{s.title}</span>
+                        <span className="text-xs text-slate-400">x:{s.xColumn} y:{s.yColumns.join(",") || "—"}</span>
+                        <span className="ml-auto rounded-full bg-accent-500/10 px-1.5 py-px text-[10px] text-accent-500 ring-1 ring-accent-500/30">from template</span>
+                      </div>
+                      {s.rationale && <div className="mt-0.5 text-xs text-slate-500">{s.rationale}</div>}
+                      {s.conditions && <div className="mt-0.5 text-xs text-accent-500/90">◷ {s.conditions}</div>}
+                      {testResult && s.chartType !== "table" && s.yColumns.length > 0 && (
+                        <div className="ml-6 mt-1 max-w-md"><Chart rows={testResult.rows} x={s.xColumn} yCols={s.yColumns} type={s.chartType} height={90} compact /></div>
+                      )}
                     </div>
-                    <div className="tnum mt-1 text-xs text-slate-400">{p.series.map((s) => `${s.cardName}.${s.column}`).join(" · ")}</div>
-                    {p.rationale && <div className="mt-0.5 text-xs text-slate-500">{p.rationale}</div>}
-                  </div>
-                ))}
-                {proposals.list.length === 0 && !proposals.note && <div className="text-xs text-slate-500">No merges proposed — keeping separate charts loses nothing.</div>}
+                  );
+                })}
+                {tplSug.length === 0 && <div className="text-xs text-slate-400">This template has no chart suggestions yet — recommend them on its template first.</div>}
               </div>
+            )}
+            {chartModal && (
+              <ChartPreviewModal
+                title={`Charts — ${card.name}`}
+                subtitle={`Template charts on ${card.lineId} · read-only, managed in the template`}
+                items={tplSug.map((s, i) => {
+                  const rank = tplRank.get(i);
+                  return {
+                    key: `${i}`,
+                    chartType: s.chartType,
+                    xColumn: s.xColumn,
+                    yColumns: s.yColumns,
+                    title: s.title,
+                    rationale: s.rationale,
+                    conditions: s.conditions,
+                    badges: rank != null && rank < 2 ? [{ text: `auto top-${rank + 1}`, tone: "ok" as const }] : [],
+                    checked: s.enabled !== false,
+                    xLabel: s.xColumn,
+                    yLabel: s.yColumns.length > 0 ? `${s.yColumns.join(", ")}${card.unit ? ` (${card.unit})` : ""}` : undefined,
+                    units: card.unit || undefined,
+                  };
+                })}
+                sample={testResult}
+                sampledAt={card.lastTest?.at ?? null}
+                loadingSample={refreshing}
+                sampleError={null}
+                summary={`${tplRank.size} of ${tplSug.length} enabled in template`}
+                resolution={card.granularity === "shift" ? "hourly" : card.granularity}
+                onResolutionChange={() => void refreshTest()}
+                onRefresh={() => void refreshTest()}
+                onClose={() => setChartModal(false)}
+              />
             )}
           </div>
         )}
-
         {graphs.length > 0 && (
           <div className="mt-4">
             <div className="text-sm font-semibold">Saved graphs ({graphs.length}) <span className="font-normal text-xs text-slate-400">— checked feeds RAG prompts</span></div>

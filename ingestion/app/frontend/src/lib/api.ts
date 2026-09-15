@@ -174,6 +174,7 @@ export interface CardTemplate {
   granularity: "hourly" | "shift" | "daily";
   unit: string;
   extractHint: string;
+  context: string;
   chartSuggestions: ChartSuggestion[];
   version: number;
   createdAt: string;
@@ -191,6 +192,7 @@ export interface Card {
   granularity: "hourly" | "shift" | "daily";
   unit: string;
   extractHint: string;
+  context: string;
   threshold: number | null;
   status: "live" | "dormant";
   version: number;

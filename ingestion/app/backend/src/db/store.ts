@@ -85,6 +85,7 @@ export function openStore(path: string): Database.Database {
       granularity TEXT NOT NULL DEFAULT 'hourly' CHECK (granularity IN ('hourly','shift','daily')),
       unit TEXT NOT NULL DEFAULT '',
       extract_hint TEXT NOT NULL DEFAULT '',
+      context TEXT NOT NULL DEFAULT '',
       version INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -100,6 +101,7 @@ export function openStore(path: string): Database.Database {
       granularity TEXT NOT NULL DEFAULT 'hourly' CHECK (granularity IN ('hourly','shift','daily')),
       unit TEXT NOT NULL DEFAULT '',
       extract_hint TEXT NOT NULL DEFAULT '',
+      context TEXT NOT NULL DEFAULT '',
       threshold REAL,
       status TEXT NOT NULL DEFAULT 'dormant' CHECK (status IN ('live','dormant')),
       version INTEGER NOT NULL DEFAULT 1,
@@ -206,6 +208,16 @@ export function openStore(path: string): Database.Database {
   // inherit these as their default graph specs (top-2 selected for RAG).
   if (!tplCols.some((c) => c.name === "chart_suggestions")) {
     db.exec("ALTER TABLE card_templates ADD COLUMN chart_suggestions TEXT NOT NULL DEFAULT '[]'");
+  }
+  // Lightweight migration: per-ingest disambiguation shown alongside each
+  // retained fact (Hindsight `context`). Set on the template, inherited by
+  // copies at registration, tunable per copy afterwards (Specifics panel).
+  if (!tplCols.some((c) => c.name === "context")) {
+    db.exec("ALTER TABLE card_templates ADD COLUMN context TEXT NOT NULL DEFAULT ''");
+  }
+  const cardCols = db.prepare("PRAGMA table_info(cards)").all() as { name: string }[];
+  if (!cardCols.some((c) => c.name === "context")) {
+    db.exec("ALTER TABLE cards ADD COLUMN context TEXT NOT NULL DEFAULT ''");
   }
   return db;
 }
@@ -519,6 +531,7 @@ export interface CardTemplate {
   granularity: Granularity;
   unit: string;
   extractHint: string;
+  context: string;
   chartSuggestions: ChartSuggestion[];
   version: number;
   createdAt: string;
@@ -536,6 +549,7 @@ export interface Card {
   granularity: Granularity;
   unit: string;
   extractHint: string;
+  context: string;
   threshold: number | null;
   status: CardStatus;
   version: number;
@@ -560,6 +574,7 @@ function tplRow(r: Record<string, unknown>): CardTemplate {
     granularity: r.granularity as Granularity,
     unit: (r.unit as string) ?? "",
     extractHint: (r.extract_hint as string) ?? "",
+    context: (r.context as string) ?? "",
     chartSuggestions: parseChartSuggestions(r.chart_suggestions),
     version: r.version as number,
     createdAt: r.created_at as string,
@@ -580,6 +595,7 @@ function cardRow(r: Record<string, unknown>): Card {
     granularity: r.granularity as Granularity,
     unit: (r.unit as string) ?? "",
     extractHint: (r.extract_hint as string) ?? "",
+    context: (r.context as string) ?? "",
     threshold: (r.threshold as number) ?? null,
     status: r.status as CardStatus,
     version: r.version as number,
@@ -612,10 +628,10 @@ export function createTemplate(t: Omit<CardTemplate, "id" | "version" | "created
   const now = new Date().toISOString();
   getDb()
     .prepare(
-      `INSERT INTO card_templates (id,name,description,reference_line_id,sql_template,granularity,unit,extract_hint,chart_suggestions,version,created_at,updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,1,?,?)`
+      `INSERT INTO card_templates (id,name,description,reference_line_id,sql_template,granularity,unit,extract_hint,context,chart_suggestions,version,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,1,?,?)`
     )
-    .run(id, t.name, t.description, t.referenceLineId ?? null, t.sqlTemplate, t.granularity, t.unit, t.extractHint, JSON.stringify(t.chartSuggestions ?? []), now, now);
+    .run(id, t.name, t.description, t.referenceLineId ?? null, t.sqlTemplate, t.granularity, t.unit, t.extractHint, t.context ?? "", JSON.stringify(t.chartSuggestions ?? []), now, now);
   return getTemplate(id)!;
 }
 
@@ -630,7 +646,7 @@ export function updateTemplate(id: string, patch: Partial<Omit<CardTemplate, "id
   const bump = patch.sqlTemplate !== undefined && patch.sqlTemplate !== cur.sqlTemplate;
   getDb()
     .prepare(
-      `UPDATE card_templates SET name=?,description=?,reference_line_id=?,sql_template=?,granularity=?,unit=?,extract_hint=?,chart_suggestions=?,
+      `UPDATE card_templates SET name=?,description=?,reference_line_id=?,sql_template=?,granularity=?,unit=?,extract_hint=?,context=?,chart_suggestions=?,
        version=version+?,updated_at=? WHERE id=?`
     )
     .run(
@@ -641,6 +657,7 @@ export function updateTemplate(id: string, patch: Partial<Omit<CardTemplate, "id
       patch.granularity ?? cur.granularity,
       patch.unit ?? cur.unit,
       patch.extractHint ?? cur.extractHint,
+      patch.context ?? cur.context,
       patch.chartSuggestions !== undefined ? JSON.stringify(patch.chartSuggestions) : JSON.stringify(cur.chartSuggestions),
       bump ? 1 : 0,
       new Date().toISOString(),
@@ -661,6 +678,7 @@ export interface CardInput {
   granularity: Granularity;
   unit?: string;
   extractHint?: string;
+  context?: string;
   threshold?: number | null;
   templateId?: string | null;
 }
@@ -701,13 +719,13 @@ export function createCard(input: CardInput): Card {
   const tpl = input.templateId ? getTemplate(input.templateId) : null;
   getDb()
     .prepare(
-      `INSERT INTO cards (id,template_id,template_version,line_id,name,tables_json,sql_text,granularity,unit,extract_hint,threshold,status,version,created_at,updated_at)
+      `INSERT INTO cards (id,template_id,template_version,line_id,name,tables_json,sql_text,granularity,unit,extract_hint,context,threshold,status,version,created_at,updated_at)
        VALUES (?,?,?,?,?,?,?,?,?,?,?, 'dormant',1,?,?)`
     )
     .run(
       id, tpl?.id ?? null, tpl?.version ?? null, input.lineId, input.name,
       JSON.stringify(input.tables), input.sql, input.granularity,
-      input.unit ?? "", input.extractHint ?? "", input.threshold ?? null, now, now
+      input.unit ?? "", input.extractHint ?? "", input.context ?? "", input.threshold ?? null, now, now
     );
   logCardEvent(id, "created", `from ${tpl ? `template ${tpl.name} v${tpl.version}` : "scratch"}`);
   return getCard(id)!;
@@ -719,6 +737,10 @@ export function instantiateTemplate(templateId: string, lineId: string, override
   if (!tpl) throw new Error("template not found");
   const line = getLine(lineId);
   if (!line) throw new Error("line not found");
+  // Guardrail: one copy per feature per line — re-stamping is Check/Apply's
+  // job, not instantiate's. Surfaces as 409 through the route handler.
+  const dupe = listCards(lineId).find((c) => c.templateId === templateId);
+  if (dupe) throw new Error(`"${tpl.name}" is already registered on ${lineId} as ${dupe.id} — edit or reapply it instead`);
   const card = createCard({
     lineId,
     name: overrides?.name ?? tpl.name,
@@ -727,6 +749,7 @@ export function instantiateTemplate(templateId: string, lineId: string, override
     granularity: tpl.granularity,
     unit: tpl.unit,
     extractHint: tpl.extractHint,
+    context: tpl.context,
     templateId: tpl.id,
   });
   // Inherit the feature's chart suggestions as the card's default specs.
@@ -758,7 +781,7 @@ export type ChangeMode = "forward" | "reingest";
 
 export function updateCard(
   id: string,
-  patch: Partial<Pick<CardInput, "name" | "tables" | "sql" | "granularity" | "unit" | "extractHint" | "threshold">>,
+  patch: Partial<Pick<CardInput, "name" | "tables" | "sql" | "granularity" | "unit" | "extractHint" | "context" | "threshold">>,
   opts?: { mode?: ChangeMode; reingestFrom?: string }
 ): Card | null {
   const cur = getCard(id);
@@ -773,13 +796,13 @@ export function updateCard(
   const sqlChanged = patch.sql !== undefined && patch.sql !== cur.sql;
   getDb()
     .prepare(
-      `UPDATE cards SET name=?,tables_json=?,sql_text=?,granularity=?,unit=?,extract_hint=?,threshold=?,
+      `UPDATE cards SET name=?,tables_json=?,sql_text=?,granularity=?,unit=?,extract_hint=?,context=?,threshold=?,
        version=version+?,updated_at=? WHERE id=?`
     )
     .run(
       patch.name ?? cur.name, JSON.stringify(tables), patch.sql ?? cur.sql,
       patch.granularity ?? cur.granularity, patch.unit ?? cur.unit,
-      patch.extractHint ?? cur.extractHint, patch.threshold ?? cur.threshold,
+      patch.extractHint ?? cur.extractHint, patch.context ?? cur.context, patch.threshold ?? cur.threshold,
       sqlChanged ? 1 : 0, new Date().toISOString(), id
     );
   if (sqlChanged) {
