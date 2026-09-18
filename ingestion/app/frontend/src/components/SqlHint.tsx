@@ -79,6 +79,7 @@ export function SqlHint({ onInsert }: { onInsert: (sql: string) => void }) {
                     icon={Copy}
                     type="button"
                     onClick={() => void copy(e.sql, e.key)}
+                    className="glass-pill glass-pill--neutral"
                   >
                     {copied === e.key ? "copied ✓" : "copy"}
                   </Btn>
@@ -88,6 +89,7 @@ export function SqlHint({ onInsert }: { onInsert: (sql: string) => void }) {
                     icon={ArrowDownToLine}
                     type="button"
                     onClick={() => onInsert(e.sql)}
+                    className="glass-pill glass-pill--neutral"
                   >
                     insert ↓
                   </Btn>

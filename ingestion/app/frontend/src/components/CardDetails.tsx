@@ -121,7 +121,7 @@ export function CardDetails({ card, template, line, graphs, bankReady, onClose, 
           <h2 className="text-lg font-bold">{card.name}</h2>
           <StatusChip tone={card.status === "live" ? "ok" : "mute"}>{card.status.toUpperCase()}</StatusChip>
           <span className="tnum text-xs text-slate-400">v{card.version}</span>
-          <button onClick={onClose} aria-label="close details" className="ml-auto rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800"><X size={16} /></button>
+          <button onClick={onClose} aria-label="close details" className="ml-auto rounded-lg p-1.5 text-slate-400 glass-pill glass-pill--close"><X size={16} /></button>
         </div>
 
         <div className="mt-4 flex flex-col gap-4 text-sm">
@@ -143,7 +143,7 @@ export function CardDetails({ card, template, line, graphs, bankReady, onClose, 
           <section>
             <div className="mb-1 flex items-center">
               <span className="text-xs uppercase tracking-widest text-slate-400">sql (full)</span>
-              <Btn variant="ghost" size="sm" icon={Copy} onClick={() => void copySql()} className="ml-auto">
+              <Btn variant="ghost" size="sm" icon={Copy} onClick={() => void copySql()} className="ml-auto glass-pill glass-pill--neutral">
                 {copied ? "copied ✓" : "copy → playground"}
               </Btn>
             </div>
@@ -182,7 +182,7 @@ export function CardDetails({ card, template, line, graphs, bankReady, onClose, 
           <section>
             <div className="mb-1 flex items-center gap-2">
               <span className="text-xs uppercase tracking-widest text-slate-400">graphs — checked feeds RAG</span>
-              <Btn variant="ghost" size="sm" icon={Sparkles} onClick={() => void reRecommend()} loading={recommending} disabled={recommending} className="ml-auto" title="Re-run the one-time recommendation on fresh test data. Adds new specs; never deletes.">
+              <Btn variant="ghost" size="sm" icon={Sparkles} onClick={() => void reRecommend()} loading={recommending} disabled={recommending} className="ml-auto glass-pill glass-pill--neutral" title="Re-run the one-time recommendation on fresh test data. Adds new specs; never deletes.">
                 Re-recommend
               </Btn>
             </div>
@@ -224,7 +224,7 @@ export function CardDetails({ card, template, line, graphs, bankReady, onClose, 
               </div>
             )}
             {graphs.length > 0 && !previewRows && (
-              <Btn variant="ghost" size="sm" onClick={() => void loadPreview()} loading={previewLoading} disabled={previewLoading} className="mt-2">
+              <Btn variant="ghost" size="sm" onClick={() => void loadPreview()} loading={previewLoading} disabled={previewLoading} className="mt-2 glass-pill glass-pill--neutral">
                 Load chart previews
               </Btn>
             )}
@@ -239,7 +239,7 @@ export function CardDetails({ card, template, line, graphs, bankReady, onClose, 
                     <div className="flex items-center gap-2 text-sm">
                       <StatusChip tone="accent">table</StatusChip>
                       <span className="font-medium">{g.name || g.title || "Untitled"}</span>
-                      <Btn variant="ghost" size="sm" onClick={() => void viewTable(g.id)} loading={previewLoading && openTable !== g.id} disabled={previewLoading} className="ml-auto">
+                      <Btn variant="ghost" size="sm" onClick={() => void viewTable(g.id)} loading={previewLoading && openTable !== g.id} disabled={previewLoading} className="ml-auto glass-pill glass-pill--neutral">
                         {openTable === g.id ? "Hide table" : "View table"}
                       </Btn>
                     </div>

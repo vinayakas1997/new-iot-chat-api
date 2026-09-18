@@ -39,7 +39,8 @@ export const mysqlDriver: DbDriver = {
     try {
       const [cols] = await db.query<mysql.RowDataPacket[]>(
         `SELECT COLUMN_NAME AS name, COLUMN_TYPE AS type,
-                (IS_NULLABLE = 'YES') AS nullable
+                (IS_NULLABLE = 'YES') AS nullable,
+                COLUMN_COMMENT AS description
          FROM information_schema.COLUMNS
          WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION`,
         [schema, table]
@@ -64,8 +65,8 @@ export const mysqlDriver: DbDriver = {
         name: table,
         rowCount,
         primaryKey: (pk as { name: string }[]).map((r) => r.name),
-        columns: (cols as { name: string; type: string; nullable: boolean | number }[]).map(
-          (c) => ({ name: c.name, type: c.type, nullable: c.nullable === 1 || c.nullable === true })
+        columns: (cols as { name: string; type: string; nullable: boolean | number; description?: string }[]).map(
+          (c) => ({ name: c.name, type: c.type, nullable: c.nullable === 1 || c.nullable === true, description: (c.description as string) || undefined })
         ),
       };
     } finally {

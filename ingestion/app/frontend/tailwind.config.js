@@ -18,6 +18,7 @@ export default {
         },
         accent: { 400: "#2dd4bf", 500: "#14b8a6" },
         state: { ok: "#22c55e", warn: "#f59e0b", bad: "#ef4444" },
+        "ic-blue": "#5ea8ff",
       },
       fontFamily: { sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"] },
     },

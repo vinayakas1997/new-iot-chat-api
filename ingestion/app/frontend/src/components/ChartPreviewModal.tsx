@@ -118,10 +118,10 @@ export function ChartPreviewModal({ title, subtitle, items, sample, sampledAt, l
               options={RESOLUTIONS.map((r) => ({ value: r, label: r }))} 
             />
             {sampledAt && <span className="tnum text-xs text-slate-400">sampled {new Date(sampledAt).toLocaleTimeString()}</span>}
-            <Btn size="sm" icon={RefreshCw} onClick={onRefresh} loading={loadingSample} disabled={loadingSample} title="Re-run the sample query — every chart re-renders with fresh values.">
+            <Btn size="sm" icon={RefreshCw} onClick={onRefresh} loading={loadingSample} disabled={loadingSample} title="Re-run the sample query — every chart re-renders with fresh values." className="glass-pill glass-pill--neutral">
               Refresh data
             </Btn>
-            <button onClick={onClose} aria-label="close preview" className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800"><X size={16} /></button>
+            <button onClick={onClose} aria-label="close preview" className="rounded-lg p-1.5 text-slate-400 glass-pill glass-pill--close"><X size={16} /></button>
           </div>
         </div>
 
@@ -178,9 +178,9 @@ export function ChartPreviewModal({ title, subtitle, items, sample, sampledAt, l
                     </table>
                   </div>
                   <div className="mt-2 flex items-center gap-2 text-xs text-slate-400">
-                    <button disabled={safePage === 0} onClick={() => setPage(safePage - 1)} className="rounded px-2 py-1 ring-1 ring-slate-200 transition-colors enabled:hover:bg-slate-100 disabled:opacity-40 dark:ring-ink-700 dark:enabled:hover:bg-ink-800">← prev</button>
+                    <button disabled={safePage === 0} onClick={() => setPage(safePage - 1)} className="rounded px-2 py-1 ring-1 ring-slate-200 transition-colors enabled:hover:bg-slate-100 disabled:opacity-40 dark:ring-ink-700 dark:enabled:hover:bg-ink-800 glass-pill glass-pill--neutral">← prev</button>
                     <span className="tnum">page {safePage + 1} of {pages}</span>
-                    <button disabled={safePage >= pages - 1} onClick={() => setPage(safePage + 1)} className="rounded px-2 py-1 ring-1 ring-slate-200 transition-colors enabled:hover:bg-slate-100 disabled:opacity-40 dark:ring-ink-700 dark:enabled:hover:bg-ink-800">next →</button>
+                    <button disabled={safePage >= pages - 1} onClick={() => setPage(safePage + 1)} className="rounded px-2 py-1 ring-1 ring-slate-200 transition-colors enabled:hover:bg-slate-100 disabled:opacity-40 dark:ring-ink-700 dark:enabled:hover:bg-ink-800 glass-pill glass-pill--neutral">next →</button>
                     {resolution !== "hourly" && <span className="ml-auto">non-numeric columns hidden when bucketed</span>}
                   </div>
                 </div>

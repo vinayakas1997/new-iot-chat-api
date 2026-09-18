@@ -98,7 +98,7 @@ export function History() {
       {q && (
         <div className="mt-2 flex max-w-xl flex-col gap-1">
           {matches.slice(0, 8).map((l) => (
-            <button key={l.id} onClick={() => { setQ(""); void selectLine(l.id); }} className="rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-ink-800">
+            <button key={l.id} onClick={() => { setQ(""); void selectLine(l.id); }} className="rounded-lg px-3 py-2 text-left text-sm hover:bg-slate-100 dark:hover:bg-ink-800 glass-pill glass-pill--neutral">
               <span className="font-mono font-medium">{l.id}</span> <span className="text-slate-500">{l.name}</span>
             </button>
           ))}
@@ -128,9 +128,9 @@ export function History() {
         <div className="mt-6 grid grid-cols-1 gap-6 xl:grid-cols-[20rem_1fr]">
           <div>
             <div className="mb-2 flex items-center gap-2">
-              <button onClick={() => void changeMonth(shiftMonth(month, -1))} aria-label="previous month" className="rounded border border-slate-300 p-1 text-sm transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:border-ink-700 dark:hover:bg-ink-800"><ChevronLeft size={14} /></button>
+              <button onClick={() => void changeMonth(shiftMonth(month, -1))} aria-label="previous month" className="rounded border border-slate-300 p-1 text-sm transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:border-ink-700 dark:hover:bg-ink-800 glass-pill glass-pill--neutral"><ChevronLeft size={14} /></button>
               <span className="tnum text-sm font-semibold">{month}</span>
-              <button onClick={() => void changeMonth(shiftMonth(month, 1))} aria-label="next month" className="rounded border border-slate-300 p-1 text-sm transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:border-ink-700 dark:hover:bg-ink-800"><ChevronRight size={14} /></button>
+              <button onClick={() => void changeMonth(shiftMonth(month, 1))} aria-label="next month" className="rounded border border-slate-300 p-1 text-sm transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:border-ink-700 dark:hover:bg-ink-800 glass-pill glass-pill--neutral"><ChevronRight size={14} /></button>
             </div>
             <div className="grid grid-cols-7 gap-1 text-center text-xs">
               {["M", "T", "W", "T", "F", "S", "S"].map((d, i) => <div key={i} className="text-slate-400">{d}</div>)}
@@ -139,7 +139,7 @@ export function History() {
                   <button
                     key={d}
                     onClick={() => void pickDate(d)}
-                    className={`flex flex-col items-center rounded-lg py-1.5 ${d === date ? "bg-accent-500/15 text-accent-500" : "hover:bg-slate-100 dark:hover:bg-ink-800"}`}
+                    className={`flex flex-col items-center rounded-lg py-1.5 glass-pill ${d === date ? "glass-pill--blue bg-accent-500/15 text-accent-500" : "glass-pill--neutral hover:bg-slate-100 dark:hover:bg-ink-800"}`}
                   >
                     <span className="tnum">{Number(d.slice(8))}</span>
                     <Dot s={days[d]} />
@@ -201,7 +201,7 @@ export function History() {
             <div className="mt-4 text-xs uppercase tracking-wider text-slate-400">facts out</div>
             <div className="tnum mt-1 text-2xl font-bold">{interp.factsOut.stored} <span className="text-sm font-normal text-slate-400">facts</span></div>
             <p className="mt-1 text-sm text-slate-500">{interp.factsOut.note}</p>
-            <div className="mt-4 flex justify-end"><button onClick={() => setInterp(null)} className="rounded-lg px-4 py-2 text-sm text-slate-500 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800">close</button></div>
+            <div className="mt-4 flex justify-end"><button onClick={() => setInterp(null)} className="rounded-lg px-4 py-2 text-sm glass-pill glass-pill--close">close</button></div>
           </div>
         </div>
       )}

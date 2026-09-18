@@ -118,8 +118,8 @@ export function LinePreview({ line, initialTemplateId, onClose }: { line: Line; 
             )}
             {tpl && sug.length === 0 && <div className="mt-3 text-xs text-state-warn">This feature has no chart suggestions yet — recommend them on its template first.</div>}
             <div className="mt-4 flex justify-end gap-2">
-              <button onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-slate-500 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800">cancel</button>
-              <Btn variant="primary" icon={Eye} onClick={() => void loadSample()} loading={loading} disabled={loading || blocked || sug.length === 0} title={blocked ? "Map every table first" : "Sample this line and open the preview screen"}>
+              <button onClick={onClose} className="rounded-lg px-4 py-2 text-sm glass-pill glass-pill--close">cancel</button>
+              <Btn variant="primary" icon={Eye} onClick={() => void loadSample()} loading={loading} disabled={loading || blocked || sug.length === 0} title={blocked ? "Map every table first" : "Sample this line and open the preview screen"} className="glass-pill glass-pill--blue">
                 Open preview
               </Btn>
             </div>

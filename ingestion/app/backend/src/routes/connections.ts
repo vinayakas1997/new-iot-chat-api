@@ -150,4 +150,74 @@ export async function connectionRoutes(app: FastifyInstance) {
       return reply.code(502).send({ error: (e as Error).message });
     }
   });
+
+  // Draft analyze — no line required: introspect + LLM draft for meanings.
+  // Used by Register line before the line row exists (true top→bottom).
+  app.post("/api/ingest/connections/:id/tables/:schema/:table/analyze", async (req, reply) => {
+    const { id, schema, table } = req.params as { id: string; schema: string; table: string };
+    const conn = getConnection(id);
+    if (!conn) return reply.code(404).send({ error: "not found" });
+    try {
+      const driver = driverFor(conn);
+      const info = await driver.describeTable(conn, schema, table);
+      const sample = await driver.sampleRows(conn, schema, table, 5).catch(() => ({ columns: [] as string[], rows: [] as Record<string, unknown>[] }));
+      const samples = sample.rows.slice(0, 5).map((r) => Object.fromEntries(info.columns.map((c) => [c.name, String(r[c.name] ?? "")])));
+      const columnSamples = info.columns.map((c) => `${c.name} (${c.type}): ${samples.map((s) => s[c.name] ?? "").filter(Boolean).slice(0, 3).join(", ") || "—"}`).join("\n");
+      let drafted: { name: string; meaning: string }[] = [];
+      if (info.columns.length > 0) {
+        const { llmChatJson } = await import("../llm/client.js");
+        const r = await llmChatJson({
+          system: "You label database columns. Reply with JSON only, no prose, no fences.",
+          user: `Table: ${schema}.${table}\nColumns and sample values:\n${columnSamples}\n\nFor each column write ONE short sentence what it measures, include units if apparent. Reply JSON array: [{"name","meaning"}].`,
+          schema: z.array(z.object({ name: z.string(), meaning: z.string() })),
+          context: { route: "connections-analyze-draft", connectionId: id, table: `${schema}.${table}` },
+          log: app.log,
+        });
+        if (r.parsed) drafted = r.parsed;
+      }
+      const byDraft = new Map(drafted.map((d) => [d.name.toLowerCase(), d.meaning]));
+      const columns = info.columns.map((c) => ({
+        name: c.name,
+        type: c.type,
+        nullable: c.nullable,
+        description: c.description,
+        meaning: byDraft.get(c.name.toLowerCase()) ?? c.description ?? "",
+        datatype: c.type,
+        sampleValues: samples.map((s) => s[c.name]).filter(Boolean).slice(0, 3),
+      }));
+      return { schema, table: info.name, rowCount: info.rowCount, primaryKey: info.primaryKey, columns, sample, drafted, analyzed: { total: columns.length, filled: columns.filter((c) => c.meaning.trim()).length, analyzed: false } };
+    } catch (e) {
+      return reply.code(502).send({ error: (e as Error).message });
+    }
+  });
+
+  app.post("/api/ingest/connections/:id/tables/:schema/:table/llm-fill", async (req, reply) => {
+    const { id, schema, table } = req.params as { id: string; schema: string; table: string };
+    const body = (req.body ?? {}) as { columns?: string[] };
+    const conn = getConnection(id);
+    if (!conn) return reply.code(404).send({ error: "not found" });
+    try {
+      const driver = driverFor(conn);
+      const info = await driver.describeTable(conn, schema, table);
+      const sample = await driver.sampleRows(conn, schema, table, 5).catch(() => ({ columns: [] as string[], rows: [] as Record<string, unknown>[] }));
+      const targets = body.columns && body.columns.length > 0 ? body.columns : info.columns.map((c) => c.name);
+      const sampleText = targets.map((name) => {
+        const col = info.columns.find((c) => c.name.toLowerCase() === name.toLowerCase());
+        const vals = sample.rows.slice(0, 5).map((r) => String(r[name] ?? "")).filter(Boolean).slice(0, 3).join(", ");
+        return `${name} (${col?.type ?? "?"}): ${vals || "—"}`;
+      }).join("\n");
+      const { llmChatJson } = await import("../llm/client.js");
+      const r = await llmChatJson({
+        system: "You label database columns. Reply with JSON only, no prose, no fences.",
+        user: `Table: ${schema}.${table}\nFill meanings for these columns:\n${sampleText}\nReply JSON array: [{"name","meaning"}]. One sentence per column, include units if apparent.`,
+        schema: z.array(z.object({ name: z.string(), meaning: z.string() })),
+        context: { route: "connections-llm-fill-draft", connectionId: id, table: `${schema}.${table}` },
+        log: app.log,
+      });
+      if (!r.parsed) return reply.code(502).send({ error: r.reason ?? "llm failed", reason: r.reason });
+      return { drafted: r.parsed, model: r.model, reason: r.reason };
+    } catch (e) {
+      return reply.code(502).send({ error: (e as Error).message });
+    }
+  });
 }

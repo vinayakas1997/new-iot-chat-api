@@ -1,14 +1,15 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { useState } from "react";
+import { Brain, Database, History, Layers, LayoutTemplate, ScrollText } from "lucide-react";
 
 const NAV = [
-  { to: "/setter/connections", n: "F1", label: "Connections" },
-  { to: "/setter/lines", n: "F2", label: "Lines" },
-  { to: "/setter/cards", n: "F3", label: "Cards" },
-  { to: "/setter/history", n: "F4", label: "History" },
-  { to: "/setter/hindsight", n: "F5", label: "AI Services" },
-  { to: "/setter/ai-logs", n: "F6", label: "AI Logs" },
-];
+  { to: "/setter/connections", n: "F1", label: "Connections", Icon: Database },
+  { to: "/setter/lines", n: "F2", label: "Register", Icon: Layers },
+  { to: "/setter/cards", n: "F3", label: "Lines", Icon: LayoutTemplate },
+  { to: "/setter/history", n: "F4", label: "History", Icon: History },
+  { to: "/setter/hindsight", n: "F5", label: "AI Services", Icon: Brain },
+  { to: "/setter/ai-logs", n: "F6", label: "AI Logs", Icon: ScrollText },
+] as const;
 
 /** App shell: sidebar (pipeline order) + topbar. Never reloads on nav. */
 export function Shell() {
@@ -38,6 +39,7 @@ export function Shell() {
                 }`
               }
             >
+              <item.Icon size={16} className="shrink-0 opacity-70" />
               <span className="tnum w-6 text-xs opacity-60">{item.n}</span>
               {item.label}
             </NavLink>

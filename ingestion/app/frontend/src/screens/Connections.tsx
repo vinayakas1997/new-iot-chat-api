@@ -177,7 +177,7 @@ export function Connections() {
             className="w-80 rounded-lg border border-slate-300 bg-transparent py-2 pl-9 pr-3 text-sm focus:border-accent-500 focus:outline-none dark:border-ink-700"
           />
         </div>
-        <Btn variant="primary" icon={Plus} onClick={() => openForm()}>
+        <Btn variant="primary" icon={Plus} onClick={() => openForm()} className="glass-pill glass-pill--blue">
           Add connection
         </Btn>
       </div>
@@ -227,7 +227,7 @@ export function Connections() {
                       </Btn>
                     </span>
                     <span className="mr-2 inline-flex"><Btn variant="ghost" icon={Pencil} onClick={() => openForm(c)}>edit</Btn></span>
-                    <Btn variant="ghostBad" icon={Trash2} onClick={() => void onDelete(c)}>delete</Btn>
+                    <Btn variant="ghostBad" icon={Trash2} onClick={() => void onDelete(c)} className="glass-pill glass-pill--bad">delete</Btn>
                   </td>
                 </tr>
                 {open && (
@@ -300,7 +300,7 @@ export function Connections() {
           icon={Database}
           title="No connections yet"
           body="Add your first plant database to let the pipeline read from it."
-          action={<Btn variant="primary" icon={Plus} onClick={() => openForm()}>Add your first connection</Btn>}
+          action={<Btn variant="primary" icon={Plus} onClick={() => openForm()} className="glass-pill glass-pill--blue">Add your first connection</Btn>}
         />
       )}
 
@@ -327,12 +327,12 @@ export function Connections() {
               </div>
               {testMsg && <div className={`text-sm ${testMsg.startsWith("OK") ? "text-state-ok" : "text-state-bad"}`}>{testMsg}</div>}
               <div className="mt-1 flex justify-between">
-                <Btn icon={FlaskConical} onClick={() => void onTest()} loading={testing} disabled={testing}>
+                <Btn icon={FlaskConical} onClick={() => void onTest()} loading={testing} disabled={testing} className="glass-pill glass-pill--neutral">
                   {testing ? "testing…" : "Test (no save)"}
                 </Btn>
                 <div className="flex gap-2">
-                  <button onClick={() => setShowForm(false)} className="rounded-lg px-4 py-2 text-sm text-slate-500 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800">cancel</button>
-                  <Btn variant="primary" icon={Save} onClick={() => void onSave()}>Save</Btn>
+                  <button onClick={() => setShowForm(false)} className="rounded-lg px-4 py-2 text-sm glass-pill glass-pill--close">cancel</button>
+                  <Btn variant="primary" icon={Save} onClick={() => void onSave()} className="glass-pill glass-pill--blue">Save</Btn>
                 </div>
               </div>
             </div>

@@ -82,7 +82,8 @@ export function TradingChart({ rows, x, yCols, type, title, threshold, height = 
         vertLine: { color: "#3d4a68", labelBackgroundColor: "#2a3347" },
         horzLine: { color: "#3d4a68", labelBackgroundColor: "#2a3347" },
       },
-      rightPriceScale: { borderColor: GRID },
+      leftPriceScale: { visible: true, borderColor: GRID },
+      rightPriceScale: { visible: false },
       timeScale: { borderColor: GRID, timeVisible: true, secondsVisible: false },
     });
 
@@ -95,12 +96,14 @@ export function TradingChart({ rows, x, yCols, type, title, threshold, height = 
             bottomColor: `${color}0a`,
             lineWidth: 2,
             priceFormat: { type: "price", precision: 2, minMove: 0.01 },
-          })
+            priceScaleId: "left",
+          } as never)
         : chart.addSeries(LineSeries, {
             color,
             lineWidth: 2,
             priceFormat: { type: "price", precision: 2, minMove: 0.01 },
-          });
+            priceScaleId: "left",
+          } as never);
       const pts = seriesData(data.rows, data.x, col);
       if (pts.length === 0) {
         chart.removeSeries(series);

@@ -11,6 +11,7 @@ import { graphRoutes } from "./routes/graphs.js";
 import { hindsightRoutes } from "./routes/hindsight.js";
 import { historyRoutes } from "./routes/history.js";
 import { lineRoutes } from "./routes/lines.js";
+import { columnTemplateRoutes } from "./routes/columnTemplates.js";
 import { llmRoutes } from "./routes/llm.js";
 import { llmCallRoutes } from "./routes/llmcalls.js";
 import { playgroundRoutes } from "./routes/playground.js";
@@ -31,6 +32,7 @@ async function main() {
   await app.register(connectionRoutes);
   await app.register(bankRoutes);
   await app.register(lineRoutes);
+  await app.register(columnTemplateRoutes);
   await app.register(cardRoutes);
   await app.register(chartRoutes);
   await app.register(graphRoutes);

@@ -1,0 +1,124 @@
+import uuid
+from datetime import datetime
+from sqlalchemy import Boolean, DateTime, Integer, Text, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+class Base(DeclarativeBase):
+    pass
+
+class GlobalRegistry(Base):
+    __tablename__ = "global_registry"
+    __table_args__ = (UniqueConstraint("line_name", "dataset_name", name="uq_global_registry_line_dataset"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    line_name: Mapped[str] = mapped_column(Text, nullable=False)
+    dataset_name: Mapped[str] = mapped_column(Text, nullable=False)
+    synonyms: Mapped[dict | list | None] = mapped_column(JSONB, nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_type: Mapped[str] = mapped_column(Text, nullable=False)
+    source_config: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    column_definitions: Mapped[dict | list] = mapped_column(JSONB, nullable=False)
+    role: Mapped[str | None] = mapped_column(Text, nullable=True)
+    join_hints: Mapped[dict | list | None] = mapped_column(JSONB, nullable=True)
+    suggested_aims: Mapped[dict | list | None] = mapped_column(JSONB, nullable=True)
+    data_earliest_ts: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verified: Mapped[bool] = mapped_column(Boolean, default=True)
+    global_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(Text, default="active")
+    maintained_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+class TaskRegistry(Base):
+    __tablename__ = "task_registry"
+    __table_args__ = (UniqueConstraint("user_id", "line_name", "version", name="uq_task_registry_user_line_version"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    line_name: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    task_definition: Mapped[dict] = mapped_column(JSONB, nullable=False)
+
+class ColumnTemplate(Base):
+    __tablename__ = "column_templates"
+    __table_args__ = (UniqueConstraint("user_id", "template_name", name="uq_column_templates_user_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    template_name: Mapped[str] = mapped_column(Text, nullable=False)
+    column_definitions: Mapped[dict | list] = mapped_column(JSONB, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class AnswerTemplate(Base):
+    """User-defined report-format templates. The format_spec is free text the user
+    writes once (e.g. a daily report layout with title, per-machine sections and
+    questions). When applied, the separate template pipeline fills it in from the
+    attached datasets. Purely datasets + format spec — not a research flow."""
+    __tablename__ = "answer_templates"
+    __table_args__ = (UniqueConstraint("user_id", "template_name", name="uq_answer_templates_user_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    template_name: Mapped[str] = mapped_column(Text, nullable=False)
+    format_spec: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class DbConnection(Base):
+    """External database connection registered by the IoT team. Tables from these connections
+    can be introspected for the global registry and queried live by the analyser.
+    Shared across all IoT users (no owner column)."""
+    __tablename__ = "db_connections"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    db_type: Mapped[str] = mapped_column(Text, nullable=False)  # postgres | mysql
+    host: Mapped[str] = mapped_column(Text, nullable=False)
+    port: Mapped[int] = mapped_column(Integer, nullable=False)
+    database_name: Mapped[str] = mapped_column(Text, nullable=False)
+    username: Mapped[str] = mapped_column(Text, nullable=False)
+    password: Mapped[str] = mapped_column(Text, nullable=False)
+    schema_name: Mapped[str | None] = mapped_column(Text, nullable=True, default="public")
+    created_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class UserRegistry(Base):
+    """Personal (user-uploaded CSV) datasets — separate from the IoT team's global_registry.
+    Each row points at one table inside that user's own SQLite file, never Postgres."""
+    __tablename__ = "user_registry"
+    __table_args__ = (UniqueConstraint("user_id", "dataset_name", name="uq_user_registry_user_dataset"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    dataset_name: Mapped[str] = mapped_column(Text, nullable=False)
+    table_name: Mapped[str] = mapped_column(Text, nullable=False)
+    sqlite_path: Mapped[str] = mapped_column(Text, nullable=False)
+    original_filename: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    column_definitions: Mapped[dict | list] = mapped_column(JSONB, nullable=False, default=list)
+    column_profiling: Mapped[dict | None] = mapped_column(JSONB, nullable=True, default=None)
+    row_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(Text, default="draft")  # draft | active
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class ManagerSession(Base):
+    __tablename__ = "manager_sessions"
+    session_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    phase: Mapped[str] = mapped_column(Text, nullable=False, default="extract")
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
+    line_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    state_json: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    mode: Mapped[str] = mapped_column(Text, nullable=False, default="ask")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

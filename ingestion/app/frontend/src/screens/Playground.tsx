@@ -79,7 +79,7 @@ export function Playground() {
               <button
                 key={`${c.table}.${c.name}`}
                 onClick={() => setSql((s) => s ? `${s} ${c.name}` : c.name)}
-                className="rounded border border-slate-200 px-1.5 py-0.5 hover:bg-slate-100 dark:border-ink-700 dark:hover:bg-ink-800"
+                className="rounded border border-slate-200 px-1.5 py-0.5 hover:bg-slate-100 dark:border-ink-700 dark:hover:bg-ink-800 glass-pill glass-pill--neutral"
                 title={`${c.table} · ${c.type}`}
               >
                 {c.name}
@@ -115,6 +115,7 @@ export function Playground() {
           onClick={() => void onRun()}
           loading={running}
           disabled={running || !lineId || !sql.trim()}
+          className="glass-pill glass-pill--blue"
         >
           {running ? "running…" : "Run query"}
         </Btn>
@@ -126,6 +127,7 @@ export function Playground() {
               setSaveDraft({ name: "", tables: line?.memberTables.join(", ") ?? "", granularity: "hourly", unit: "", extractHint: "" });
               setShowSave(true);
             }}
+            className="glass-pill glass-pill--neutral"
           >
             Save as card
           </Btn>
@@ -133,7 +135,7 @@ export function Playground() {
         <Btn
           icon={HistoryIcon}
           onClick={() => setShowHistory(!showHistory)}
-          className="ml-auto"
+          className="ml-auto glass-pill glass-pill--neutral"
         >
           History ({history.length})
         </Btn>
@@ -212,7 +214,7 @@ export function Playground() {
             <textarea rows={2} value={saveDraft.extractHint} onChange={(e) => setSaveDraft({ ...saveDraft, extractHint: e.target.value })} className={inp} />
           </Field>
           <div className="mt-3 flex justify-end gap-2">
-            <button onClick={() => setShowSave(false)} className="rounded-lg px-4 py-2 text-sm text-slate-500 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800">cancel</button>
+            <button onClick={() => setShowSave(false)} className="rounded-lg px-4 py-2 text-sm glass-pill glass-pill--close">cancel</button>
             <Btn
               variant="primary"
               icon={Save}
@@ -230,6 +232,7 @@ export function Playground() {
                 setResult(null);
               })()}
               disabled={!saveDraft.name.trim()}
+              className="glass-pill glass-pill--blue"
             >
               Save dormant card
             </Btn>

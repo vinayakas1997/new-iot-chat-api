@@ -146,7 +146,7 @@ export function AiLogs() {
             className="rounded-lg border border-slate-300 bg-transparent py-1.5 pl-8 pr-2 text-sm dark:border-ink-700"
           />
         </div>
-        <Btn size="sm" icon={RefreshCw} onClick={() => void load()} loading={loading} disabled={loading} title="Reload from the server">
+        <Btn size="sm" icon={RefreshCw} onClick={() => void load()} loading={loading} disabled={loading} title="Reload from the server" className="glass-pill glass-pill--neutral">
           Refresh
         </Btn>
         <span className="tnum ml-auto text-xs text-slate-400">{loading ? "loading…" : `${from}–${to} of ${total}`}</span>
@@ -262,9 +262,9 @@ export function AiLogs() {
       </div>
 
       <div className="mt-3 flex items-center justify-end gap-2">
-        <Btn size="sm" disabled={page === 0 || loading} onClick={() => setPage((p) => Math.max(0, p - 1))}>← newer</Btn>
+        <Btn size="sm" disabled={page === 0 || loading} onClick={() => setPage((p) => Math.max(0, p - 1))} className="glass-pill glass-pill--neutral">← newer</Btn>
         <span className="tnum text-xs text-slate-400">page {page + 1}{total > 0 && ` · ${Math.ceil(total / PAGE)}`}</span>
-        <Btn size="sm" disabled={loading || to >= total} onClick={() => setPage((p) => p + 1)}>older →</Btn>
+        <Btn size="sm" disabled={loading || to >= total} onClick={() => setPage((p) => p + 1)} className="glass-pill glass-pill--neutral">older →</Btn>
       </div>
     </div>
   );

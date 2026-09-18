@@ -4,6 +4,8 @@ export interface ColumnInfo {
   name: string;
   type: string;
   nullable: boolean;
+  /** DB comment / meaning — not stored here, merged from line_column_meta at route layer. */
+  description?: string;
 }
 
 export interface TableInfo {

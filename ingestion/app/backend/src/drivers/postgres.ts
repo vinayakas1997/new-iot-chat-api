@@ -59,7 +59,8 @@ export const postgresDriver: DbDriver = {
         const cols = await client.query(
           `SELECT a.attname AS name,
                   pg_catalog.format_type(a.atttypid, a.atttypmod) AS type,
-                  NOT a.attnotnull AS nullable
+                  NOT a.attnotnull AS nullable,
+                  col_description(a.attrelid, a.attnum) AS description
            FROM pg_attribute a
            JOIN pg_class t ON t.oid = a.attrelid
            JOIN pg_namespace n ON n.oid = t.relnamespace

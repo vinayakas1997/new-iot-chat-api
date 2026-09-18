@@ -512,24 +512,24 @@ export function Cards() {
           </div>
         )}
         <div className="mt-3 flex flex-wrap gap-2 text-sm">
-          <Btn icon={Eye} onClick={() => setDetailCard(c)}>Details</Btn>
-          <Btn icon={FlaskConical} onClick={() => void onTest(c)} loading={testingId === c.id}>
+          <Btn icon={Eye} onClick={() => setDetailCard(c)} className="glass-pill glass-pill--neutral">Details</Btn>
+          <Btn icon={FlaskConical} onClick={() => void onTest(c)} loading={testingId === c.id} className="glass-pill glass-pill--neutral">
             {testingId === c.id ? "testing…" : "Test-run"}
           </Btn>
-          <Btn icon={ChartLine} onClick={() => setGraphCard(c)}>
+          <Btn icon={ChartLine} onClick={() => setGraphCard(c)} className="glass-pill glass-pill--neutral">
             Graph {(cardGraphs[c.id]?.length ?? 0) > 0 && <span className="tnum">({cardGraphs[c.id].length})</span>}
           </Btn>
-          <Btn icon={SlidersHorizontal} onClick={() => setSpecificsCard(c)} title="Per-ingest tuning for this feature: extract hint, threshold, unit, context. Bank settings stay on the line.">
+          <Btn icon={SlidersHorizontal} onClick={() => setSpecificsCard(c)} title="Per-ingest tuning for this feature: extract hint, threshold, unit, context. Bank settings stay on the line." className="glass-pill glass-pill--neutral">
             Specifics
           </Btn>
           {c.status === "dormant" ? (
             <>
-              <Btn variant="ok" icon={Rocket} onClick={() => void onActivate(c)} disabled={!canActivate(c)}>Go live</Btn>
-              <Btn icon={Pencil} onClick={() => openEditCard(c)}>edit</Btn>
-              <Btn variant="bad" icon={Trash2} onClick={() => { if (confirm(`Delete card "${c.name}" on ${c.lineId}?`)) void act(() => cardApi.deleteCard(c.id)); }}>delete</Btn>
+              <Btn variant="ok" icon={Rocket} onClick={() => void onActivate(c)} disabled={!canActivate(c)} className="glass-pill glass-pill--ok">Go live</Btn>
+              <Btn icon={Pencil} onClick={() => openEditCard(c)} className="glass-pill glass-pill--neutral">edit</Btn>
+              <Btn variant="bad" icon={Trash2} onClick={() => { if (confirm(`Delete card "${c.name}" on ${c.lineId}?`)) void act(() => cardApi.deleteCard(c.id)); }} className="glass-pill glass-pill--bad">delete</Btn>
             </>
           ) : (
-            <Btn variant="warn" icon={Pause} onClick={() => void act(() => cardApi.dormantCard(c.id))}>take dormant</Btn>
+            <Btn variant="warn" icon={Pause} onClick={() => void act(() => cardApi.dormantCard(c.id))} className="glass-pill glass-pill--amber">take dormant</Btn>
           )}
         </div>
       </div>
@@ -550,8 +550,8 @@ export function Cards() {
       {liveNudge && (
         <div className="mt-4 flex flex-wrap items-center gap-3 rounded-xl border border-state-ok/50 px-4 py-3 text-sm">
           <span><b>{liveNudge.cardName}</b> is live ✓ — <FormattedText text={`line bank bank:line-${liveNudge.lineId} is not configured yet.`} bankId={`bank:line-${liveNudge.lineId}`} /> Ticks will retain with Hindsight defaults until you push.</span>
-          <button onClick={() => openBankDrawer(liveNudge.lineId)} className="inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-3 py-1 font-semibold text-white transition-all duration-150 hover:bg-accent-400 active:scale-[0.98] focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60">Review &amp; push <ArrowRight size={13} /></button>
-          <button onClick={() => setLiveNudge(null)} className="rounded px-1 text-slate-400 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800">dismiss</button>
+          <Btn variant="primary" icon={ArrowRight} onClick={() => openBankDrawer(liveNudge.lineId)} className="glass-pill glass-pill--blue">Review &amp; push</Btn>
+          <button onClick={() => setLiveNudge(null)} className="rounded px-1 text-slate-400 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800 glass-pill glass-pill--neutral">dismiss</button>
         </div>
       )}
 
@@ -560,7 +560,7 @@ export function Cards() {
           <button
             key={t}
             onClick={() => setTab(t)}
-            className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 ${tab === t ? "bg-accent-500/15 text-accent-500" : "text-slate-500 hover:bg-slate-100 dark:hover:bg-ink-800"}`}
+            className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 glass-pill ${tab === t ? "glass-pill--blue bg-accent-500/15 text-accent-500" : "glass-pill--neutral text-slate-500 hover:bg-slate-100 dark:hover:bg-ink-800"}`}
           >
             {t === "cards" ? `Cards (${cards.length})` : t === "templates" ? `Templates (${templates.length})` : "Playground"}
           </button>
@@ -574,8 +574,8 @@ export function Cards() {
             <span className={activeModel ? "text-state-ok" : "text-slate-400"}>●</span> AI settings{activeModel ? ` · ${activeModel}` : ""}
           </Link>
             {tab === "cards"
-            ? <Btn variant="primary" icon={Plus} onClick={() => { setShowAdd(true); setAddLine(lines[0]?.id ?? ""); setAddQ(""); setAddMaps({}); setAddChecked([]); setAddDone(null); }} title="Register features onto a line: pick the line, see its tables, search templates, attach several at once as dormant copies. SQL and thresholds live in the template.">New card</Btn>
-            : <Btn variant="primary" icon={Plus} onClick={() => { setEditTpl(null); setTplDraft({ name: "", description: "", sqlTemplate: "", granularity: "hourly", unit: "", extractHint: "", context: "" }); setTplPickLine(""); setTplLineSearch(""); setShowTplForm(true); }}>New template</Btn>}
+            ? <Btn variant="primary" icon={Plus} onClick={() => { setShowAdd(true); setAddLine(lines[0]?.id ?? ""); setAddQ(""); setAddMaps({}); setAddChecked([]); setAddDone(null); }} title="Register features onto a line: pick the line, see its tables, search templates, attach several at once as dormant copies. SQL and thresholds live in the template." className="glass-pill glass-pill--blue">New card</Btn>
+            : <Btn variant="primary" icon={Plus} onClick={() => { setEditTpl(null); setTplDraft({ name: "", description: "", sqlTemplate: "", granularity: "hourly", unit: "", extractHint: "", context: "" }); setTplPickLine(""); setTplLineSearch(""); setShowTplForm(true); }} className="glass-pill glass-pill--blue">New template</Btn>}
         </div>
       </div>
 
@@ -668,7 +668,7 @@ export function Cards() {
           })}
           {cardGroups.length === 0 && (
             <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500 dark:border-ink-700">
-              No cards match the filters. <button onClick={() => { setCardQ(""); setCardLine(""); setCardStatus("all"); }} className="inline-flex items-center gap-1 text-accent-500 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60"><X size={12} />clear filters</button>
+              No cards match the filters. <button onClick={() => { setCardQ(""); setCardLine(""); setCardStatus("all"); }} className="inline-flex items-center gap-1 text-accent-500 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 glass-pill glass-pill--neutral"><X size={12} />clear filters</button>
             </div>
           )}
         </div>
@@ -721,7 +721,7 @@ export function Cards() {
                     <option value="no-suggest">no chart suggestions</option>
                   </select>
                   {(tplQ || tplState !== "all") && (
-                    <button onClick={() => { setTplQ(""); setTplState("all"); }} className="inline-flex items-center gap-1 text-xs text-accent-500 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60"><X size={12} />clear</button>
+                    <button onClick={() => { setTplQ(""); setTplState("all"); }} className="inline-flex items-center gap-1 text-xs text-accent-500 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 glass-pill glass-pill--neutral"><X size={12} />clear</button>
                   )}
                   <span className="tnum ml-auto text-xs text-slate-400">{visibleTpls.length} of {templates.length}</span>
                 </div>
@@ -757,9 +757,9 @@ export function Cards() {
               <pre className="mt-2 max-h-28 overflow-auto rounded bg-slate-100 p-2 font-mono text-xs dark:bg-ink-900">{t.sqlTemplate || "(no SQL template)"}</pre>
               <TemplateCharts template={t} onChanged={() => void refresh()} />
               <div className="mt-3 flex flex-wrap gap-2 text-sm">
-                <Btn variant="primary" icon={ArrowRight} onClick={() => { setInstTpl(t); setInstLine(lines[0]?.id ?? ""); setInstMap({}); }} title="Stamp an independent copy of this template onto a line. The copy starts dormant and can differ freely afterwards.">instantiate → line</Btn>
-                <Btn icon={Copy} onClick={() => { setDupTpl(t); setDupLine(t.referenceLineId ?? lines[0]?.id ?? ""); setDupName(`${t.name} copy`); setDupMap({}); setDupSearch(""); setDupSug(false); }} title="Pick a line, edit the tables, and stamp a copy there.">duplicate</Btn>
-                <Btn icon={Pencil} onClick={() => openEditTemplate(t)} title="Edit this template — name, SQL, reference line, hints. Copies are untouched.">edit</Btn>
+                <Btn variant="primary" icon={ArrowRight} onClick={() => { setInstTpl(t); setInstLine(lines[0]?.id ?? ""); setInstMap({}); }} title="Stamp an independent copy of this template onto a line. The copy starts dormant and can differ freely afterwards." className="glass-pill glass-pill--blue">instantiate → line</Btn>
+                <Btn icon={Copy} onClick={() => { setDupTpl(t); setDupLine(t.referenceLineId ?? lines[0]?.id ?? ""); setDupName(`${t.name} copy`); setDupMap({}); setDupSearch(""); setDupSug(false); }} title="Pick a line, edit the tables, and stamp a copy there." className="glass-pill glass-pill--neutral">duplicate</Btn>
+                <Btn icon={Pencil} onClick={() => openEditTemplate(t)} title="Edit this template — name, SQL, reference line, hints. Copies are untouched." className="glass-pill glass-pill--neutral">edit</Btn>
                 <Btn
                   icon={ClipboardCheck}
                   disabled={copies.length > 0 && checked.length === 0}
@@ -773,10 +773,11 @@ export function Cards() {
                     } catch (e) { setError((e as Error).message); }
                   })()}
                   title={checked.length === allIds.length ? "Try this template on every copy. Changes nothing — safe to press anytime." : `Try this template on the ${checked.length} checked copies only.`}
+                  className="glass-pill glass-pill--neutral"
                 >
                   {checked.length === allIds.length ? "Check all copies" : `Check selected (${checked.length})`}
                 </Btn>
-                <Btn variant="bad" icon={Trash2} onClick={() => { if (confirm(`Delete template "${t.name}"? Copies keep working.`)) void act(() => cardApi.deleteTemplate(t.id)); }}>delete</Btn>
+                <Btn variant="bad" icon={Trash2} onClick={() => { if (confirm(`Delete template "${t.name}"? Copies keep working.`)) void act(() => cardApi.deleteTemplate(t.id)); }} className="glass-pill glass-pill--bad">delete</Btn>
               </div>
               {copies.length === 0 ? (
                 <div className="mt-2 text-xs text-slate-400">not used yet — no copies on any line</div>
@@ -1012,6 +1013,7 @@ export function Cards() {
                                               disabled={fs.blocked || fixBusy || members.length === 0}
                                               loading={fixBusy}
                                               title={members.length === 0 ? "This line has no member tables" : fs.blocked ? "Map every table first" : "Save tables, re-test, refresh the row"}
+                                              className="glass-pill glass-pill--blue"
                                               onClick={() => void (async () => {
                                                 if (fs.blocked) return;
                                                 setFixBusy(true);
@@ -1083,7 +1085,7 @@ export function Cards() {
                           } catch (e) { setError((e as Error).message); }
                         })()}
                         title="Update only the ✓ checked copies and take them live. Everything else stays untouched."
-                        className="mt-2"
+                        className="mt-2 glass-pill glass-pill--blue"
                       >
                         Apply to passing copies ({applyIds.length})
                       </Btn>
@@ -1097,7 +1099,7 @@ export function Cards() {
           })}
           {visibleTpls.length === 0 && (
             <div className="rounded-xl border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500 dark:border-ink-700">
-              No templates match the filters. <button onClick={() => { setTplQ(""); setTplState("all"); }} className="inline-flex items-center gap-1 text-accent-500 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60"><X size={12} />clear filters</button>
+              No templates match the filters. <button onClick={() => { setTplQ(""); setTplState("all"); }} className="inline-flex items-center gap-1 text-accent-500 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 glass-pill glass-pill--neutral"><X size={12} />clear filters</button>
             </div>
           )}
           </>
@@ -1272,7 +1274,7 @@ export function Cards() {
           )}
           <div className="mt-3 flex justify-end gap-2">
             <button onClick={() => { setShowTplForm(false); setEditTpl(null); }} className="rounded-lg px-4 py-2 text-sm text-slate-500 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800">cancel</button>
-            <Btn variant="primary" icon={Save} onClick={() => void act(() => {
+            <Btn variant="primary" icon={Save} className="glass-pill glass-pill--blue" onClick={() => void act(() => {
               const ref = lines.find((l) => l.id === tplPickLine) ?? lines[0];
               const body = { ...tplDraft, referenceLineId: ref?.id ?? null };
               return (editTpl ? cardApi.updateTemplate(editTpl.id, body) : cardApi.createTemplate(body)).then(() => { setShowTplForm(false); setEditTpl(null); });
@@ -1315,6 +1317,7 @@ export function Cards() {
               icon={ArrowRight}
               disabled={blocked || members.length === 0}
               title={members.length === 0 ? "This line has no member tables yet" : blocked ? "Map every table above first" : "Create the dormant copy with mapped tables"}
+              className="glass-pill glass-pill--blue"
               onClick={() => void act(() => cardApi.instantiate(
                 instTpl.id,
                 refs.length > 0 ? { lineId: instLine, sql: preview, tables } : { lineId: instLine },
@@ -1448,6 +1451,7 @@ export function Cards() {
               disabled={addable.length === 0 || addBusy}
               loading={addBusy}
               title={members.length === 0 ? "This line has no member tables yet" : addable.length === 0 ? "Check ready templates above" : `Create ${addable.length} dormant ${addable.length === 1 ? "copy" : "copies"} with mapped tables`}
+              className="glass-pill glass-pill--blue"
               onClick={() => void (async () => {
                 setAddBusy(true);
                 setError(null);
@@ -1550,6 +1554,7 @@ export function Cards() {
               icon={Copy}
               disabled={ds.blocked || members.length === 0 || !dupLine || !dupName.trim()}
               title={members.length === 0 ? "This line has no member tables yet" : ds.blocked ? "Map every table above first" : "Create the dormant copy on this line"}
+              className="glass-pill glass-pill--blue"
               onClick={() => void act(() => cardApi.instantiate(
                 dupTpl.id,
                 ds.refs.length > 0 ? { lineId: dupLine, name: dupName.trim(), sql: ds.preview, tables: ds.tables } : { lineId: dupLine, name: dupName.trim() },
@@ -1605,6 +1610,7 @@ export function Cards() {
             <Btn
               variant="primary"
               icon={Save}
+              className="glass-pill glass-pill--blue"
               onClick={() => void act(() => {
                 if (!editCard) return Promise.resolve();
                 const body = {
@@ -1825,7 +1831,7 @@ function SpecificsModal({ card, templateName, line, onClose, onSaved }: {
       </div>
       <div className="mt-1 flex justify-end gap-2">
         <button onClick={onClose} className="rounded-lg px-4 py-2 text-sm text-slate-500 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800">close</button>
-        {!live && <Btn variant="primary" icon={Save} onClick={() => void onSave()} loading={saving} disabled={saving}>Save specifics</Btn>}
+        {!live && <Btn variant="primary" icon={Save} onClick={() => void onSave()} loading={saving} disabled={saving} className="glass-pill glass-pill--blue">Save specifics</Btn>}
       </div>
     </Modal>
   );
@@ -1900,9 +1906,9 @@ function PlaygroundTab({ lines, lineId, setLineId, sql, setSql, result, error, r
       </div>
       {error && <div className="mt-3"><AlertBanner tone="bad" title="Query failed" detail={error} /></div>}
       <div className="mt-3 flex gap-2">
-        <Btn variant="primary" icon={Play} onClick={onRun} disabled={running || !lineId || !sql.trim()} loading={running}>{running ? "running…" : "Run query"}</Btn>
-        {result && <Btn icon={Save} onClick={() => { setSaveDraft((d) => ({ ...d, name: "", tables: lines.find((l) => l.id === lineId)?.memberTables.join(", ") ?? "", granularity: "hourly", unit: "", extractHint: "" })); setShowSave(true); }}>Save as card</Btn>}
-        <Btn icon={HistoryIcon} onClick={onHistoryToggle} className="ml-auto">History ({history.length})</Btn>
+        <Btn variant="primary" icon={Play} onClick={onRun} disabled={running || !lineId || !sql.trim()} loading={running} className="glass-pill glass-pill--blue">{running ? "running…" : "Run query"}</Btn>
+        {result && <Btn icon={Save} onClick={() => { setSaveDraft((d) => ({ ...d, name: "", tables: lines.find((l) => l.id === lineId)?.memberTables.join(", ") ?? "", granularity: "hourly", unit: "", extractHint: "" })); setShowSave(true); }} className="glass-pill glass-pill--neutral">Save as card</Btn>}
+        <Btn icon={HistoryIcon} onClick={onHistoryToggle} className="ml-auto glass-pill glass-pill--neutral">History ({history.length})</Btn>
       </div>
       {result && (
         <div className="mt-4 overflow-auto rounded-xl border border-slate-200 dark:border-ink-800">
@@ -1944,7 +1950,7 @@ function PlaygroundTab({ lines, lineId, setLineId, sql, setSql, result, error, r
           <Field label="Extraction hint"><textarea rows={2} value={saveDraft.extractHint} onChange={(e) => setSaveDraft((d) => ({ ...d, extractHint: e.target.value }))} className={inp} /></Field>
           <div className="mt-3 flex justify-end gap-2">
             <button onClick={() => setShowSave(false)} className="rounded-lg px-4 py-2 text-sm text-slate-500 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800">cancel</button>
-            <Btn variant="primary" icon={Save} onClick={() => void onSaveCard(saveDraft.name, saveDraft.tables, saveDraft.granularity, saveDraft.unit, saveDraft.extractHint)} disabled={!saveDraft.name.trim()}>Save dormant card</Btn>
+            <Btn variant="primary" icon={Save} onClick={() => void onSaveCard(saveDraft.name, saveDraft.tables, saveDraft.granularity, saveDraft.unit, saveDraft.extractHint)} disabled={!saveDraft.name.trim()} className="glass-pill glass-pill--blue">Save dormant card</Btn>
           </div>
         </Modal>
       )}
@@ -2038,11 +2044,11 @@ function TemplateCharts({ template, onChanged }: { template: CardTemplate; onCha
         {sug.length > 0 && <span className="text-xs text-slate-400">{sug.length} ranked · checked ones inherit to new cards</span>}
         <div className="ml-auto flex gap-2">
           {sug.length > 0 && (
-            <Btn size="sm" icon={Eye} onClick={openPreview} title="Open the separate preview screen: big charts, explanations, refreshable data.">
+            <Btn size="sm" icon={Eye} onClick={openPreview} title="Open the separate preview screen: big charts, explanations, refreshable data." className="glass-pill glass-pill--neutral">
               Preview charts
             </Btn>
           )}
-          <Btn size="sm" icon={Sparkles} onClick={() => void onRecommend()} loading={busy} disabled={busy} title={template.referenceLineId ? "Recommend once from the reference line's data. Stores ranked candidates on this feature." : "Set a reference line first — recommendations run on its data."}>
+          <Btn size="sm" icon={Sparkles} onClick={() => void onRecommend()} loading={busy} disabled={busy} title={template.referenceLineId ? "Recommend once from the reference line's data. Stores ranked candidates on this feature." : "Set a reference line first — recommendations run on its data."} className="glass-pill glass-pill--neutral">
             {sug.length > 0 ? "Re-recommend" : "Recommend charts"}
           </Btn>
         </div>
@@ -2352,7 +2358,7 @@ function GraphDesigner({ card, template, onClose }: { card: Card; template: Card
 
             <div className="mt-3 flex justify-end gap-2">
               {editing && <button onClick={() => { setEditing(null); setDraft({ name: "", chartType: "table", xColumn: cols[0] ?? "", yColumns: [], title: "" }); }} className="rounded-lg px-3 py-1.5 text-sm text-slate-500 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800">cancel edit</button>}
-              <Btn variant="primary" icon={Save} onClick={() => void onSave()} disabled={!draft.xColumn}>
+              <Btn variant="primary" icon={Save} onClick={() => void onSave()} disabled={!draft.xColumn} className="glass-pill glass-pill--blue">
                 {editing ? "Update" : "Save graph"}
               </Btn>
             </div>
@@ -2373,12 +2379,12 @@ function GraphDesigner({ card, template, onClose }: { card: Card; template: Card
               )}
               <div className="ml-auto flex gap-2">
                 {isTemplated && tplSug.length > 0 && (
-                  <Btn size="sm" icon={Eye} onClick={() => setChartModal(true)} title="Open the big charts screen: template charts rendered on this copy's data.">
+                  <Btn size="sm" icon={Eye} onClick={() => setChartModal(true)} title="Open the big charts screen: template charts rendered on this copy's data." className="glass-pill glass-pill--neutral">
                     Preview charts
                   </Btn>
                 )}
                 {!isTemplated && (
-                  <Btn size="sm" icon={Sparkles} onClick={() => void onRecommend()} loading={suggesting} disabled={suggesting} title="One-time LLM recommendation for this card's data shape. Never auto-stores.">
+                  <Btn size="sm" icon={Sparkles} onClick={() => void onRecommend()} loading={suggesting} disabled={suggesting} title="One-time LLM recommendation for this card's data shape. Never auto-stores." className="glass-pill glass-pill--neutral">
                     {candidates ? "Re-recommend" : "Recommend charts"}
                   </Btn>
                 )}
@@ -2413,7 +2419,7 @@ function GraphDesigner({ card, template, onClose }: { card: Card; template: Card
                   </label>
                 ))}
                 <div className="flex justify-end">
-                  <Btn variant="primary" size="sm" icon={Save} onClick={() => void onSaveCandidates()} disabled={checkedCand.length === 0}>
+                  <Btn variant="primary" size="sm" icon={Save} onClick={() => void onSaveCandidates()} disabled={checkedCand.length === 0} className="glass-pill glass-pill--blue">
                     Save {checkedCand.length} selected as specs
                   </Btn>
                 </div>
@@ -2503,8 +2509,8 @@ function GraphDesigner({ card, template, onClose }: { card: Card; template: Card
                     <span className="text-xs text-slate-400">x:{g.xColumn} y:{g.yColumns.join(",")}</span>
                     <span className="tnum text-xs text-slate-400">v{g.version}</span>
                     <div className="ml-auto flex gap-1">
-                      <Btn size="sm" icon={Pencil} onClick={() => startEdit(g)}>edit</Btn>
-                      <Btn size="sm" variant="bad" icon={Trash2} onClick={() => void onDelete(g.id)}>del</Btn>
+                      <Btn size="sm" icon={Pencil} onClick={() => startEdit(g)} className="glass-pill glass-pill--neutral">edit</Btn>
+                      <Btn size="sm" variant="bad" icon={Trash2} onClick={() => void onDelete(g.id)} className="glass-pill glass-pill--bad">del</Btn>
                     </div>
                   </div>
                   {typeof cfg.rationale === "string" && cfg.rationale && <div className="ml-6 mt-0.5 text-xs text-slate-500">{cfg.rationale}</div>}

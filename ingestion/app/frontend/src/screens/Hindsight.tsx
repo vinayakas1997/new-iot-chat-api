@@ -84,51 +84,55 @@ export function Hindsight() {
 
       {error && <div className="mt-4"><AlertBanner tone="bad" title="Request failed" detail={error} /></div>}
 
-      <h2 className="mt-6 text-sm font-bold uppercase tracking-widest text-slate-400">Hindsight memory</h2>
+      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <div>
+          <h2 className="text-sm font-bold uppercase tracking-widest text-slate-400">Hindsight memory</h2>
 
-      {st && (
-        <div className="mt-6 max-w-2xl rounded-2xl border border-slate-200 p-8 text-center dark:border-ink-800">
-          <StatusChip tone={st.live ? "ok" : st.configured ? "bad" : "mute"}>
-            {st.live ? "● LIVE" : st.configured ? "● UNREACHABLE" : "● NOT CONFIGURED"}
-          </StatusChip>
-          <div className="tnum mt-4 flex justify-center gap-8 text-sm">
-            <div><div className="text-2xl font-bold">{st.latencyMs != null ? `${st.latencyMs}ms` : "—"}</div><div className="text-slate-400">latency</div></div>
-            <div><div className="text-2xl font-bold">{st.lastWrite ? new Date(st.lastWrite).toLocaleDateString() : "—"}</div><div className="text-slate-400">last fact write</div></div>
-          </div>
-          {st.lastError && <div className="mt-4"><AlertBanner tone="bad" title="Last error" detail={st.lastError} /></div>}
-          {st.live && st.url && (
-            <a href={st.url} target="_blank" rel="noreferrer" className="mt-6 inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-6 py-3 font-semibold text-white transition-all duration-150 hover:bg-accent-400 active:scale-[0.98] focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60">
-              Open Hindsight's own UI <ExternalLink size={14} />
-            </a>
+          {st && (
+            <div className="mt-3 rounded-2xl border border-slate-200 p-8 text-center dark:border-ink-800">
+              <StatusChip tone={st.live ? "ok" : st.configured ? "bad" : "mute"}>
+                {st.live ? "● LIVE" : st.configured ? "● UNREACHABLE" : "● NOT CONFIGURED"}
+              </StatusChip>
+              <div className="tnum mt-4 flex justify-center gap-8 text-sm">
+                <div><div className="text-2xl font-bold">{st.latencyMs != null ? `${st.latencyMs}ms` : "—"}</div><div className="text-slate-400">latency</div></div>
+                <div><div className="text-2xl font-bold">{st.lastWrite ? new Date(st.lastWrite).toLocaleDateString() : "—"}</div><div className="text-slate-400">last fact write</div></div>
+              </div>
+              {st.lastError && <div className="mt-4"><AlertBanner tone="bad" title="Last error" detail={st.lastError} /></div>}
+              {st.live && st.url && (
+                <a href={st.url} target="_blank" rel="noreferrer" className="mt-6 inline-flex items-center gap-1.5 rounded-lg bg-accent-500 px-6 py-3 font-semibold text-white transition-all duration-150 hover:bg-accent-400 active:scale-[0.98] focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60">
+                  Open Hindsight's own UI <ExternalLink size={14} />
+                </a>
+              )}
+            </div>
           )}
-        </div>
-      )}
 
-      <div className="mt-4 max-w-2xl rounded-xl border border-slate-200 p-4 dark:border-ink-800">
-        <div className="text-sm font-semibold">Hindsight UI URL (setting, per environment)</div>
-        <div className="mt-2 flex gap-2">
-          <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://hindsight.example.com" className="flex-1 rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-ink-700" />
-          <Btn variant="primary" icon={Save} onClick={() => void save()}>Save</Btn>
-          <Btn icon={RefreshCw} onClick={() => void refresh()}>Recheck</Btn>
-        </div>
-      </div>
+          <div className="mt-4 rounded-xl border border-slate-200 p-4 dark:border-ink-800">
+            <div className="text-sm font-semibold">Hindsight UI URL (setting, per environment)</div>
+            <div className="mt-2 flex gap-2">
+              <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://hindsight.example.com" className="flex-1 rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-ink-700" />
+              <Btn variant="primary" icon={Save} onClick={() => void save()} className="glass-pill glass-pill--blue">Save</Btn>
+              <Btn icon={RefreshCw} onClick={() => void refresh()} className="glass-pill glass-pill--neutral">Recheck</Btn>
+            </div>
+          </div>
 
-      <h2 className="mt-8 text-sm font-bold uppercase tracking-widest text-slate-400">Line banks</h2>
-      {banks.length === 0 && <div className="mt-2 text-sm text-slate-400">no lines yet — register one in F2, then push it from the Lines tab.</div>}
-      {banks.map((b) => (
-        <div key={b.lineId} className="mt-2 flex max-w-2xl items-center gap-3 rounded-xl border border-slate-200 px-4 py-2 text-sm dark:border-ink-800">
-          <FormattedText text={b.bankId} bankId={b.bankId} />
-          <FormattedText text={b.lineName} lineName={b.lineName} />
-          <span className="ml-auto flex items-center gap-2">
-            <StatusChip tone={b.ready ? "ok" : b.draftSaved ? "mute" : "mute"}>{b.ready ? "ready" : b.draftSaved ? "draft" : "pending"}</StatusChip>
-            <span className="tnum text-xs text-slate-400">{b.greenCards}/{b.cards} green</span>
-          </span>
+          <h2 className="mt-8 text-sm font-bold uppercase tracking-widest text-slate-400">Line banks</h2>
+          {banks.length === 0 && <div className="mt-2 text-sm text-slate-400">no lines yet — register one in F2, then push it from the Lines tab.</div>}
+          {banks.map((b) => (
+            <div key={b.lineId} className="mt-2 flex items-center gap-3 rounded-xl border border-slate-200 px-4 py-2 text-sm dark:border-ink-800">
+              <FormattedText text={b.bankId} bankId={b.bankId} />
+              <FormattedText text={b.lineName} lineName={b.lineName} />
+              <span className="ml-auto flex items-center gap-2">
+                <StatusChip tone={b.ready ? "ok" : b.draftSaved ? "mute" : "mute"}>{b.ready ? "ready" : b.draftSaved ? "draft" : "pending"}</StatusChip>
+                <span className="tnum text-xs text-slate-400">{b.greenCards}/{b.cards} green</span>
+              </span>
+            </div>
+          ))}
         </div>
-      ))}
 
-      <h2 className="mt-8 text-sm font-bold uppercase tracking-widest text-slate-400">LLM for extraction</h2>
+        <div>
+          <h2 className="text-sm font-bold uppercase tracking-widest text-slate-400">LLM for extraction</h2>
       {providers.filter((p) => p.isActive).map((p) => (
-        <div key={p.id} className="mt-4 max-w-2xl rounded-2xl border border-slate-200 p-6 text-center dark:border-ink-800">
+        <div key={p.id} className="mt-3 rounded-2xl border border-slate-200 p-6 text-center dark:border-ink-800">
           <StatusChip tone="ok">● LIVE · {p.activeModel}</StatusChip>
           <div className="mt-2 text-sm text-slate-500">{p.label} · {p.baseUrl}</div>
           {p.lastError && <div className="mt-3"><AlertBanner tone="bad" title="Last error" detail={p.lastError} /></div>}
@@ -142,14 +146,14 @@ export function Hindsight() {
                 await refresh();
               } catch (e) { setError((e as Error).message); }
             })()}
-            className="mt-4"
+            className="mt-4 glass-pill glass-pill--amber"
           >
             Deactivate
           </Btn>
         </div>
       ))}
       {providers.filter((p) => !p.isActive).map((p) => (
-        <div key={p.id} className="mt-2 flex max-w-2xl items-center gap-3 rounded-xl border border-slate-200 px-4 py-2 text-sm dark:border-ink-800">
+        <div key={p.id} className="mt-2 flex items-center gap-3 rounded-xl border border-slate-200 px-4 py-2 text-sm dark:border-ink-800">
           <span className="font-medium">{p.label}</span>
           <span className="text-slate-400">{p.baseUrl}</span>
           {p.lastError && <span className="text-state-bad">{p.lastError}</span>}
@@ -161,14 +165,14 @@ export function Hindsight() {
               await fetch(`/api/ingest/llm/${p.id}`, { method: "DELETE" });
               await refresh();
             })()}
-            className="ml-auto"
+            className="ml-auto glass-pill glass-pill--bad"
           >
             delete
           </Btn>
         </div>
       ))}
 
-      <div className="mt-4 max-w-2xl rounded-xl border border-slate-200 p-4 dark:border-ink-800">
+      <div className="mt-4 rounded-xl border border-slate-200 p-4 dark:border-ink-800">
         <div className="text-sm font-semibold">Connect an OpenAI-compatible LLM</div>
         <div className="mt-2 flex gap-2">
           <input value={llmLabel} onChange={(e) => setLlmLabel(e.target.value)} placeholder="label" className="w-36 rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-ink-700" />
@@ -193,6 +197,7 @@ export function Hindsight() {
             })()}
             loading={detecting}
             disabled={detecting}
+            className="glass-pill glass-pill--neutral"
           >
             {detecting ? "…" : "Connect"}
           </Btn>
@@ -223,12 +228,15 @@ export function Hindsight() {
                   } catch (e) { setError((e as Error).message); }
                 })()}
                 disabled={!picked}
+                className="glass-pill glass-pill--blue"
               >
                 Save + activate
               </Btn>
             </div>
           </div>
         )}
+      </div>
+        </div>
       </div>
     </div>
   );

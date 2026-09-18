@@ -130,7 +130,7 @@ export function PushToHindsight({ lineId, lineName, onClose, onPushed }: {
           <h2 className="text-lg font-bold">Push to Hindsight</h2>
           {preview?.ready && <StatusChip tone="ok">bank ready</StatusChip>}
           {preview?.draftSaved && <StatusChip tone="mute">draft restored</StatusChip>}
-          <button onClick={onClose} aria-label="close" className="ml-auto rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800"><X size={16} /></button>
+          <button onClick={onClose} aria-label="close" className="ml-auto rounded-lg p-1.5 text-slate-400 glass-pill glass-pill--close"><X size={16} /></button>
         </div>
         <p className="mt-1 text-sm text-slate-500">
           <FormattedText
@@ -267,7 +267,7 @@ export function PushToHindsight({ lineId, lineName, onClose, onPushed }: {
             </section>
 
             <div className="flex justify-end gap-2 pb-4">
-              <Btn icon={Save} onClick={onSaveDraft} loading={saving} disabled={saving}>
+              <Btn icon={Save} onClick={onSaveDraft} loading={saving} disabled={saving} className="glass-pill glass-pill--neutral">
                 {saving ? "saving…" : "Save draft"}
               </Btn>
               <Btn
@@ -277,6 +277,7 @@ export function PushToHindsight({ lineId, lineName, onClose, onPushed }: {
                 loading={pushing}
                 disabled={pushing || !preview.hindsightConfigured}
                 title={preview.hindsightConfigured ? "Create/configure the bank in Hindsight" : "Set the Hindsight URL in AI Services first"}
+                className="glass-pill glass-pill--blue"
               >
                 {pushing ? "pushing…" : preview.ready ? "Save & re-push" : "Save & push"}
               </Btn>

@@ -90,8 +90,25 @@ export const api = {
     req<Line>(`/api/ingest/lines/${id}/deregister`, { method: "POST" }),
   reregisterLine: (id: string) =>
     req<Line>(`/api/ingest/lines/${id}/reregister`, { method: "POST" }),
+  deleteLine: (id: string) =>
+    req<{ ok: boolean }>(`/api/ingest/lines/${id}`, { method: "DELETE" }),
   unassignedTables: (connectionId: string) =>
     req<{ unassigned: string[] }>(`/api/ingest/lines-unassigned?connectionId=${connectionId}`),
+  columnMeta: (lineId: string) =>
+    req<{ meta: { lineId: string; tableName: string; columnName: string; meaning: string; datatype: string }[] }>(`/api/ingest/lines/${lineId}/columns/meta`),
+  tableColumns: (lineId: string, schema: string, table: string) =>
+    req<{ schema: string; table: string; rowCount: number | null; primaryKey: string[]; columns: { name: string; type: string; nullable: boolean; description?: string; meaning: string; datatype: string; sampleValues?: string[] }[]; sample: { columns: string[]; rows: Record<string, unknown>[] }; analyzed: { total: number; filled: number; analyzed: boolean } }>(`/api/ingest/lines/${lineId}/tables/${schema}/${table}/columns`),
+  analyzeTable: (lineId: string, schema: string, table: string) =>
+    req<{ schema: string; table: string; rowCount: number | null; primaryKey: string[]; columns: { name: string; type: string; nullable: boolean; description?: string; meaning: string; datatype: string; sampleValues?: string[] }[]; sample: { columns: string[]; rows: Record<string, unknown>[] }; drafted: { name: string; meaning: string }[]; analyzed: { total: number; filled: number; analyzed: boolean } }>(`/api/ingest/lines/${lineId}/tables/${schema}/${table}/analyze`, { method: "POST" }),
+  llmFillTable: (lineId: string, schema: string, table: string, columns?: string[]) =>
+    req<{ drafted: { name: string; meaning: string }[]; model?: string; reason?: string | null }>(`/api/ingest/lines/${lineId}/tables/${schema}/${table}/llm-fill`, { method: "POST", body: JSON.stringify({ columns }) }),
+  saveTableColumns: (lineId: string, schema: string, table: string, columns: { name: string; meaning: string; datatype?: string }[]) =>
+    req<{ saved: { lineId: string; tableName: string; columnName: string; meaning: string; datatype: string }[] }>(`/api/ingest/lines/${lineId}/tables/${schema}/${table}/columns`, { method: "POST", body: JSON.stringify({ columns }) }),
+  // Draft analyze — no line required, connection-scoped. Used by Register line before the line row exists.
+  analyzeTableDraft: (connectionId: string, schema: string, table: string) =>
+    req<{ schema: string; table: string; rowCount: number | null; primaryKey: string[]; columns: { name: string; type: string; nullable: boolean; description?: string; meaning: string; datatype: string; sampleValues?: string[] }[]; sample: { columns: string[]; rows: Record<string, unknown>[] }; drafted: { name: string; meaning: string }[]; analyzed: { total: number; filled: number; analyzed: boolean } }>(`/api/ingest/connections/${connectionId}/tables/${schema}/${table}/analyze`, { method: "POST" }),
+  llmFillTableDraft: (connectionId: string, schema: string, table: string, columns?: string[]) =>
+    req<{ drafted: { name: string; meaning: string }[]; model?: string; reason?: string | null }>(`/api/ingest/connections/${connectionId}/tables/${schema}/${table}/llm-fill`, { method: "POST", body: JSON.stringify({ columns }) }),
 };
 
 /* ---- Hindsight banks (per-line provisioning) ---- */
@@ -479,4 +496,16 @@ export const chartApi = {
     req<{ proposals: MergeProposal[]; note?: string; skipped?: string[] }>(`/api/ingest/lines/${lineId}/optimize-charts`, { method: "POST", body: JSON.stringify({}) }),
   querySample: (lineId: string, sql: string, from?: string, to?: string) =>
     req<TestResult>(`/api/ingest/lines/${lineId}/query-sample`, { method: "POST", body: JSON.stringify({ sql, from, to }) }),
+};
+
+export const columnTemplateApi = {
+  list: () => req<{ id: string; name: string; columns: { name: string; meaning: string; datatype: string }[]; createdAt: string; updatedAt: string }[]>("/api/ingest/column-templates"),
+  create: (name: string, columns: { name: string; meaning: string; datatype: string }[]) =>
+    req<{ id: string; name: string; columns: { name: string; meaning: string; datatype: string }[] }>("/api/ingest/column-templates", { method: "POST", body: JSON.stringify({ name, columns }) }),
+  remove: (id: string) => req<{ ok: boolean }>(`/api/ingest/column-templates/${id}`, { method: "DELETE" }),
+};
+
+export const globalTableApi = {
+  meta: (connectionId?: string) =>
+    req<{ meta: { tableName: string; connectionId: string; sourceLineId: string; sourceLineName: string; total: number; filled: number; analyzed: boolean; columns: { name: string; meaning: string; datatype: string }[] }[] }>(`/api/ingest/global/tables/meta${connectionId ? `?connectionId=${connectionId}` : ""}`),
 };

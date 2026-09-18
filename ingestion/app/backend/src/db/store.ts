@@ -77,6 +77,22 @@ export function openStore(path: string): Database.Database {
       updated_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_lines_connection ON lines(connection_id);
+    CREATE TABLE IF NOT EXISTS line_column_meta (
+      line_id TEXT NOT NULL REFERENCES lines(id) ON DELETE CASCADE,
+      table_name TEXT NOT NULL,
+      column_name TEXT NOT NULL,
+      meaning TEXT NOT NULL DEFAULT '',
+      datatype TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY (line_id, table_name, column_name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_line_column_meta_line ON line_column_meta(line_id);
+    CREATE TABLE IF NOT EXISTS column_templates (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      columns_json TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS card_templates (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -472,6 +488,178 @@ export function linesBoundTo(connectionId: string): LineRecord[] {
 
 export function touchLineTick(id: string, at: string): void {
   getDb().prepare("UPDATE lines SET last_tick=? WHERE id=?").run(at, id);
+}
+
+export function deleteLine(id: string): boolean {
+  const cur = getLine(id);
+  if (!cur) return false;
+  // Block if any cards still bound — caller should delete/detach cards first.
+  const bound = getDb().prepare("SELECT COUNT(*) AS n FROM cards WHERE line_id=?").get(id) as { n: number };
+  if (bound.n > 0) throw new Error(`line has ${bound.n} card(s) — delete or reassign them first`);
+  return getDb().prepare("DELETE FROM lines WHERE id=?").run(id).changes > 0;
+}
+
+export function cardsBoundToLine(lineId: string): number {
+  const r = getDb().prepare("SELECT COUNT(*) AS n FROM cards WHERE line_id=?").get(lineId) as { n: number };
+  return r.n;
+}
+
+/* ---------------- Column meanings at lines registration ---------------- */
+
+export interface LineColumnMeta {
+  lineId: string;
+  tableName: string;
+  columnName: string;
+  meaning: string;
+  datatype: string;
+}
+
+export function listLineColumnMeta(lineId: string): LineColumnMeta[] {
+  const rows = getDb().prepare("SELECT line_id, table_name, column_name, meaning, datatype FROM line_column_meta WHERE line_id=? ORDER BY table_name, column_name").all(lineId) as Record<string, unknown>[];
+  return rows.map((r) => ({
+    lineId: r.line_id as string,
+    tableName: r.table_name as string,
+    columnName: r.column_name as string,
+    meaning: (r.meaning as string) ?? "",
+    datatype: (r.datatype as string) ?? "",
+  }));
+}
+
+export function getLineTableAnalyzed(lineId: string, tableName: string): { total: number; filled: number; analyzed: boolean } {
+  const rows = listLineColumnMeta(lineId).filter((r) => r.tableName.toLowerCase() === tableName.toLowerCase());
+  const total = rows.length;
+  const filled = rows.filter((r) => r.meaning.trim().length > 0).length;
+  return { total, filled, analyzed: total > 0 && filled === total };
+}
+
+export interface GlobalTableMeta {
+  tableName: string;
+  connectionId: string;
+  sourceLineId: string;
+  sourceLineName: string;
+  total: number;
+  filled: number;
+  analyzed: boolean;
+  columns: { name: string; meaning: string; datatype: string }[];
+}
+
+export function listGlobalTableMeta(connectionId?: string): GlobalTableMeta[] {
+  const db = getDb();
+  const rows = db.prepare(`
+    SELECT lcm.line_id, lcm.table_name, lcm.column_name, lcm.meaning, lcm.datatype,
+           l.connection_id, l.name as line_name
+    FROM line_column_meta lcm JOIN lines l ON l.id = lcm.line_id
+    ${connectionId ? "WHERE l.connection_id = ?" : ""}
+    ORDER BY lcm.table_name, lcm.line_id, lcm.column_name
+  `).all(...(connectionId ? [connectionId] : [])) as Record<string, unknown>[];
+  // group by (lower tableName, line_id)
+  const byTableLine = new Map<string, Map<string, LineColumnMeta[]>>();
+  for (const r of rows) {
+    const t = String(r.table_name);
+    const lid = String(r.line_id);
+    const key = t.toLowerCase();
+    if (!byTableLine.has(key)) byTableLine.set(key, new Map());
+    const m = byTableLine.get(key)!;
+    if (!m.has(lid)) m.set(lid, []);
+    m.get(lid)!.push({ lineId: lid, tableName: t, columnName: String(r.column_name), meaning: String(r.meaning ?? ""), datatype: String(r.datatype ?? "") });
+  }
+  const out: GlobalTableMeta[] = [];
+  for (const [lower, lineMap] of byTableLine.entries()) {
+    // pick first line where analyzed true, else first line
+    let best: { lid: string; cols: LineColumnMeta[]; total: number; filled: number; analyzed: boolean; conn: string; lname: string } | null = null;
+    for (const [lid, cols] of lineMap.entries()) {
+      const total = cols.length;
+      const filled = cols.filter((c) => c.meaning.trim()).length;
+      const analyzed = total > 0 && filled === total;
+      const sample = rows.find((rr) => String(rr.line_id) === lid && String(rr.table_name).toLowerCase() === lower) as Record<string, unknown> | undefined;
+      const conn = sample ? String(sample.connection_id) : "";
+      const lname = sample ? String(sample.line_name) : lid;
+      const cand = { lid, cols, total, filled, analyzed, conn, lname };
+      if (!best) best = cand;
+      else if (cand.analyzed && !best.analyzed) best = cand;
+    }
+    if (!best) continue;
+    // original casing from first col
+    const tableName = best.cols[0]?.tableName ?? lower;
+    out.push({
+      tableName,
+      connectionId: best.conn,
+      sourceLineId: best.lid,
+      sourceLineName: best.lname,
+      total: best.total,
+      filled: best.filled,
+      analyzed: best.analyzed,
+      columns: best.cols.map((c) => ({ name: c.columnName, meaning: c.meaning, datatype: c.datatype })),
+    });
+  }
+  return out;
+}
+
+export function upsertLineColumnMeta(lineId: string, tableName: string, cols: { name: string; meaning: string; datatype?: string }[]): LineColumnMeta[] {
+  if (!getLine(lineId)) throw new Error("line not found");
+  const db = getDb();
+  const tx = db.transaction(() => {
+    for (const c of cols) {
+      db.prepare(
+        `INSERT INTO line_column_meta (line_id, table_name, column_name, meaning, datatype)
+         VALUES (?,?,?,?,?)
+         ON CONFLICT(line_id, table_name, column_name) DO UPDATE SET meaning=excluded.meaning, datatype=excluded.datatype`
+      ).run(lineId, tableName, c.name, c.meaning ?? "", c.datatype ?? "");
+    }
+  });
+  tx();
+  return listLineColumnMeta(lineId).filter((r) => r.tableName.toLowerCase() === tableName.toLowerCase());
+}
+
+export function deleteLineTableMeta(lineId: string, tableName: string): void {
+  getDb().prepare("DELETE FROM line_column_meta WHERE line_id=? AND table_name=?").run(lineId, tableName);
+}
+
+/* ---------------- Column templates (global, reusable) ---------------- */
+
+export interface ColumnTemplate {
+  id: string;
+  name: string;
+  columns: { name: string; meaning: string; datatype: string }[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+function columnTemplateRow(r: Record<string, unknown>): ColumnTemplate {
+  return {
+    id: r.id as string,
+    name: r.name as string,
+    columns: JSON.parse((r.columns_json as string) ?? "[]") as ColumnTemplate["columns"],
+    createdAt: r.created_at as string,
+    updatedAt: r.updated_at as string,
+  };
+}
+
+export function listColumnTemplates(): ColumnTemplate[] {
+  return (getDb().prepare("SELECT * FROM column_templates ORDER BY updated_at DESC").all() as Record<string, unknown>[]).map(columnTemplateRow);
+}
+
+export function createColumnTemplate(name: string, columns: { name: string; meaning: string; datatype: string }[]): ColumnTemplate {
+  if (!name.trim()) throw new Error("template name required");
+  if (columns.length === 0) throw new Error("columns required");
+  const id = `ctpl-${Date.now().toString(36)}`;
+  const now = new Date().toISOString();
+  try {
+    getDb().prepare("INSERT INTO column_templates (id,name,columns_json,created_at,updated_at) VALUES (?,?,?,?,?)").run(id, name.trim(), JSON.stringify(columns), now, now);
+  } catch (e) {
+    if (String((e as Error).message).includes("UNIQUE")) throw new Error(`template "${name}" already exists`);
+    throw e;
+  }
+  return columnTemplateRow(getDb().prepare("SELECT * FROM column_templates WHERE id=?").get(id) as Record<string, unknown>);
+}
+
+export function deleteColumnTemplate(id: string): boolean {
+  return getDb().prepare("DELETE FROM column_templates WHERE id=?").run(id).changes > 0;
+}
+
+export function getColumnTemplate(id: string): ColumnTemplate | null {
+  const r = getDb().prepare("SELECT * FROM column_templates WHERE id=?").get(id);
+  return r ? columnTemplateRow(r as Record<string, unknown>) : null;
 }
 
 /* ---------------- F3: context component cards ---------------- */
