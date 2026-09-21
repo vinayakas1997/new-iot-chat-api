@@ -1,5 +1,5 @@
 import { useId, useState } from "react";
-import type { ChartType } from "../lib/api";
+import type { ChartSeriesMeta, ChartType } from "../lib/api";
 
 /** Categorical series palette — reads on light + dark. First slot is the industrial teal. */
 export const SERIES_COLORS = ["#14b8a6", "#f59e0b", "#8b5cf6", "#06b6d4", "#ec4899", "#ef4444"];
@@ -42,6 +42,9 @@ export interface ChartProps {
   threshold?: number | null;
   height?: number;
   compact?: boolean;
+  /** Per-series legend metadata (label/unit/color). Falls back to column
+   *  names + palette order when absent (pre-enrichment suggestions). */
+  series?: ChartSeriesMeta[];
   /** Axis titles. Default to the column names (caller appends units). */
   xLabel?: string;
   yLabel?: string;
@@ -54,7 +57,7 @@ export interface ChartProps {
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-function fmtTick(v: number): string {
+export function fmtTick(v: number): string {
   const a = Math.abs(v);
   if (a >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
   if (a >= 1000) return `${(v / 1000).toFixed(1)}k`;
@@ -111,11 +114,50 @@ function seriesStats(vals: number[]): { min: number; max: number; mean: number; 
 
 /** Shared dependency-free SVG chart: line / bar / area + table fallback.
  *  Dark-first industrial styling, colorful data series, calm chrome. */
-export function Chart({ rows, x, yCols, type, title, threshold, height = 180, compact = false, xLabel, yLabel, grafana = false, units }: ChartProps) {
+export function Chart({ rows, x, yCols, type, title, threshold, height = 180, compact = false, xLabel, yLabel, grafana = false, units, series }: ChartProps) {
+  const seriesOf = (col: string) => series?.find((s) => s.column === col);
+  const serieColor = (col: string, ci: number) => seriesOf(col)?.color ?? SERIES_COLORS[ci % SERIES_COLORS.length];
+  const serieLabel = (col: string) => seriesOf(col)?.label ?? col;
   const gid = useId().replace(/[^a-zA-Z0-9]/g, "");
   const [hover, setHover] = useState<number | null>(null);
 
   if (rows.length === 0) return <div className="text-xs text-slate-400">No data to preview</div>;
+  // Histogram: bin one numeric column into ~12 equal-width buckets and draw
+  // the counts as bars (recursion reuses the bar renderer + hover/tooltip).
+  if (type === "histogram") {
+    const vcol = yCols[0] ?? x;
+    const vals = rows.map((r) => numAt(r[vcol])).filter((v): v is number => v != null);
+    if (vals.length < 2) return <div className="text-xs text-slate-400">Not enough numeric values for a distribution</div>;
+    let mn = Math.min(...vals);
+    let mx = Math.max(...vals);
+    if (mx === mn) { mn -= 0.5; mx += 0.5; }
+    const distinct = new Set(vals.map((v) => Number(v.toFixed(6)))).size;
+    const nb = Math.max(3, Math.min(12, distinct));
+    const w = (mx - mn) / nb;
+    const counts = new Array<number>(nb).fill(0);
+    for (const v of vals) {
+      const i = Math.min(nb - 1, Math.max(0, Math.floor((v - mn) / w)));
+      counts[i]++;
+    }
+    const binned = counts.map((count, i) => ({
+      bin: `${fmtTick(mn + i * w)}–${fmtTick(mn + (i + 1) * w)}`,
+      count,
+    }));
+    return (
+      <Chart
+        rows={binned}
+        x="bin"
+        yCols={["count"]}
+        type="bar"
+        title={title}
+        height={height}
+        compact={compact}
+        xLabel={compact ? undefined : (xLabel ?? `${vcol} bins`)}
+        yLabel={compact ? undefined : (yLabel ?? "count")}
+        grafana={grafana}
+      />
+    );
+  }
   if (type === "table" || yCols.length === 0) {
     const cols = [x, ...yCols].filter(Boolean);
     const show = rows.slice(0, 8);
@@ -221,8 +263,8 @@ export function Chart({ rows, x, yCols, type, title, threshold, height = 180, co
         <defs>
           {numCols.map((col, ci) => (
             <linearGradient key={col} id={`${gid}-a${ci}`} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={SERIES_COLORS[ci % SERIES_COLORS.length]} stopOpacity={0.35} />
-              <stop offset="100%" stopColor={SERIES_COLORS[ci % SERIES_COLORS.length]} stopOpacity={0.04} />
+              <stop offset="0%" stopColor={serieColor(col, ci)} stopOpacity={0.35} />
+              <stop offset="100%" stopColor={serieColor(col, ci)} stopOpacity={0.04} />
             </linearGradient>
           ))}
         </defs>
@@ -250,7 +292,7 @@ export function Chart({ rows, x, yCols, type, title, threshold, height = 180, co
             {!compact && <text x={W - 14} y={yi(threshold) - 3} textAnchor="end" className="fill-state-warn text-[9px]">warn {fmtTick(threshold)}</text>}
           </g>
         )}
-        {type === "area" && numCols.map((col, ci) => {
+        {type === "area" && !grafana && numCols.map((col, ci) => {
           const base = yi(yMin);
           return (
             <g key={col}>
@@ -268,18 +310,18 @@ export function Chart({ rows, x, yCols, type, title, threshold, height = 180, co
             if (v == null) return null;
             const zeroY = yi(Math.max(0, yMin));
             const barH = Math.abs(yi(v) - zeroY);
-            const colr = threshold != null && v >= threshold ? "#ef4444" : SERIES_COLORS[ci % SERIES_COLORS.length];
+            const colr = threshold != null && v >= threshold ? "#ef4444" : serieColor(col, ci);
             return <rect key={`${i}-${col}`} x={xi(i) - (bw * numCols.length) / 2 + ci * bw} y={v >= 0 ? yi(v) : zeroY} width={Math.max(bw - 1, 1)} height={Math.max(barH, 1)} fill={colr} fillOpacity={0.88} rx={1.5} />;
           });
         })}
         {(type === "line" || type === "area") && numCols.map((col, ci) => (
           <g key={col}>
-            {grafana && type === "line" && segments(col).map((pts, si) => {
+            {type === "area" && segments(col).map((pts, si) => {
               const base = yi(yMin);
-              return <path key={`f-${si}`} d={`M${pts.join(" L")} L${pts[pts.length - 1].split(",")[0]},${base} L${pts[0].split(",")[0]},${base} Z`} fill={`url(#${gid}-a${ci})`} opacity={0.45} />;
+              return <path key={`f-${si}`} d={`M${pts.join(" L")} L${pts[pts.length - 1].split(",")[0]},${base} L${pts[0].split(",")[0]},${base} Z`} fill={`url(#${gid}-a${ci})`} opacity={grafana ? 0.85 : 0.45} />;
             })}
             {segments(col).map((pts, si) => (
-              <polyline key={si} points={pts.join(" ")} fill="none" stroke={SERIES_COLORS[ci % SERIES_COLORS.length]} strokeWidth={grafana && !compact ? 2 : compact ? 1.25 : 1.75} strokeLinejoin="round" strokeLinecap="round" />
+              <polyline key={si} points={pts.join(" ")} fill="none" stroke={serieColor(col, ci)} strokeWidth={grafana && !compact ? 2 : compact ? 1.25 : 1.75} strokeLinejoin="round" strokeLinecap="round" />
             ))}
           </g>
         ))}
@@ -287,7 +329,7 @@ export function Chart({ rows, x, yCols, type, title, threshold, height = 180, co
         {grafana && !compact && hover != null && numCols.map((col, ci) => {
           const v = numAt(rows[hover][col]);
           if (v == null) return null;
-          return <circle key={col} cx={xi(hover)} cy={yi(v)} r={3.5} fill={SERIES_COLORS[ci % SERIES_COLORS.length]} strokeWidth={1.5} className="stroke-white dark:stroke-ink-900" />;
+          return <circle key={col} cx={xi(hover)} cy={yi(v)} r={3.5} fill={serieColor(col, ci)} strokeWidth={1.5} className="stroke-white dark:stroke-ink-900" />;
         })}
         {/* breach dots */}
         {threshold != null && type !== "bar" && numCols.map((col) => (
@@ -317,27 +359,28 @@ export function Chart({ rows, x, yCols, type, title, threshold, height = 180, co
         )}
         {/* hover cursor */}
         {hover != null && <line x1={xi(hover)} x2={xi(hover)} y1={10} y2={H - PADB} className="stroke-slate-300 dark:stroke-ink-600" strokeWidth={1} />}
-        {/* legend: Grafana stats table below the svg; dots otherwise */}
-        {!compact && !grafana && numCols.map((col, ci) => {
-          const lx = showLabels && xLabel ? W - 14 - (numCols.length - ci) * 92 : PAD + ci * 92;
-          const ly = showLabels && xLabel ? 2 : H - 1;
-          return (
-            <g key={col} transform={`translate(${lx}, ${ly})`}>
-              <rect width={8} height={8} fill={SERIES_COLORS[ci % SERIES_COLORS.length]} rx={1.5} />
-              <text x={12} y={8} className="fill-slate-400 text-[9px]">{col.length > 12 ? `${col.slice(0, 12)}…` : col}</text>
-            </g>
-          );
-        })}
       </svg>
+      {!compact && (
+        <ChartLegend
+          xTitle={xLabel}
+          yTitle={yLabel}
+          items={numCols.slice(0, 6).map((col, ci) => ({
+            label: serieLabel(col),
+            color: serieColor(col, ci),
+            unit: seriesOf(col)?.unit || units,
+          }))}
+        />
+      )}
       {hoverRow && !compact && (
-        <div className="anim-fade-in pointer-events-none absolute right-2 top-2 min-w-36 rounded-lg border border-slate-200 bg-white/95 p-2 text-xs shadow-lg dark:border-ink-700 dark:bg-ink-800/95">
+        <div className="anim-fade-in pointer-events-none absolute left-2 top-2 min-w-36 rounded-lg border border-slate-200 bg-white/95 p-2 text-xs shadow-lg dark:border-ink-700 dark:bg-ink-800/95">
           <div className="font-medium text-slate-500">{hoverTime != null ? formatTimeFull(hoverTime) : String(hoverRow[x] ?? "")}</div>
           {numCols.slice(0, 5).map((c, ci) => {
             const v = numAt(hoverRow[c]);
+            const u = seriesOf(c)?.unit || units;
             return (
               <div key={c} className="tnum flex items-center gap-1.5 text-slate-600 dark:text-ink-300">
-                <span className="h-2 w-2 rounded-sm" style={{ background: SERIES_COLORS[ci % SERIES_COLORS.length] }} />
-                {c}: <span className="font-semibold">{v == null ? "—" : `${fmtTick(v)}${units ? ` ${units}` : ""}`}</span>
+                <span className="h-2 w-2 rounded-sm" style={{ background: serieColor(c, ci) }} />
+                {serieLabel(c)}: <span className="font-semibold">{v == null ? "—" : `${fmtTick(v)}${u ? ` ${u}` : ""}`}</span>
               </div>
             );
           })}
@@ -360,10 +403,11 @@ export function Chart({ rows, x, yCols, type, title, threshold, height = 180, co
               const vals = rows.map((r) => numAt(r[col])).filter((v): v is number => v != null);
               if (vals.length === 0) return null;
               const st = seriesStats(vals);
-              const f = (v: number) => `${fmtTick(v)}${units ? ` ${units}` : ""}`;
+              const u = seriesOf(col)?.unit || units;
+              const f = (v: number) => `${fmtTick(v)}${u ? ` ${u}` : ""}`;
               return (
                 <tr key={col} className="border-t border-slate-100 text-slate-600 dark:border-ink-800 dark:text-ink-300">
-                  <td className="py-0.5 pr-3"><span className="mr-1.5 inline-block h-2 w-2 rounded-sm" style={{ background: SERIES_COLORS[ci % SERIES_COLORS.length] }} />{col}</td>
+                  <td className="py-0.5 pr-3"><span className="mr-1.5 inline-block h-2 w-2 rounded-sm" style={{ background: serieColor(col, ci) }} />{serieLabel(col)}</td>
                   <td className="py-0.5 pr-3 text-right">{f(st.min)}</td>
                   <td className="py-0.5 pr-3 text-right">{f(st.max)}</td>
                   <td className="py-0.5 pr-3 text-right">{f(st.mean)}</td>
@@ -374,6 +418,33 @@ export function Chart({ rows, x, yCols, type, title, threshold, height = 180, co
           </tbody>
         </table>
       )}
+    </div>
+  );
+}
+
+/** Standing in-chart legend (top-right): X meaning + per-series color key
+ *  with units. Shared by the SVG renderer and the TradingView wrapper so
+ *  both read identically. Renders nothing when there is nothing to say
+ *  (compact thumbnails stay clean). */
+export interface LegendItem {
+  label: string;
+  color: string;
+  unit?: string;
+}
+
+export function ChartLegend({ xTitle, yTitle, items }: { xTitle?: string; yTitle?: string; items: LegendItem[] }) {
+  if (!xTitle && !yTitle && items.length === 0) return null;
+  return (
+    <div className="pointer-events-none absolute right-2 top-2 max-w-60 rounded-lg border border-slate-200 bg-white/95 px-2.5 py-1.5 text-[11px] shadow-lg dark:border-ink-700 dark:bg-ink-800/95">
+      {xTitle && <div className="text-slate-500 dark:text-ink-300">X · <span className="font-semibold text-slate-700 dark:text-ink-100">{xTitle}</span></div>}
+      {yTitle && <div className="text-slate-500 dark:text-ink-300">Y · <span className="font-semibold text-slate-700 dark:text-ink-100">{yTitle}</span></div>}
+      {items.slice(0, 6).map((it, i) => (
+        <div key={i} className="tnum flex items-center gap-1.5 text-slate-600 dark:text-ink-300">
+          <span className="h-2 w-2 shrink-0 rounded-sm" style={{ background: it.color }} />
+          <span className="truncate">{it.label}</span>
+          {it.unit && <span className="shrink-0 pl-1 text-slate-400">({it.unit})</span>}
+        </div>
+      ))}
     </div>
   );
 }
@@ -402,7 +473,7 @@ export const RESOLUTION_X_LABEL: Record<Resolution, string> = {
   daily: "Day",
   weekly: "Week",
   monthly: "Month",
-  yearly: "Month",
+  yearly: "Year",
 };
 
 /** Sample window per resolution (preview rollups bucket the fetched rows). */
@@ -416,14 +487,15 @@ function isCountLike(col: string): boolean {
 }
 
 function bucketKey(d: Date, r: Resolution): string {
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(d.getUTCDate()).padStart(2, "0");
+  const t = d;
+  const y = t.getUTCFullYear();
+  const m = String(t.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(t.getUTCDate()).padStart(2, "0");
   if (r === "daily") return `${y}-${m}-${day}`;
   if (r === "monthly" || r === "yearly") return `${y}-${m}-01`;
   // weekly: Monday start (UTC)
-  const dow = (d.getUTCDay() + 6) % 7;
-  const mon = new Date(Date.UTC(y, d.getUTCMonth(), d.getUTCDate() - dow));
+  const dow = (t.getUTCDay() + 6) % 7;
+  const mon = new Date(Date.UTC(y, t.getUTCMonth(), t.getUTCDate() - dow));
   return mon.toISOString().slice(0, 10);
 }
 

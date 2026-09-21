@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Copy, Sparkles, X } from "lucide-react";
-import type { Card, CardTemplate, GraphSpec, Line, TestResult } from "../lib/api";
-import { cardApi, chartApi, graphApi } from "../lib/api";
+import type { Card, CardTemplate, ChartSeriesMeta, GraphSpec, Line, TestResult } from "../lib/api";
+import { cardApi, chartApi, graphApi, hasCustomSkip } from "../lib/api";
 import { StatusChip } from "./chips";
 import { FormattedText } from "./FormattedText";
 import { Chart } from "./Chart";
@@ -20,10 +20,25 @@ export function CardDetails({ card, template, line, graphs, bankReady, onClose, 
 }) {
   const [copied, setCopied] = useState(false);
   const [previewRows, setPreviewRows] = useState<TestResult | null>(null);
+  const [previewWindow, setPreviewWindow] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [recommending, setRecommending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [openTable, setOpenTable] = useState<string | null>(null);
+
+  // Display-only sample: fallback windows (never the strict 24h test-run),
+  // so stale/sparse lines still preview. Window label keeps it honest.
+  async function loadSampleRows(): Promise<boolean> {
+    try {
+      const s = await cardApi.cardSample(card.id);
+      setPreviewRows({ columns: s.columns, rows: s.rows, rowCount: s.rowCount, sql: "" });
+      setPreviewWindow(`${s.from.slice(0, 10)}..${s.to.slice(0, 10)}`);
+      return true;
+    } catch (e) {
+      setError((e as Error).message);
+      return false;
+    }
+  }
 
   async function copySql() {
     try {
@@ -44,9 +59,7 @@ export function CardDetails({ card, template, line, graphs, bankReady, onClose, 
     setPreviewLoading(true);
     setError(null);
     try {
-      setPreviewRows(await cardApi.testCard(card.id));
-    } catch (e) {
-      setError((e as Error).message);
+      await loadSampleRows();
     } finally {
       setPreviewLoading(false);
     }
@@ -83,6 +96,9 @@ export function CardDetails({ card, template, line, graphs, bankReady, onClose, 
             conditions: c.conditions,
             units: card.unit || undefined,
             threshold: card.threshold,
+            xTitle: c.xTitle,
+            yTitle: c.yTitle,
+            series: c.series,
           },
         }));
       }
@@ -98,14 +114,9 @@ export function CardDetails({ card, template, line, graphs, bankReady, onClose, 
     if (openTable === id) { setOpenTable(null); return; }
     if (!previewRows) {
       setPreviewLoading(true);
-      try {
-        setPreviewRows(await cardApi.testCard(card.id));
-      } catch (e) {
-        setError((e as Error).message);
-        setPreviewLoading(false);
-        return;
-      }
+      const ok = await loadSampleRows();
       setPreviewLoading(false);
+      if (!ok) return;
     }
     setOpenTable(id);
   }
@@ -132,7 +143,7 @@ export function CardDetails({ card, template, line, graphs, bankReady, onClose, 
               <span className="font-mono text-xs text-slate-400">{card.lineId}</span>
             </div>
             <div className="mt-1 text-slate-500">
-              {card.granularity}{card.unit ? ` · ${card.unit}` : ""}{card.threshold != null ? ` · warn > ${card.threshold}` : ""}
+              {card.granularity}{(card.resolutions ?? []).length > 0 && (card.resolutions ?? []).length < 5 ? ` · streams ${(card.resolutions ?? []).join("/")}` : ""}{hasCustomSkip(card.skipSchedule) ? " · skips set" : ""}{card.unit ? ` · ${card.unit}` : ""}{card.threshold != null ? ` · warn > ${card.threshold}` : ""}
             </div>
             <div className="mt-1">tables: <FormattedText text={card.tables.join(", ") || "—"} highlightTables /></div>
             <div className="mt-1 text-xs text-slate-400">
@@ -206,15 +217,14 @@ export function CardDetails({ card, template, line, graphs, bankReady, onClose, 
                         <span className="font-medium">{g.name || g.title || "Untitled"}</span>
                         <span className="tnum text-xs text-slate-400">v{g.version}</span>
                       </div>
-                      <div className="ml-6 mt-0.5 text-xs text-slate-400">x:{g.xColumn} y:{g.yColumns.join(",") || "—"}</div>
                       {typeof cfg.rationale === "string" && cfg.rationale && <div className="ml-6 mt-0.5 text-xs text-slate-500">{cfg.rationale}</div>}
                       {typeof cfg.conditions === "string" && cfg.conditions && <div className="ml-6 mt-0.5 text-xs text-accent-500/90">◷ {cfg.conditions}</div>}
                       {previewRows && cfg.merged !== true && (
                         <div className="ml-6 mt-1">
                           {isTradingEligible(previewRows.rows, g.xColumn, g.yColumns, g.chartType) ? (
-                            <TradingChart rows={previewRows.rows} x={g.xColumn} yCols={g.yColumns} type={g.chartType as "line" | "area"} threshold={card.threshold} height={180} units={card.unit || undefined} />
+                            <TradingChart rows={previewRows.rows} x={g.xColumn} yCols={g.yColumns} type={g.chartType as "line" | "area" | "histogram"} threshold={card.threshold} height={180} units={card.unit || undefined} series={(cfg.series as ChartSeriesMeta[] | undefined) ?? g.yColumns.map((c) => ({ column: c, label: c }))} xTitle={typeof cfg.xTitle === "string" ? cfg.xTitle : g.xColumn} yTitle={typeof cfg.yTitle === "string" ? cfg.yTitle : (g.yColumns.join(", ") || undefined)} />
                           ) : (
-                            <Chart rows={previewRows.rows} x={g.xColumn} yCols={g.yColumns} type={g.chartType} threshold={card.threshold} height={140} />
+                            <Chart rows={previewRows.rows} x={g.xColumn} yCols={g.yColumns} type={g.chartType} threshold={card.threshold} height={140} series={(cfg.series as ChartSeriesMeta[] | undefined) ?? g.yColumns.map((c) => ({ column: c, label: c, unit: card.unit || "", color: "" }))} xLabel={typeof cfg.xTitle === "string" ? cfg.xTitle : g.xColumn} yLabel={typeof cfg.yTitle === "string" ? cfg.yTitle : (g.yColumns.join(", ") || undefined)} />
                           )}
                         </div>
                       )}
@@ -227,6 +237,9 @@ export function CardDetails({ card, template, line, graphs, bankReady, onClose, 
               <Btn variant="ghost" size="sm" onClick={() => void loadPreview()} loading={previewLoading} disabled={previewLoading} className="mt-2 glass-pill glass-pill--neutral">
                 Load chart previews
               </Btn>
+            )}
+            {previewRows && previewWindow && (
+              <div className="tnum mt-1 text-[11px] text-slate-400">sample {previewWindow} · {previewRows.rowCount} rows</div>
             )}
           </section>
 

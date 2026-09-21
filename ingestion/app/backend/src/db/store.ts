@@ -172,7 +172,7 @@ export function openStore(path: string): Database.Database {
       id TEXT PRIMARY KEY,
       card_id TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
       name TEXT NOT NULL DEFAULT '',
-      chart_type TEXT NOT NULL DEFAULT 'table' CHECK (chart_type IN ('table','line','bar','area')),
+      chart_type TEXT NOT NULL DEFAULT 'table' CHECK (chart_type IN ('table','line','bar','area','histogram')),
       x_column TEXT NOT NULL DEFAULT '',
       y_columns TEXT NOT NULL DEFAULT '[]',
       title TEXT NOT NULL DEFAULT '',
@@ -234,6 +234,82 @@ export function openStore(path: string): Database.Database {
   const cardCols = db.prepare("PRAGMA table_info(cards)").all() as { name: string }[];
   if (!cardCols.some((c) => c.name === "context")) {
     db.exec("ALTER TABLE cards ADD COLUMN context TEXT NOT NULL DEFAULT ''");
+  }
+  // Lightweight migration: production-day time settings. shift_start (HH:MM)
+  // anchors shift ticks and daily bucketing; shift_hours sets the shift
+  // length. Defaults reproduce the old midnight behavior exactly. Set on the
+  // template, inherited by copies at registration, tunable per copy after.
+  if (!tplCols.some((c) => c.name === "shift_start")) {
+    db.exec("ALTER TABLE card_templates ADD COLUMN shift_start TEXT NOT NULL DEFAULT '00:00'");
+  }
+  if (!tplCols.some((c) => c.name === "shift_hours")) {
+    db.exec("ALTER TABLE card_templates ADD COLUMN shift_hours INTEGER NOT NULL DEFAULT 8");
+  }
+  if (!cardCols.some((c) => c.name === "shift_start")) {
+    db.exec("ALTER TABLE cards ADD COLUMN shift_start TEXT NOT NULL DEFAULT '00:00'");
+  }
+  if (!cardCols.some((c) => c.name === "shift_hours")) {
+    db.exec("ALTER TABLE cards ADD COLUMN shift_hours INTEGER NOT NULL DEFAULT 8");
+  }
+  // Multi-resolution ingest: checked streams per template/card. Base (finest
+  // checked) samples the plant; coarser checked resolutions run as scheduled
+  // readers over wider windows. Stored as JSON arrays; default = all five.
+  const ALL_RES = '["5min","hourly","daily","weekly","monthly"]';
+  if (!tplCols.some((c) => c.name === "resolutions")) {
+    db.exec(`ALTER TABLE card_templates ADD COLUMN resolutions TEXT NOT NULL DEFAULT '${ALL_RES}'`);
+  }
+  if (!cardCols.some((c) => c.name === "resolutions")) {
+    db.exec(`ALTER TABLE cards ADD COLUMN resolutions TEXT NOT NULL DEFAULT '${ALL_RES}'`);
+  }
+  // Last-run tracking per derived reader stream (idempotent schedules).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS resolution_runs (
+      card_id TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+      resolution TEXT NOT NULL,
+      last_run TEXT NOT NULL,
+      PRIMARY KEY (card_id, resolution)
+    );
+  `);
+  // Run footprints carry their stream (base sampler vs derived reader).
+  const runCols = db.prepare("PRAGMA table_info(runs)").all() as { name: string }[];
+  if (!runCols.some((c) => c.name === "resolution")) {
+    db.exec("ALTER TABLE runs ADD COLUMN resolution TEXT NOT NULL DEFAULT 'base'");
+  }
+  // Weekly skip schedule: per-day running windows (HH:MM). Absent day =
+  // full 24h running. Set on the template, inherited by copies, tunable per
+  // copy. Default = everything running (today's behavior exactly).
+  const SKIP_ALL = '{"mon":[{"from":"00:00","to":"24:00"}],"tue":[{"from":"00:00","to":"24:00"}],"wed":[{"from":"00:00","to":"24:00"}],"thu":[{"from":"00:00","to":"24:00"}],"fri":[{"from":"00:00","to":"24:00"}],"sat":[{"from":"00:00","to":"24:00"}],"sun":[{"from":"00:00","to":"24:00"}]}';
+  if (!tplCols.some((c) => c.name === "skip_schedule")) {
+    db.exec(`ALTER TABLE card_templates ADD COLUMN skip_schedule TEXT NOT NULL DEFAULT '${SKIP_ALL}'`);
+  }
+  if (!cardCols.some((c) => c.name === "skip_schedule")) {
+    db.exec(`ALTER TABLE cards ADD COLUMN skip_schedule TEXT NOT NULL DEFAULT '${SKIP_ALL}'`);
+  }
+  // Lightweight migration: allow 'histogram' graph specs. The original
+  // CREATE TABLE pins chart_type with a CHECK over 4 values, so widen it
+  // by rebuilding the table once (data-preserving copy).
+  const graphSql = (db.prepare("SELECT sql FROM sqlite_master WHERE name='graph_specs'").get() as { sql: string } | undefined)?.sql ?? "";
+  if (graphSql && !graphSql.includes("histogram")) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS graph_specs_new (
+        id TEXT PRIMARY KEY,
+        card_id TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+        name TEXT NOT NULL DEFAULT '',
+        chart_type TEXT NOT NULL DEFAULT 'table' CHECK (chart_type IN ('table','line','bar','area','histogram')),
+        x_column TEXT NOT NULL DEFAULT '',
+        y_columns TEXT NOT NULL DEFAULT '[]',
+        title TEXT NOT NULL DEFAULT '',
+        config TEXT NOT NULL DEFAULT '{}',
+        version INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      INSERT OR IGNORE INTO graph_specs_new (id,card_id,name,chart_type,x_column,y_columns,title,config,version,created_at,updated_at)
+        SELECT id,card_id,name,chart_type,x_column,y_columns,title,config,version,created_at,updated_at FROM graph_specs;
+      DROP TABLE graph_specs;
+      ALTER TABLE graph_specs_new RENAME TO graph_specs;
+      CREATE INDEX IF NOT EXISTS idx_graph_specs_card ON graph_specs(card_id);
+    `);
   }
   return db;
 }
@@ -665,6 +741,85 @@ export function getColumnTemplate(id: string): ColumnTemplate | null {
 /* ---------------- F3: context component cards ---------------- */
 
 export type Granularity = "hourly" | "shift" | "daily";
+
+/** Ingest streams. Finest checked = base sampler (plant queries); coarser
+ *  checked = scheduled readers (wider windows + rollup, no extra plant load
+ *  beyond the wider read). All checked by default; unchecking unschedules. */
+export type StreamResolution = "5min" | "hourly" | "daily" | "weekly" | "monthly";
+export const ALL_RESOLUTIONS: StreamResolution[] = ["5min", "hourly", "daily", "weekly", "monthly"];
+
+/** Weekly skip schedule: running windows per weekday. Empty array = full day skipped. */
+export interface SkipWindow {
+  from: string;
+  to: string;
+}
+export type SkipSchedule = Record<string, SkipWindow[]>;
+
+export const SKIP_DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+
+const HHMM = /^([01]\d|2[0-3]):([0-5]\d)$/;
+const HHMM_END = /^([01]\d|2[0-3]):([0-5]\d)$|^24:00$/;
+
+function toMinutes(s: string): number | null {
+  if (s === "24:00") return 1440;
+  const m = HHMM.exec(s);
+  if (!m) return null;
+  return Number(m[1]) * 60 + Number(m[2]);
+}
+
+export function defaultSkipSchedule(): SkipSchedule {
+  const s: SkipSchedule = {};
+  for (const d of SKIP_DAYS) s[d] = [{ from: "00:00", to: "24:00" }];
+  return s;
+}
+
+/** Sanitize stored JSON: bad windows dropped, missing days default to full-on. */
+export function parseSkipSchedule(v: unknown): SkipSchedule {
+  const out = defaultSkipSchedule();
+  try {
+    const o = typeof v === "string" ? JSON.parse(v) : v;
+    if (!o || typeof o !== "object" || Array.isArray(o)) return out;
+    for (const d of SKIP_DAYS) {
+      const arr = (o as Record<string, unknown>)[d];
+      if (!Array.isArray(arr)) continue;
+      const wins: SkipWindow[] = [];
+      for (const w of arr.slice(0, 3)) {
+        if (!w || typeof w !== "object") continue;
+        const rec = w as Record<string, unknown>;
+        if (typeof rec.from !== "string" || typeof rec.to !== "string") continue;
+        const f = toMinutes(rec.from.trim());
+        const t = rec.to.trim() === "24:00" ? 1440 : toMinutes(rec.to.trim());
+        if (f == null || t == null || t <= f) continue;
+        wins.push({ from: rec.from.trim(), to: rec.to.trim() });
+      }
+      out[d] = wins;
+    }
+  } catch {
+    // fall through with defaults
+  }
+  return out;
+}
+
+/** True when a custom (non-24/7) schedule is set — drives badges/summaries. */
+export function hasCustomSkip(s: SkipSchedule | undefined): boolean {
+  if (!s) return false;
+  for (const d of SKIP_DAYS) {
+    const w = s[d] ?? [];
+    if (w.length !== 1 || w[0].from !== "00:00" || w[0].to !== "24:00") return true;
+  }
+  return false;
+}
+
+export function parseResolutions(v: unknown): StreamResolution[] {
+  try {
+    const arr = typeof v === "string" ? JSON.parse(v) : v;
+    if (!Array.isArray(arr)) return [...ALL_RESOLUTIONS];
+    const ok = arr.filter((r): r is StreamResolution => (ALL_RESOLUTIONS as string[]).includes(r));
+    return ok.length > 0 ? [...new Set(ok)] : [...ALL_RESOLUTIONS];
+  } catch {
+    return [...ALL_RESOLUTIONS];
+  }
+}
 export type CardStatus = "live" | "dormant";
 
 /**
@@ -672,6 +827,16 @@ export type CardStatus = "live" | "dormant";
  * shape. Stored once per template (feature registration); inherited by cards.
  * `conditions` states when the chart is meaningful (e.g. "breach=true").
  */
+/** One plotted series: stable identity (column), human legend (label),
+ *  per-series unit, and explicit color so renders and future
+ *  chart-pic readers agree on which series is which. */
+export interface ChartSeriesMeta {
+  column: string;
+  label: string;
+  unit: string;
+  color: string;
+}
+
 export interface ChartSuggestion {
   chartType: ChartType;
   xColumn: string;
@@ -682,6 +847,16 @@ export interface ChartSuggestion {
   /** User toggle at template level. Only enabled suggestions are inherited
    *  by cards; top-2 enabled feed RAG. Defaults true. */
   enabled?: boolean;
+  /** Per-series legend metadata (label/unit/color). Absent on pre-enrichment
+   *  suggestions — renderers fall back to column names + palette order. */
+  series?: ChartSeriesMeta[];
+  /** Display axis titles. Absent → renderers derive from column/resolution. */
+  xTitle?: string;
+  yTitle?: string;
+  /** One-to-two line chart story: seed for future context building. */
+  summary?: string;
+  /** Sample the suggestion was based on (traceability for later contexts). */
+  provenance?: { rows: number; from: string | null; to: string | null };
   /**
    * Stored chart-creation recipe (single source of truth for every renderer:
    * UI preview, prompt builder, AI response). Fixed resolution ladder;
@@ -701,7 +876,7 @@ export function parseChartSuggestions(raw: unknown): ChartSuggestion[] {
     return arr.filter(
       (s): s is ChartSuggestion =>
         !!s && typeof s === "object"
-        && ["table", "line", "bar", "area"].includes((s as { chartType?: string }).chartType ?? "")
+        && ["table", "line", "bar", "area", "histogram"].includes((s as { chartType?: string }).chartType ?? "")
         && typeof (s as { xColumn?: string }).xColumn === "string"
         && Array.isArray((s as { yColumns?: unknown }).yColumns)
     );
@@ -717,6 +892,10 @@ export interface CardTemplate {
   referenceLineId: string | null;
   sqlTemplate: string;
   granularity: Granularity;
+  shiftStart: string;
+  shiftHours: number;
+  resolutions: StreamResolution[];
+  skipSchedule: SkipSchedule;
   unit: string;
   extractHint: string;
   context: string;
@@ -735,6 +914,10 @@ export interface Card {
   tables: string[];
   sql: string;
   granularity: Granularity;
+  shiftStart: string;
+  shiftHours: number;
+  resolutions: StreamResolution[];
+  skipSchedule: SkipSchedule;
   unit: string;
   extractHint: string;
   context: string;
@@ -760,6 +943,10 @@ function tplRow(r: Record<string, unknown>): CardTemplate {
     referenceLineId: (r.reference_line_id as string) ?? null,
     sqlTemplate: (r.sql_template as string) ?? "",
     granularity: r.granularity as Granularity,
+    shiftStart: (r.shift_start as string) ?? "00:00",
+    shiftHours: (r.shift_hours as number) ?? 8,
+    resolutions: parseResolutions(r.resolutions),
+    skipSchedule: parseSkipSchedule(r.skip_schedule),
     unit: (r.unit as string) ?? "",
     extractHint: (r.extract_hint as string) ?? "",
     context: (r.context as string) ?? "",
@@ -781,6 +968,10 @@ function cardRow(r: Record<string, unknown>): Card {
     tables: JSON.parse((r.tables_json as string) ?? "[]") as string[],
     sql: (r.sql_text as string) ?? "",
     granularity: r.granularity as Granularity,
+    shiftStart: (r.shift_start as string) ?? "00:00",
+    shiftHours: (r.shift_hours as number) ?? 8,
+    resolutions: parseResolutions(r.resolutions),
+    skipSchedule: parseSkipSchedule(r.skip_schedule),
     unit: (r.unit as string) ?? "",
     extractHint: (r.extract_hint as string) ?? "",
     context: (r.context as string) ?? "",
@@ -816,10 +1007,10 @@ export function createTemplate(t: Omit<CardTemplate, "id" | "version" | "created
   const now = new Date().toISOString();
   getDb()
     .prepare(
-      `INSERT INTO card_templates (id,name,description,reference_line_id,sql_template,granularity,unit,extract_hint,context,chart_suggestions,version,created_at,updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,1,?,?)`
+      `INSERT INTO card_templates (id,name,description,reference_line_id,sql_template,granularity,shift_start,shift_hours,resolutions,skip_schedule,unit,extract_hint,context,chart_suggestions,version,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)`
     )
-    .run(id, t.name, t.description, t.referenceLineId ?? null, t.sqlTemplate, t.granularity, t.unit, t.extractHint, t.context ?? "", JSON.stringify(t.chartSuggestions ?? []), now, now);
+    .run(id, t.name, t.description, t.referenceLineId ?? null, t.sqlTemplate, t.granularity, t.shiftStart ?? "00:00", t.shiftHours ?? 8, JSON.stringify(t.resolutions ?? ALL_RESOLUTIONS), JSON.stringify(t.skipSchedule ?? defaultSkipSchedule()), t.unit, t.extractHint, t.context ?? "", JSON.stringify(t.chartSuggestions ?? []), now, now);
   return getTemplate(id)!;
 }
 
@@ -834,7 +1025,7 @@ export function updateTemplate(id: string, patch: Partial<Omit<CardTemplate, "id
   const bump = patch.sqlTemplate !== undefined && patch.sqlTemplate !== cur.sqlTemplate;
   getDb()
     .prepare(
-      `UPDATE card_templates SET name=?,description=?,reference_line_id=?,sql_template=?,granularity=?,unit=?,extract_hint=?,context=?,chart_suggestions=?,
+      `UPDATE card_templates SET name=?,description=?,reference_line_id=?,sql_template=?,granularity=?,shift_start=?,shift_hours=?,resolutions=?,skip_schedule=?,unit=?,extract_hint=?,context=?,chart_suggestions=?,
        version=version+?,updated_at=? WHERE id=?`
     )
     .run(
@@ -843,6 +1034,10 @@ export function updateTemplate(id: string, patch: Partial<Omit<CardTemplate, "id
       patch.referenceLineId !== undefined ? patch.referenceLineId : cur.referenceLineId,
       patch.sqlTemplate ?? cur.sqlTemplate,
       patch.granularity ?? cur.granularity,
+      patch.shiftStart ?? cur.shiftStart,
+      patch.shiftHours ?? cur.shiftHours,
+      JSON.stringify(patch.resolutions ?? cur.resolutions),
+      JSON.stringify(patch.skipSchedule ?? cur.skipSchedule),
       patch.unit ?? cur.unit,
       patch.extractHint ?? cur.extractHint,
       patch.context ?? cur.context,
@@ -864,6 +1059,10 @@ export interface CardInput {
   tables: string[];
   sql: string;
   granularity: Granularity;
+  shiftStart?: string;
+  shiftHours?: number;
+  resolutions?: StreamResolution[];
+  skipSchedule?: SkipSchedule;
   unit?: string;
   extractHint?: string;
   context?: string;
@@ -907,12 +1106,15 @@ export function createCard(input: CardInput): Card {
   const tpl = input.templateId ? getTemplate(input.templateId) : null;
   getDb()
     .prepare(
-      `INSERT INTO cards (id,template_id,template_version,line_id,name,tables_json,sql_text,granularity,unit,extract_hint,context,threshold,status,version,created_at,updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?, 'dormant',1,?,?)`
+      `INSERT INTO cards (id,template_id,template_version,line_id,name,tables_json,sql_text,granularity,shift_start,shift_hours,resolutions,skip_schedule,unit,extract_hint,context,threshold,status,version,created_at,updated_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'dormant',1,?,?)`
     )
     .run(
       id, tpl?.id ?? null, tpl?.version ?? null, input.lineId, input.name,
       JSON.stringify(input.tables), input.sql, input.granularity,
+      input.shiftStart ?? tpl?.shiftStart ?? "00:00", input.shiftHours ?? tpl?.shiftHours ?? 8,
+      JSON.stringify(input.resolutions ?? tpl?.resolutions ?? ALL_RESOLUTIONS),
+      JSON.stringify(input.skipSchedule ?? tpl?.skipSchedule ?? defaultSkipSchedule()),
       input.unit ?? "", input.extractHint ?? "", input.context ?? "", input.threshold ?? null, now, now
     );
   logCardEvent(id, "created", `from ${tpl ? `template ${tpl.name} v${tpl.version}` : "scratch"}`);
@@ -959,6 +1161,9 @@ export function instantiateTemplate(templateId: string, lineId: string, override
         conditions: s.conditions,
         units: tpl.unit || undefined,
         summary: tpl.description || undefined,
+        xTitle: s.xTitle,
+        yTitle: s.yTitle,
+        series: s.series,
       },
     });
   });
@@ -969,7 +1174,7 @@ export type ChangeMode = "forward" | "reingest";
 
 export function updateCard(
   id: string,
-  patch: Partial<Pick<CardInput, "name" | "tables" | "sql" | "granularity" | "unit" | "extractHint" | "context" | "threshold">>,
+  patch: Partial<Pick<CardInput, "name" | "tables" | "sql" | "granularity" | "shiftStart" | "shiftHours" | "resolutions" | "skipSchedule" | "unit" | "extractHint" | "context" | "threshold">>,
   opts?: { mode?: ChangeMode; reingestFrom?: string }
 ): Card | null {
   const cur = getCard(id);
@@ -984,12 +1189,13 @@ export function updateCard(
   const sqlChanged = patch.sql !== undefined && patch.sql !== cur.sql;
   getDb()
     .prepare(
-      `UPDATE cards SET name=?,tables_json=?,sql_text=?,granularity=?,unit=?,extract_hint=?,context=?,threshold=?,
+      `UPDATE cards SET name=?,tables_json=?,sql_text=?,granularity=?,shift_start=?,shift_hours=?,resolutions=?,skip_schedule=?,unit=?,extract_hint=?,context=?,threshold=?,
        version=version+?,updated_at=? WHERE id=?`
     )
     .run(
       patch.name ?? cur.name, JSON.stringify(tables), patch.sql ?? cur.sql,
-      patch.granularity ?? cur.granularity, patch.unit ?? cur.unit,
+      patch.granularity ?? cur.granularity, patch.shiftStart ?? cur.shiftStart, patch.shiftHours ?? cur.shiftHours,
+      JSON.stringify(patch.resolutions ?? cur.resolutions), JSON.stringify(patch.skipSchedule ?? cur.skipSchedule), patch.unit ?? cur.unit,
       patch.extractHint ?? cur.extractHint, patch.context ?? cur.context, patch.threshold ?? cur.threshold,
       sqlChanged ? 1 : 0, new Date().toISOString(), id
     );
@@ -1055,6 +1261,8 @@ export interface RunRecord {
   cardId: string;
   cardVersion: number;
   kind: "test" | "tick";
+  /** Ingest stream: base sampler vs derived reader resolution. */
+  resolution: string;
   ok: boolean;
   rowsPulled: number;
   unitsBuilt: number;
@@ -1063,13 +1271,13 @@ export interface RunRecord {
   error: string | null;
 }
 
-export function recordRun(r: Omit<RunRecord, "id">): number {
+export function recordRun(r: Omit<RunRecord, "id" | "resolution"> & { resolution?: string }): number {
   const res = getDb()
     .prepare(
-      `INSERT INTO runs (at,line_id,card_id,card_version,kind,ok,rows_pulled,units_built,facts_stored,duration_ms,error)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+      `INSERT INTO runs (at,line_id,card_id,card_version,kind,resolution,ok,rows_pulled,units_built,facts_stored,duration_ms,error)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
     )
-    .run(r.at, r.lineId, r.cardId, r.cardVersion, r.kind, r.ok ? 1 : 0, r.rowsPulled, r.unitsBuilt, r.factsStored, r.durationMs, r.error);
+    .run(r.at, r.lineId, r.cardId, r.cardVersion, r.kind, r.resolution ?? "base", r.ok ? 1 : 0, r.rowsPulled, r.unitsBuilt, r.factsStored, r.durationMs, r.error);
   return Number(res.lastInsertRowid);
 }
 
@@ -1083,6 +1291,7 @@ export function runsForLine(lineId: string, from: string, to: string): RunRecord
     cardId: x.card_id as string,
     cardVersion: x.card_version as number,
     kind: x.kind as "test" | "tick",
+    resolution: (x.resolution as string) ?? "base",
     ok: (x.ok as number) === 1,
     rowsPulled: x.rows_pulled as number,
     unitsBuilt: x.units_built as number,
@@ -1104,6 +1313,23 @@ export function setSetting(key: string, value: string): void {
        ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`
     )
     .run(key, value, new Date().toISOString());
+}
+
+/** Last successful run per derived-reader stream (idempotent schedules). */
+export function getResolutionRun(cardId: string, resolution: string): string | null {
+  const r = getDb()
+    .prepare("SELECT last_run FROM resolution_runs WHERE card_id=? AND resolution=?")
+    .get(cardId, resolution) as { last_run: string } | undefined;
+  return r?.last_run ?? null;
+}
+
+export function setResolutionRun(cardId: string, resolution: string, at: string): void {
+  getDb()
+    .prepare(
+      `INSERT INTO resolution_runs (card_id,resolution,last_run) VALUES (?,?,?)
+       ON CONFLICT(card_id,resolution) DO UPDATE SET last_run=excluded.last_run`
+    )
+    .run(cardId, resolution, at);
 }
 
 export function lastFactWrite(): string | null {
@@ -1233,7 +1459,8 @@ export function getRun(id: number): RunRecord | null {
   return {
     id: x.id as number, at: x.at as string, lineId: x.line_id as string,
     cardId: x.card_id as string, cardVersion: x.card_version as number,
-    kind: x.kind as "test" | "tick", ok: (x.ok as number) === 1,
+    kind: x.kind as "test" | "tick", resolution: (x.resolution as string) ?? "base",
+    ok: (x.ok as number) === 1,
     rowsPulled: x.rows_pulled as number, unitsBuilt: x.units_built as number,
     factsStored: x.facts_stored as number, durationMs: (x.duration_ms as number) ?? null,
     error: (x.error as string) ?? null,
@@ -1242,7 +1469,7 @@ export function getRun(id: number): RunRecord | null {
 
 /* ---------------- Graph specs (F3: stored visualizations) ---------------- */
 
-export type ChartType = "table" | "line" | "bar" | "area";
+export type ChartType = "table" | "line" | "bar" | "area" | "histogram";
 
 export interface GraphSpec {
   id: string;

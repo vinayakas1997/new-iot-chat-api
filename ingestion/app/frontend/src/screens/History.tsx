@@ -169,7 +169,11 @@ export function History() {
                       <span className="font-medium">{r.cardName}</span>
                       <span className="tnum text-xs text-slate-400">v{r.cardVersion}</span>
                       <StatusChip tone={r.kind === "test" ? "accent" : "mute"}>{r.kind}</StatusChip>
-                      <StatusChip tone={r.ok ? "ok" : "bad"}>{r.ok ? "ok" : "failed"}</StatusChip>
+                      {r.ok && r.error?.startsWith("skipped") ? (
+                        <span title={r.error ?? undefined}><StatusChip tone="mute">skipped</StatusChip></span>
+                      ) : (
+                        <StatusChip tone={r.ok ? "ok" : "bad"}>{r.ok ? "ok" : "failed"}</StatusChip>
+                      )}
                       <span className="tnum text-xs text-slate-400">{r.rowsPulled} rows{r.durationMs != null ? ` · ${r.durationMs}ms` : ""}</span>
                       <Btn variant="ghost" size="sm" icon={Sparkles} onClick={() => void historyApi.run(r.id).then(setInterp).catch((e) => setError((e as Error).message))} className="ml-auto">how AI interpreted</Btn>
                     </div>

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { RefreshCw, X } from "lucide-react";
-import type { ChartType, TestResult } from "../lib/api";
+import type { ChartSeriesMeta, ChartType, TestResult } from "../lib/api";
 import { bucketRows, Chart, formatTimeFull, numericColumns, RESOLUTIONS, RESOLUTION_X_LABEL, type Resolution } from "./Chart";
 import { isTradingEligible, TradingChart } from "./TradingChart";
 import { StatusChip } from "./chips";
@@ -23,6 +23,8 @@ export interface PreviewItem {
   xLabel?: string;
   yLabel?: string;
   units?: string;
+  /** Per-series legend metadata; falls back to column names when absent. */
+  series?: ChartSeriesMeta[];
 }
 
 /**
@@ -35,6 +37,25 @@ export interface PreviewItem {
  * server-side, so revisiting anytime shows prior state.
  */
 const PAGE_SIZE = 15;
+
+/** Resolution-aware titles: a granularity word baked into the title ("Hourly
+ *  Average …") follows the active resolution ("Daily Average …"); titles
+ *  without one keep the " · daily" suffix instead. Generic across templates.
+ */
+const RES_WORD: Record<Resolution, string> = {
+  hourly: "Hourly",
+  daily: "Daily",
+  weekly: "Weekly",
+  monthly: "Monthly",
+  yearly: "Yearly",
+};
+
+function resolutionTitle(title: string, res: Resolution): { text: string; suffix: boolean } {
+  if (/\b(hourly|daily|weekly|monthly|yearly)\b/i.test(title)) {
+    return { text: title.replace(/\b(hourly|daily|weekly|monthly|yearly)\b/i, RES_WORD[res]), suffix: false };
+  }
+  return { text: title, suffix: res !== "hourly" };
+}
 
 function fmtCell(v: unknown): string {
   if (v == null || v === "") return "—";
@@ -192,12 +213,21 @@ export function ChartPreviewModal({ title, subtitle, items, sample, sampledAt, l
           )}
           {hasRows && charts.map((it) => {
             const rows = bucketRows(sample.rows, it.xColumn, it.yColumns, resolution);
-            const resSuffix = resolution === "hourly" ? "" : ` · ${resolution}`;
-            // Temporal X takes the resolution title (Hour/Day/Week/Month);
+            const rt = resolutionTitle(it.title, resolution);
+            const resSuffix = rt.suffix ? ` · ${resolution}` : "";
+            // Temporal X takes the resolution title (Hour/Day/Week/Month/Year);
             // categorical X keeps the column name.
             const firstX = sample.rows[0]?.[it.xColumn];
             const temporalX = firstX != null && !isNaN(Date.parse(String(firstX)));
             const xTitle = temporalX ? RESOLUTION_X_LABEL[resolution] : (it.xLabel ?? it.xColumn);
+            const yTitle = it.yLabel ?? (it.yColumns.length > 0 ? it.yColumns.join(", ") : undefined);
+            // Histogram meta reads as distribution (bins of the measure with
+            // counts), never as a misleading x/y column pair.
+            // Raw x:/y: column tails are gone on purpose (technical names, never
+            // meanings) — the top-right overlay carries X/Y.
+            const metaLine = it.chartType === "histogram"
+              ? `distribution of ${it.xColumn}`
+              : "";
             return (
               <section key={it.key} className="anim-pop-in mb-5 rounded-xl border border-slate-200 p-4 dark:border-ink-800">
                 <div className="flex flex-wrap items-center gap-2">
@@ -214,8 +244,8 @@ export function ChartPreviewModal({ title, subtitle, items, sample, sampledAt, l
                   {(it.badges ?? []).map((b) => (
                     <span key={b.text} className={`rounded-full px-1.5 py-px text-[10px] ring-1 ${toneCls[b.tone]}`}>{b.text}</span>
                   ))}
-                  <span className="font-semibold">{it.title}{resSuffix}</span>
-                  <span className="tnum text-xs text-slate-400">x:{it.xColumn} y:{it.yColumns.join(",") || "—"}</span>
+                  <span className="font-semibold">{rt.text}{resSuffix}</span>
+                  {metaLine && <span className="tnum text-xs text-slate-400">{metaLine}</span>}
                 </div>
                 <div className="mt-2">
                   {isTradingEligible(rows, it.xColumn, it.yColumns, it.chartType) ? (
@@ -223,10 +253,13 @@ export function ChartPreviewModal({ title, subtitle, items, sample, sampledAt, l
                       rows={rows}
                       x={it.xColumn}
                       yCols={it.yColumns}
-                      type={it.chartType as "line" | "area"}
+                      type={it.chartType as "line" | "area" | "histogram"}
                       threshold={it.threshold}
                       height={260}
                       units={it.units}
+                      series={it.series}
+                      xTitle={xTitle}
+                      yTitle={yTitle}
                     />
                   ) : (
                     <Chart
@@ -237,9 +270,10 @@ export function ChartPreviewModal({ title, subtitle, items, sample, sampledAt, l
                       threshold={it.threshold}
                       height={260}
                       xLabel={xTitle}
-                      yLabel={it.yLabel ?? (it.yColumns.length > 0 ? it.yColumns.join(", ") : undefined)}
+                      yLabel={yTitle}
                       grafana
                       units={it.units}
+                      series={it.series}
                     />
                   )}
                 </div>

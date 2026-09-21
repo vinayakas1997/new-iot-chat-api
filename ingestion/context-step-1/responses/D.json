@@ -1,0 +1,6 @@
+{
+ "trial": "D",
+ "meta": null,
+ "userText": "Step-2 grounding (no image). You estimated a temperature peak between 16:00\u201318:00 on Sep-16 with threshold warn > 26 \u00b0C.\nExact rows for the narrowed interval (authoritative, from the database):\n14:20 \u2192 24.8 \u00b0C (faults 0)\n15:20 \u2192 26.4 \u00b0C (faults 0)\n16:20 \u2192 27.6 \u00b0C (faults 0)\n17:20 \u2192 28.5 \u00b0C (faults 5)\n18:20 \u2192 26.9 \u00b0C (faults 0)\nReply with JSON only, no prose: {\"peak\": <exact max>, \"peakAt\": \"<exact timestamp>\", \"breach\": true|false, \"confirmed\": true|false, \"note\": \"<one sentence, incl. any cross-series observation>\"}.\nConfirm or correct the estimate using ONLY these rows.\n",
+ "reply": "{\"chartRef\": \"temp_sensor_sep16\", \"resolution\": \"10min\", \"trend\": \"rising\", \"level\": \"breaching\", \"breach\": true, \"peak\": 28.5, \"peakAt\": \"17:20\", \"peakBetween\": null, \"threshold\": 26, \"breachDirection\": \"above\", \"anomalies\": [{\"at\": \"17:20\", \"between\": null, \"what\": \"5 faults coincident with peak\"}], \"distribution\": null, \"crossCheck\": \"database rows confirm estimate\", \"reading\": \"Peak temperature reached 28.5\u00b0C at 17:20, breaching the 26\u00b0C warning threshold with 5 faults recorded.\", \"confidence\": 1.0, \"questionVerdicts\": [], \"newQuestions\": []}"
+}

@@ -1,0 +1,9 @@
+Step-2 grounding (no image). Chart dryrun-hourly-breachday, hourly. You estimated a temperature peak between 16:00–18:00 on Sep-16 with threshold warn > 26 °C.
+Exact rows for the narrowed interval (authoritative, from the database):
+14:20 → 24.8 °C (faults 0)
+15:20 → 26.4 °C (faults 0)
+16:20 → 27.6 °C (faults 0)
+17:20 → 28.5 °C (faults 5)
+18:20 → 26.9 °C (faults 0)
+Reply with JSON only, no prose: {"peak": <exact max>, "peakAt": "<exact timestamp>", "breach": true|false, "confirmed": true|false, "note": "<one sentence, incl. any cross-series observation>"}.
+Confirm or correct the estimate using ONLY these rows.

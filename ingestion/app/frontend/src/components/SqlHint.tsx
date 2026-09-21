@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { ArrowDownToLine, ChevronDown, Copy } from "lucide-react";
 import { Btn } from "./ui";
 
@@ -29,8 +29,9 @@ GROUP BY 1 ORDER BY 2 DESC`,
   },
 ];
 
-/** Inline SQL examples for template/card editors: copy or insert into the box. */
-export function SqlHint({ onInsert }: { onInsert: (sql: string) => void }) {
+/** Inline SQL examples for template/card editors: copy or insert into the box.
+ *  Optional title slot renders a shared header row (title left, toggle right). */
+export function SqlHint({ onInsert, title }: { onInsert: (sql: string) => void; title?: ReactNode }) {
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
 
@@ -51,11 +52,12 @@ export function SqlHint({ onInsert }: { onInsert: (sql: string) => void }) {
 
   return (
     <div className="mb-1">
-      <div className="flex justify-end">
+      <div className={`flex items-center gap-2 ${title ? "justify-between" : "justify-end"}`}>
+        {title && <span className="text-sm">{title}</span>}
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
-          className="inline-flex items-center gap-1 text-xs text-accent-500 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60"
+          className="inline-flex shrink-0 items-center gap-1 text-xs text-accent-500 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60"
         >
           {open ? "hide examples" : "show examples"}
           <ChevronDown size={12} className={`transition-transform duration-150 ${open ? "rotate-180" : ""}`} />

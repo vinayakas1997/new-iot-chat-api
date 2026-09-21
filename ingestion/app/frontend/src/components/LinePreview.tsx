@@ -139,9 +139,10 @@ export function LinePreview({ line, initialTemplateId, onClose }: { line: Line; 
             title: s.title,
             rationale: s.rationale,
             conditions: s.conditions,
-            xLabel: s.xColumn,
-            yLabel: s.yColumns.length > 0 ? `${s.yColumns.join(", ")}${tpl.unit ? ` (${tpl.unit})` : ""}` : undefined,
+            xLabel: s.xTitle ?? s.xColumn,
+            yLabel: s.yTitle ?? (s.yColumns.length > 0 ? `${s.yColumns.join(", ")}${tpl.unit ? ` (${tpl.unit})` : ""}` : undefined),
             units: tpl.unit || undefined,
+            series: s.series,
           }))}
           sample={sample}
           sampledAt={sampledAt}

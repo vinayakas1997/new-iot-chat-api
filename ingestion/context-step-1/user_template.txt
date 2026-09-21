@@ -1,0 +1,11 @@
+Read this {chartType} chart: "{title}" ({resolution}).
+Window: {from} .. {to} ({rows} plotted points). {timezone}
+X means "{xTitle}"; Y means "{yTitle}". Series: {series}.
+Stats on plotted data: {stats}. Aggregation rule: {aggregationRule}
+Threshold: {threshold} °C, breach direction: {breachDirection} (ground truth, obey exactly). {bucketNote}
+Extract hint: {extractHint}
+Quirk verdicts to obey: {quirkVerdicts}
+Prior readings (same stream): {priorDigests}
+History pack: {historyPack}
+Open tickets to decide (close with reason / keep open / escalate, never drop): {openTickets}
+Analyze per the system rules and reply with the reading JSON only.

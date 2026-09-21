@@ -73,12 +73,14 @@ async function llmDraft(
   lineId: string,
   w: TickWindow,
   rows: Record<string, unknown>[],
-  measure: string
+  measure: string,
+  resolution: string
 ): Promise<{ drafts: DraftFact[] | null; reason: LlmFailReason | "empty-result" | null }> {
   const shown = rows.slice(0, MAX_ROWS_TO_LLM);
   const user = [
     `Card: ${card.name} (granularity ${card.granularity}, unit "${card.unit || "none"}", threshold ${card.threshold ?? "none"})`,
     `Extract hint: ${card.extractHint || "(none)"}`,
+    `Stream: ${resolution} — ${resolution === "base" ? "finest-resolution samples" : `${resolution} rollup of the base stream (sums for counts, averages otherwise)`}`,
     `Window: ${w.from} .. ${w.to} (${rows.length} buckets)`,
     `Rows (JSON): ${JSON.stringify(shown)}`,
     `Reply with JSON only: an array of {"content","measure","value","unit","breach"}.`,
@@ -92,7 +94,7 @@ async function llmDraft(
     user,
     schema: draftFactsSchema,
     maxAttempts: 2,
-    context: { route: "tick-extract", lineId, cardId: card.id },
+    context: { route: "tick-extract", lineId, cardId: card.id, resolution },
     log,
   });
   if (!r.parsed) return { drafts: null, reason: r.reason };
@@ -142,7 +144,8 @@ export async function extractAndRetain(
   card: Card,
   line: LineRecord,
   rows: Record<string, unknown>[],
-  w: TickWindow
+  w: TickWindow,
+  resolution = "base"
 ): Promise<ExtractResult> {
   if (rows.length === 0) return { stored: 0, error: null };
   const active = activeLlmProvider();
@@ -151,7 +154,7 @@ export async function extractAndRetain(
   if (!base) return { stored: 0, error: "hindsight_url not set" };
 
   const measure = measureColumn(rows) ?? "value";
-  const { drafts: llmDrafts, reason } = await llmDraft(log, card, line.id, w, rows, measure);
+  const { drafts: llmDrafts, reason } = await llmDraft(log, card, line.id, w, rows, measure, resolution);
   let drafts = llmDrafts;
   if (!drafts || drafts.length === 0) {
     log.warn({ lineId: line.id, cardId: card.id, reason }, "llm extract failed — deterministic fallback");
@@ -173,6 +176,7 @@ export async function extractAndRetain(
       `measure:${d.measure}`,
       `unit:${d.unit || "none"}`,
       `granularity:${card.granularity}`,
+      `resolution:${resolution}`,
       `breach:${d.breach}`,
     ],
     // metadata values must be strings in the Hindsight schema.

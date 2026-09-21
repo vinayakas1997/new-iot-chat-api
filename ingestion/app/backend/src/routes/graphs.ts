@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { createGraphSpec, deleteGraph, getCard, getGraph, listGraphsForCard, updateGraphSpec, type ChartType } from "../db/store.js";
 
-const chartTypes = z.enum(["table", "line", "bar", "area"]);
+const chartTypes = z.enum(["table", "line", "bar", "area", "histogram"]);
 
 const graphInput = z.object({
   name: z.string().max(120).default(""),

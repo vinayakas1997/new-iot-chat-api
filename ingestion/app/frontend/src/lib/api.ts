@@ -169,6 +169,13 @@ export const bankApi = {
     ),
 };
 
+export interface ChartSeriesMeta {
+  column: string;
+  label: string;
+  unit: string;
+  color: string;
+}
+
 export interface ChartSuggestion {
   chartType: ChartType;
   xColumn: string;
@@ -180,6 +187,65 @@ export interface ChartSuggestion {
   resolutions?: string[];
   xCondition?: { column: string; bucket: string } | null;
   yConditions?: { column: string; op: string; value: number }[];
+  /** Per-series legend metadata; absent on pre-enrichment suggestions. */
+  series?: ChartSeriesMeta[];
+  xTitle?: string;
+  yTitle?: string;
+  /** Chart story seed for future context building. */
+  summary?: string;
+  provenance?: { rows: number; from: string | null; to: string | null };
+}
+
+/** Ingest streams: finest checked = base sampler, coarser checked = scheduled readers. */
+export type StreamResolution = "5min" | "hourly" | "daily" | "weekly" | "monthly";
+export const ALL_STREAMS: StreamResolution[] = ["5min", "hourly", "daily", "weekly", "monthly"];
+
+/** Weekly skip schedule: running windows per weekday (empty = day skipped). */
+export interface SkipWindow {
+  from: string;
+  to: string;
+}
+export type SkipSchedule = Record<string, SkipWindow[]>;
+export const SKIP_DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+export const SKIP_DAY_LABEL: Record<string, string> = { mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat", sun: "Sun" };
+
+export function defaultSkipSchedule(): SkipSchedule {
+  const s: SkipSchedule = {};
+  for (const d of SKIP_DAYS) s[d] = [{ from: "00:00", to: "24:00" }];
+  return s;
+}
+
+/** True when any day differs from full 24/7 running. */
+export function hasCustomSkip(s: SkipSchedule | undefined): boolean {
+  if (!s) return false;
+  for (const d of SKIP_DAYS) {
+    const w = s[d] ?? [];
+    if (w.length !== 1 || w[0].from !== "00:00" || w[0].to !== "24:00") return true;
+  }
+  return false;
+}
+
+/** Human summary of non-default days ("Sun off · Mon–Sat 06:00–24:00"). Consecutive identical days collapse. */
+export function skipSummary(s: SkipSchedule | undefined): string {
+  if (!s || !hasCustomSkip(s)) return "";
+  const key = (d: string): string => {
+    const w = s[d] ?? [];
+    if (w.length === 0) return "off";
+    return w.map((x) => `${x.from}–${x.to}`).join(",");
+  };
+  const groups: { days: string[]; k: string }[] = [];
+  for (const d of SKIP_DAYS) {
+    const k = key(d);
+    if (k === "00:00–24:00") continue;
+    const last = groups[groups.length - 1];
+    if (last && last.k === k) last.days.push(d);
+    else groups.push({ days: [d], k });
+  }
+  const bits = groups.map((g) => {
+    const dl = g.days.length === 1 ? SKIP_DAY_LABEL[g.days[0]] : `${SKIP_DAY_LABEL[g.days[0]]}–${SKIP_DAY_LABEL[g.days[g.days.length - 1]]}`;
+    return g.k === "off" ? `${dl} off` : `${dl} ${g.k}`;
+  });
+  return bits.length > 0 ? `Skips: ${bits.join(" · ")}` : "custom hours";
 }
 
 export interface CardTemplate {
@@ -189,6 +255,13 @@ export interface CardTemplate {
   referenceLineId: string | null;
   sqlTemplate: string;
   granularity: "hourly" | "shift" | "daily";
+  /** Production-day anchor HH:MM + shift length h (ticks + chart bucketing). */
+  shiftStart: string;
+  shiftHours: number;
+  /** Checked ingest streams (all five by default). */
+  resolutions: StreamResolution[];
+  /** Weekly running windows (full 24/7 by default). */
+  skipSchedule: SkipSchedule;
   unit: string;
   extractHint: string;
   context: string;
@@ -207,6 +280,13 @@ export interface Card {
   tables: string[];
   sql: string;
   granularity: "hourly" | "shift" | "daily";
+  /** Production-day anchor HH:MM + shift length h (ticks + chart bucketing). */
+  shiftStart: string;
+  shiftHours: number;
+  /** Checked ingest streams (all five by default). */
+  resolutions: StreamResolution[];
+  /** Weekly running windows (full 24/7 by default). */
+  skipSchedule: SkipSchedule;
   unit: string;
   extractHint: string;
   context: string;
@@ -223,6 +303,18 @@ export interface TestResult {
   rows: Record<string, unknown>[];
   rowCount: number;
   sql: string;
+  /** Window that actually produced the rows (template/card samples). */
+  from?: string;
+  to?: string;
+}
+
+/** Read-only card sample for previews: fallback windows, no run footprint. */
+export interface CardSample {
+  columns: string[];
+  rows: Record<string, unknown>[];
+  rowCount: number;
+  from: string;
+  to: string;
 }
 
 export interface ReapplyResult {
@@ -230,6 +322,31 @@ export interface ReapplyResult {
   templateVersion: number;
   sqlHash: string;
   results: { cardId: string; lineId: string; status: "green" | "red" | "skipped-live"; rowCount?: number; error?: string }[];
+}
+
+export interface HintPoint {
+  text: string;
+  source: string;
+}
+
+export interface CandidateQuirk {
+  kind: string;
+  at: string | null;
+  column: string;
+  detail: string;
+  proposedClause: string;
+}
+
+export interface SuggestHintsResponse {
+  extractHint: string;
+  context: string;
+  points: HintPoint[];
+  candidateQuirks: CandidateQuirk[];
+  quirkStatus: "ok" | "insufficient-data";
+  daysAvailable: number;
+  model: string | null;
+  latencyMs: number;
+  attempts: number;
 }
 
 export const cardApi = {
@@ -251,6 +368,8 @@ export const cardApi = {
   deleteCard: (id: string) => req<{ ok: boolean }>(`/api/ingest/cards/${id}`, { method: "DELETE" }),
   testCard: (id: string, from?: string, to?: string) =>
     req<TestResult>(`/api/ingest/cards/${id}/test`, { method: "POST", body: JSON.stringify({ from, to }) }),
+  cardSample: (id: string, from?: string, to?: string) =>
+    req<CardSample>(`/api/ingest/cards/${id}/sample`, { method: "POST", body: JSON.stringify({ from, to }) }),
   activateCard: (id: string) => req<Card>(`/api/ingest/cards/${id}/activate`, { method: "POST" }),
   dormantCard: (id: string) => req<Card>(`/api/ingest/cards/${id}/dormant`, { method: "POST" }),
 };
@@ -271,6 +390,7 @@ export interface RunRow {
   cardVersion: number;
   cardName: string;
   kind: "test" | "tick";
+  resolution?: string;
   ok: boolean;
   rowsPulled: number;
   unitsBuilt: number;
@@ -350,7 +470,7 @@ export const playgroundApi = {
 
 /* ---- Graph specs (stored visualizations) ---- */
 
-export type ChartType = "table" | "line" | "bar" | "area";
+export type ChartType = "table" | "line" | "bar" | "area" | "histogram";
 
 export interface GraphSpec {
   id: string;
@@ -448,6 +568,11 @@ export const aiLogsApi = {
 
 /* ---- Chart recommendations (one-time LLM steps) ---- */
 
+export interface DroppedColumns {
+  invented: string[];
+  renamed: { from: string; to: string }[];
+}
+
 export interface RecommendResponse {
   suggestions: ChartSuggestion[];
   stored: boolean;
@@ -455,6 +580,8 @@ export interface RecommendResponse {
   heuristic: boolean;
   /** Why the heuristic was used; null on an LLM-backed result. */
   reason: string | null;
+  /** Verbatim-copy checker output: invented names dropped, recased names canonicalized. */
+  dropped?: DroppedColumns;
 }
 
 /** Human-readable cause for an LLM fallback — shown in badge tooltips. */
@@ -486,8 +613,12 @@ export interface MergeProposal {
 export const chartApi = {
   recommendTemplate: (id: string) =>
     req<RecommendResponse>(`/api/ingest/templates/${id}/recommend-charts`, { method: "POST", body: JSON.stringify({}) }),
+  recommendDraft: (input: { name?: string; description?: string; sqlTemplate: string; unit?: string; granularity?: string; threshold?: number | null; referenceLineId: string }) =>
+    req<RecommendResponse>(`/api/ingest/templates/recommend-draft`, { method: "POST", body: JSON.stringify(input) }),
   sampleTemplate: (id: string, from?: string, to?: string) =>
     req<TestResult>(`/api/ingest/templates/${id}/sample`, { method: "POST", body: JSON.stringify({ from, to }) }),
+  suggestHints: (input: { name?: string; description?: string; sqlTemplate?: string; unit?: string; threshold?: number | null; granularity?: string; referenceLineId?: string | null; steer?: string }) =>
+    req<SuggestHintsResponse>(`/api/ingest/templates/suggest-hints`, { method: "POST", body: JSON.stringify(input) }),
   setSuggestions: (id: string, enabled: boolean[]) =>
     req<CardTemplate>(`/api/ingest/templates/${id}/suggestions`, { method: "PATCH", body: JSON.stringify({ enabled }) }),
   recommendCard: (id: string) =>
@@ -496,6 +627,8 @@ export const chartApi = {
     req<{ proposals: MergeProposal[]; note?: string; skipped?: string[] }>(`/api/ingest/lines/${lineId}/optimize-charts`, { method: "POST", body: JSON.stringify({}) }),
   querySample: (lineId: string, sql: string, from?: string, to?: string) =>
     req<TestResult>(`/api/ingest/lines/${lineId}/query-sample`, { method: "POST", body: JSON.stringify({ sql, from, to }) }),
+  suggestSql: (input: { name?: string; description?: string; granularity?: string; resolutions?: string[]; unit?: string; referenceLineId?: string | null; steer?: string }) =>
+    req<{ sql: string; thinking: string[]; model: string | null; latencyMs: number; attempts: number }>(`/api/ingest/templates/suggest-sql`, { method: "POST", body: JSON.stringify(input) }),
 };
 
 export const columnTemplateApi = {

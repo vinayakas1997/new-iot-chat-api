@@ -7,11 +7,13 @@ import {
   getTemplate,
   listCards,
   listGraphsForCard,
+  listLineColumnMeta,
   RESOLUTION_LADDER,
   updateTemplate,
   type Card,
   type CardTemplate,
   type ChartSuggestion,
+  type ConnectionRecord,
 } from "../db/store.js";
 import { assertReadonly, driverFor } from "../drivers/index.js";
 import { runCardTest } from "./cards.js";
@@ -80,17 +82,49 @@ export function heuristicSuggestions(
     ? `Meaningful when tracking trend vs the warn threshold${unit ? ` (${threshold} ${unit})` : ` (${threshold})`}.`
     : "Meaningful for trend and anomaly inspection.";
   if (temporal) {
-    return nums.slice(0, 4).map((y, i) => ({
-      chartType: "line" as const,
+    const out: ChartSuggestion[] = [];
+    const first = nums[0];
+    out.push({
+      chartType: "line",
       xColumn: x,
-      yColumns: [y],
-      title: `${y} over time`,
-      rationale: i === 0
-        ? `"${x}" is temporal and "${y}" is numeric — a line shows trend, drift and threshold breaches.`
-        : `Additional numeric series "${y}" on the same time axis.`,
+      yColumns: [first],
+      title: `${first} over time`,
+      rationale: `"${x}" is temporal and "${first}" is numeric — a line shows trend, drift and threshold breaches.`,
       conditions: cond,
-      ...recipeFor(x, [y]),
-    }));
+      ...recipeFor(x, [first]),
+    });
+    // One bucketed bar alternative on the same X+Y (discrete per-bucket view).
+    out.push({
+      chartType: "bar",
+      xColumn: x,
+      yColumns: [first],
+      title: `${first} per bucket`,
+      rationale: `Same "${x}" → "${first}" series as bars — discrete per-bucket magnitudes instead of a continuous trend.`,
+      conditions: "When comparing individual buckets rather than following the continuous trend.",
+      ...recipeFor(x, [first]),
+    });
+    // Distribution view of the primary measure.
+    out.push({
+      chartType: "histogram",
+      xColumn: first,
+      yColumns: [first],
+      title: `${first} distribution`,
+      rationale: `"${first}" is numeric — a histogram shows spread, modes and outliers that a trend line hides.`,
+      conditions: "When checking distribution, spread or outliers rather than evolution over time.",
+      ...recipeFor(first, [first]),
+    });
+    if (nums[1]) {
+      out.push({
+        chartType: "line",
+        xColumn: x,
+        yColumns: [nums[1]],
+        title: `${nums[1]} over time`,
+        rationale: `Additional numeric series "${nums[1]}" on the same time axis.`,
+        conditions: cond,
+        ...recipeFor(x, [nums[1]]),
+      });
+    }
+    return out.slice(0, 4);
   }
   return [{
     chartType: "bar",
@@ -108,25 +142,246 @@ export function heuristicSuggestions(
 // validation and failure reasons live there, never in the routes below.
 
 const CHART_VOCAB = `Chart vocabulary (pick only from these):
-- line: comparative trend over a temporal X; one or more numeric Y.
-- bar: magnitude comparison across a categorical X; numeric Y.
-- area: time-series volume/trend emphasis; numeric Y over temporal X.
-- table: many columns, non-numeric data, or exact values matter.
-Rules: X must be a real column; Y columns must be numeric (count-like strings coerce). Never invent columns. Prefer fewer, more meaningful charts.`;
+- line: trend over a temporal X; one or more numeric Y. The DEFAULT for time series.
+- area: time-series volume/cumulative emphasis; numeric Y over temporal X. EXCLUSIVE with line: for the same X+Y return ONE of line/area, never both (they render near-identically). Prefer line unless the data is cumulative/counter-like.
+- bar: discrete magnitudes per bucket/category; numeric Y. Allowed on a temporal X as ONE bucketed alternative to the line (hourly/daily bars), and on categorical X for comparisons.
+- histogram: distribution of ONE numeric column (spread, outliers, modes). Set xColumn to the value column and yColumns to [same column]; the UI bins values automatically. No time axis.
+- table: many columns, non-numeric data, or exact values matter. Only when nothing numeric plots.
+Rules: X must be a real column; Y columns must be numeric (count-like strings coerce). Never invent columns. Never return the same X+Y twice with different line/area types. At most ONE bar alternative per X+Y. Prefer 2-3 distinct, complementary charts over 4 near-duplicates.`;
+
+const HISTOGRAM_HINT = `Histogram guidance: suggest exactly one histogram when there is at least one numeric column with 10+ distinct values. Pick the most meaningful measure (e.g. temperature, count). rationale must say what spread/outliers it reveals; conditions must say "when checking distribution".`;
+
+const SEMANTICS_RULES = `SEMANTICS: use the AIM and COLUMN MEANINGS blocks to choose the measure column(s) and split dimensions. Every measure named in the AIM must appear in at least one candidate. Each rationale must cite the meaning it used (e.g. "per the power_kw meaning, the energy measure").
+SELECTIVITY: not every column needs a chart. Ignore IDs, hashes, flags, and near-constant columns (distinct ~1) unless the AIM names them. Choose only columns that serve the AIM or reveal a real pattern (trend, distribution, comparison). Returning 2 sharp candidates that leave 50 columns unused is correct; covering random columns is a failure.
+VERBATIM COLUMNS: copy column names character-for-character from DATA columns. Never retype, normalize, or "fix" spelling/case. A renamed column is treated as invented and dropped.`;
 
 /**
  * Shared recommend prompt (feature + card). Worded to not invite echo
  * loops: one object, explicit stop, no repeated example lines.
  */
-const CHART_SYSTEM = `You recommend visualizations for plant sensor data. ${CHART_VOCAB} Output exactly one JSON object and stop: {"candidates":[{"chartType":"line|bar|area|table","xColumn":"...","yColumns":["..."],"title":"...","rationale":"why this chart fits this data","conditions":"when it is meaningful"}]}. Rank best first, at most 4. Never repeat a key or a line. No prose before or after the object.`;
+const CHART_SYSTEM = `You recommend visualizations for plant sensor data. ${CHART_VOCAB} ${HISTOGRAM_HINT} ${SEMANTICS_RULES} Output exactly one JSON object and stop: {"candidates":[{"chartType":"line|bar|area|histogram|table","xColumn":"...","yColumns":["..."],"title":"...","rationale":"why this chart fits this data (must differ per candidate)","conditions":"when it is meaningful"}]}. Rank best first, at most 4. Use the DATA PROFILE (row count, time span, min/max/avg) to ground each rationale — never describe values not in the profile. Never repeat a key or a line. No prose before or after the object.`;
 
-function samplePreview(columns: string[], rows: Record<string, unknown>[]): string {
-  const head = rows.slice(0, 6).map((r) => {
-    const o: Record<string, unknown> = {};
-    for (const c of columns) o[c] = r[c];
-    return o;
-  });
-  return JSON.stringify({ columns, sample_rows: head }, null, 1).slice(0, 4000);
+function fmtN(v: number): string {
+  return Number(v.toFixed(3)).toString();
+}
+
+/** Compact data profile so the model grounds rationales in real stats, not 6 raw rows. */
+export function buildDataProfile(
+  columns: string[],
+  rows: Record<string, unknown>[],
+  opts: { granularity?: string; unit?: string; threshold?: number | null } = {},
+): string {
+  // Temporal columns already surface as time_span below — keep them out of
+  // numeric_stats so epoch-ms noise never reaches the model.
+  const nums = numericCols(rows, columns).filter((c) => !isTemporalName(c));
+  const numStats: Record<string, { min: string; max: string; avg: string; n: number; distinct: number }> = {};
+  for (const c of nums) {
+    const vals = rows.map((r) => Number(r[c])).filter((v) => !isNaN(v));
+    if (vals.length === 0) continue;
+    numStats[c] = {
+      min: fmtN(Math.min(...vals)),
+      max: fmtN(Math.max(...vals)),
+      avg: fmtN(vals.reduce((a, b) => a + b, 0) / vals.length),
+      n: vals.length,
+      // Variance cue for SELECTIVITY: near-constant columns (distinct ~1)
+      // are safe to ignore unless the AIM names them.
+      distinct: new Set(vals.map((v) => Number(v.toFixed(6)))).size,
+    };
+  }
+  // First temporal column: time span + cardinality of the likely X.
+  let timeSpan: { column: string; min: string; max: string; distinct: number } | null = null;
+  for (const c of columns) {
+    if (!isTemporalName(c)) continue;
+    const times = rows.map((r) => Date.parse(String(r[c] ?? ""))).filter((t) => !isNaN(t));
+    if (times.length === 0) continue;
+    timeSpan = {
+      column: c,
+      min: new Date(Math.min(...times)).toISOString(),
+      max: new Date(Math.max(...times)).toISOString(),
+      distinct: new Set(rows.map((r) => String(r[c] ?? ""))).size,
+    };
+    break;
+  }
+  const profile = {
+    rows: rows.length,
+    granularity: opts.granularity ?? "hourly",
+    unit: opts.unit || "none",
+    threshold: opts.threshold ?? "none",
+    numeric_stats: numStats,
+    ...(timeSpan ? { time_span: timeSpan } : {}),
+  };
+  return JSON.stringify(profile);
+}
+
+export interface AimInfo {
+  description?: string;
+  context?: string;
+  extractHint?: string;
+}
+
+export interface MeaningInfo {
+  tableName: string;
+  columnName: string;
+  meaning: string;
+  datatype: string;
+}
+
+/**
+ * AIM + SEMANTICS block (spike-proven: surfaces aim-named measures like
+ * faults that bare stats miss). Budgeted for wide tables: only meanings
+ * whose column is referenced by the SQL travel (cap 20, overflow noted);
+ * templates without meanings degrade to today's prompt exactly.
+ */
+export function buildSemanticsBlock(
+  sqlTemplate: string,
+  aim: AimInfo,
+  meanings: MeaningInfo[],
+  maxMeanings = 20,
+): string {
+  const aimLines = [
+    `- description: ${aim.description?.trim() || "(none)"}`,
+    `- context: ${aim.context?.trim() || "(none)"}`,
+    `- extractHint: ${aim.extractHint?.trim() || "(none)"}`,
+  ];
+  const sqlLower = sqlTemplate.toLowerCase();
+  const used = meanings.filter((m) => m.columnName && sqlLower.includes(m.columnName.toLowerCase()));
+  const shown = used.slice(0, maxMeanings);
+  const overflow = used.length - shown.length;
+  const semLines = shown.map(
+    (m) => `- ${m.tableName}.${m.columnName} [${m.datatype}]: ${m.meaning?.trim() || "(no meaning)"}`,
+  );
+  if (overflow > 0) semLines.push(`(+${overflow} more described columns not shown)`);
+  if (shown.length === 0) semLines.push("(no column meanings stored for this line's tables yet)");
+  return `AIM:\n${aimLines.join("\n")}\n\nCOLUMN MEANINGS:\n${semLines.join("\n")}\n\nSQL (maps raw columns to output columns):\n${sqlTemplate}`;
+}
+
+/** Prompt budget: aim + SQL + meanings are never cut; sample rows trim first. */
+const PROMPT_BUDGET = 10000;
+
+/** Series palette — must match frontend SERIES_COLORS (Chart.tsx) by order. */
+const SERIES_PALETTE = ["#14b8a6", "#f59e0b", "#8b5cf6", "#06b6d4", "#ec4899", "#ef4444"];
+
+const X_TITLE_BY_GRANULARITY: Record<string, string> = {
+  hourly: "Hour",
+  shift: "Shift",
+  daily: "Day",
+  weekly: "Week",
+  monthly: "Month",
+  yearly: "Year",
+};
+
+function prettifyColumn(col: string): string {
+  const s = col.replace(/_/g, " ").trim();
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : col;
+}
+
+function isCountLikeColumn(col: string): boolean {
+  return /count|faults?|samples?|total|qty|quantity/i.test(col);
+}
+
+export interface SuggestionFillContext {
+  unit: string;
+  granularity: string;
+  meanings: MeaningInfo[];
+  rowCount: number;
+  timeMin: string | null;
+  timeMax: string | null;
+}
+
+/**
+ * Deterministic completion for newly recommended suggestions: per-series
+ * legend metadata, axis titles, summary seed, and provenance. Runs AFTER
+ * sanitize (so only real columns), for both LLM and heuristic paths.
+ * Pre-enrichment stored suggestions keep rendering via fallbacks.
+ */
+export function completeSuggestion(s: ChartSuggestion, ctx: SuggestionFillContext): ChartSuggestion {
+  const out = { ...s };
+  const isHist = out.chartType === "histogram";
+  if (!out.series) {
+    out.series = out.yColumns.map((col, i) => {
+      // Boundary-anchored match: "temp_c" matches "avg_temp_c" but "ts"
+      // must NOT match "faults". Prevents wrong-meaning legend labels.
+      const raw = ctx.meanings.find((m) => {
+        if (!m.columnName) return false;
+        const esc = m.columnName.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        return new RegExp(`(^|[^a-z0-9])${esc}($|[^a-z0-9])`).test(col.toLowerCase());
+      });
+      return {
+        column: col,
+        label: raw?.meaning && raw.meaning.length <= 80 ? raw.meaning : prettifyColumn(col),
+        // Histogram plots bin *counts*, never the measure unit.
+        unit: isHist ? "count" : isCountLikeColumn(col) ? "count" : ctx.unit,
+        color: SERIES_PALETTE[i % SERIES_PALETTE.length],
+      };
+    });
+  }
+  if (!out.xTitle) {
+    // Histogram X is bins of the measure, not the measure itself.
+    out.xTitle = isHist
+      ? `${prettifyColumn(out.xColumn)} bins`
+      : isTemporalName(out.xColumn)
+        ? (X_TITLE_BY_GRANULARITY[ctx.granularity] ?? prettifyColumn(out.xColumn))
+        : prettifyColumn(out.xColumn);
+  }
+  if (!out.yTitle) {
+    // Histogram Y is always bin counts.
+    if (isHist) {
+      out.yTitle = "count";
+    } else {
+      const u = out.series[0]?.unit || ctx.unit;
+      out.yTitle = out.yColumns.length > 0 ? `${out.yColumns.join(", ")}${u ? ` (${u})` : ""}` : prettifyColumn(out.xColumn);
+    }
+  }
+  if (!out.summary) {
+    const series = (out.series ?? []).map((x) => x.label).join(" vs ") || out.yColumns.join(", ");
+    const span = ctx.timeMin && ctx.timeMax ? `, ${ctx.timeMin.slice(0, 10)}..${ctx.timeMax.slice(0, 10)}` : "";
+    out.summary = `${out.title}: ${series} across ${out.xTitle?.toLowerCase() ?? out.xColumn} (${ctx.rowCount} rows${span}).`;
+  }
+  if (!out.provenance) {
+    out.provenance = { rows: ctx.rowCount, from: ctx.timeMin, to: ctx.timeMax };
+  }
+  return out;
+}
+
+/** Row count + time span of a sample (traceability for suggestion provenance). */
+export function summarizeSample(
+  columns: string[],
+  rows: Record<string, unknown>[],
+): { rowCount: number; timeMin: string | null; timeMax: string | null } {
+  let timeMin: string | null = null;
+  let timeMax: string | null = null;
+  for (const c of columns) {
+    if (!isTemporalName(c)) continue;
+    const times = rows.map((r) => Date.parse(String(r[c] ?? ""))).filter((t) => !isNaN(t));
+    if (times.length === 0) continue;
+    timeMin = new Date(Math.min(...times)).toISOString();
+    timeMax = new Date(Math.max(...times)).toISOString();
+    break;
+  }
+  return { rowCount: rows.length, timeMin, timeMax };
+}
+
+function samplePreview(
+  columns: string[],
+  rows: Record<string, unknown>[],
+  opts: { granularity?: string; unit?: string; threshold?: number | null; semantics?: string } = {},
+): string {
+  const profile = JSON.parse(buildDataProfile(columns, rows, opts)) as Record<string, unknown>;
+  let rowCount = 6;
+  let out = "";
+  // Trim sample rows (6→3→1) until the whole message fits the budget.
+  for (;;) {
+    const head = rows.slice(0, rowCount).map((r) => {
+      const o: Record<string, unknown> = {};
+      for (const c of columns) o[c] = r[c];
+      return o;
+    });
+    out = JSON.stringify({ columns, profile, sample_rows: head }, null, 1);
+    if (opts.semantics) out += `\n\n${opts.semantics}`;
+    if (out.length <= PROMPT_BUDGET || rowCount <= 1) break;
+    rowCount = rowCount > 3 ? 3 : 1;
+  }
+  return out;
 }
 
 export interface RecommendReason {
@@ -136,58 +391,150 @@ export interface RecommendReason {
 
 type LlmCandidate = Partial<ChartSuggestion> & { rank?: number };
 
+export interface DroppedColumns {
+  /** Names the model returned that match no real column (invented/renamed). */
+  invented: string[];
+  /** Names accepted after case-canonicalization to the true spelling. */
+  renamed: { from: string; to: string }[];
+}
+
 function sanitizeCandidates(
   raw: unknown,
   columns: string[],
   rows: Record<string, unknown>[],
   granularity: string,
   threshold: number | null
-): ChartSuggestion[] {
+): { suggestions: ChartSuggestion[]; dropped: DroppedColumns } {
   const cols = new Set(columns);
+  // Verbatim-copy checker: exact match accepts; case-only drift is
+  // canonicalized to the true spelling (counted, visible); anything else
+  // is invented and dropped (counted, visible) — never stored silently.
+  const canon = new Map<string, string>();
+  for (const c of columns) canon.set(c.toLowerCase(), c);
+  const dropped: DroppedColumns = { invented: [], renamed: [] };
+  function resolve(name: unknown): string | null {
+    if (typeof name !== "string" || !name) return null;
+    if (cols.has(name)) return name;
+    const hit = canon.get(name.toLowerCase());
+    if (hit) {
+      if (!dropped.renamed.some((r) => r.from === name && r.to === hit)) {
+        dropped.renamed.push({ from: name, to: hit });
+      }
+      return hit;
+    }
+    if (!dropped.invented.includes(name)) dropped.invented.push(name);
+    return null;
+  }
   const arr = Array.isArray(raw) ? raw : (raw as { candidates?: unknown })?.candidates;
-  if (!Array.isArray(arr)) return [];
+  if (!Array.isArray(arr)) return { suggestions: [], dropped };
+  const nums = numericCols(rows, columns);
   const out: ChartSuggestion[] = [];
+  // line/area are mutually exclusive per X+Y (near-identical render): keep
+  // the first-ranked of the pair, drop the later duplicate. Bar/histogram
+  // on the same X+Y are genuine alternatives and survive.
+  const seenTrend = new Set<string>();
   for (const c of arr.slice(0, 6)) {
     const cand = c as LlmCandidate;
-    if (!cand || !["table", "line", "bar", "area"].includes(cand.chartType ?? "")) continue;
-    if (typeof cand.xColumn !== "string" || !cols.has(cand.xColumn)) continue;
-    const y = Array.isArray(cand.yColumns) ? cand.yColumns.filter((y): y is string => typeof y === "string" && cols.has(y)) : [];
-    const nums = numericCols(rows, columns);
+    if (!cand || !["table", "line", "bar", "area", "histogram"].includes(cand.chartType ?? "")) continue;
+    const xCol = resolve(cand.xColumn);
+    if (!xCol) continue;
+    if (cand.chartType === "histogram") {
+      // Histogram: X is the value column; Y normalizes to [X].
+      if (!nums.includes(xCol)) continue;
+      const key = `hist|${xCol.toLowerCase()}`;
+      if (seenTrend.has(key)) continue;
+      seenTrend.add(key);
+      out.push({
+        chartType: "histogram",
+        xColumn: xCol,
+        yColumns: [xCol],
+        title: typeof cand.title === "string" ? cand.title.slice(0, 120) : `${xCol} distribution`,
+        rationale: typeof cand.rationale === "string" ? cand.rationale.slice(0, 500) : "",
+        conditions: typeof cand.conditions === "string" ? cand.conditions.slice(0, 300) : "",
+        enabled: true,
+        resolutions: [...RESOLUTION_LADDER],
+        xCondition: { column: xCol, bucket: granularity },
+        yConditions: threshold != null ? [{ column: xCol, op: ">=", value: threshold }] : [],
+      });
+      continue;
+    }
+    const y = Array.isArray(cand.yColumns) ? cand.yColumns.map(resolve).filter((v): v is string => v != null) : [];
     const yOk = y.filter((col) => nums.includes(col));
     if (cand.chartType !== "table" && yOk.length === 0) continue;
     // Fallback-only: a table beside plottable charts is noise. It survives
     // only when nothing numeric plots (handled by the heuristic path).
     if (cand.chartType === "table" && nums.length > 0) continue;
     const yCols = cand.chartType === "table" ? [] : yOk.slice(0, 4);
+    if (cand.chartType === "line" || cand.chartType === "area") {
+      const key = `trend|${xCol.toLowerCase()}|${[...yCols].sort((a, b) => a.toLowerCase() < b.toLowerCase() ? -1 : 1).join(",").toLowerCase()}`;
+      if (seenTrend.has(key)) continue;
+      seenTrend.add(key);
+    }
     out.push({
       chartType: cand.chartType as ChartSuggestion["chartType"],
-      xColumn: cand.xColumn,
+      xColumn: xCol,
       yColumns: yCols,
-      title: typeof cand.title === "string" ? cand.title.slice(0, 120) : `${cand.xColumn} chart`,
+      title: typeof cand.title === "string" ? cand.title.slice(0, 120) : `${xCol} chart`,
       rationale: typeof cand.rationale === "string" ? cand.rationale.slice(0, 500) : "",
       conditions: typeof cand.conditions === "string" ? cand.conditions.slice(0, 300) : "",
       enabled: true,
       resolutions: [...RESOLUTION_LADDER],
-      xCondition: { column: cand.xColumn, bucket: granularity },
+      xCondition: { column: xCol, bucket: granularity },
       yConditions: threshold != null && yCols.length > 0 ? [{ column: yCols[0], op: ">=", value: threshold }] : [],
     });
   }
-  return out;
+  return { suggestions: out, dropped };
 }
 
-/** Run a template's SQL against its reference line for a small sample. */
-async function sampleForTemplate(tpl: CardTemplate, from?: string, to?: string): Promise<{ columns: string[]; rows: Record<string, unknown>[] }> {
+/**
+ * Windowed sampler with fallbacks (shared by template + card previews).
+ * Explicit window wins; otherwise walks 1d → 7d → 30d → 365d so sparse or
+ * old demo data still yields a sample instead of "no rows". Read-only, no
+ * run footprint (unlike test runs, which stay strict for Go-live honesty).
+ * Returns the window that actually produced rows.
+ */
+export async function sampleWithFallback(
+  conn: ConnectionRecord,
+  sqlTemplate: string,
+  from?: string,
+  to?: string,
+): Promise<{ columns: string[]; rows: Record<string, unknown>[]; from: string; to: string }> {
+  const windows: { from: string; to: string }[] = [];
+  if (from || to) {
+    windows.push({
+      from: from ?? new Date(Date.now() - 24 * 3600 * 1000).toISOString(),
+      to: to ?? new Date().toISOString(),
+    });
+  } else {
+    const now = Date.now();
+    for (const days of [1, 7, 30, 365]) {
+      windows.push({ from: new Date(now - days * 86400 * 1000).toISOString(), to: new Date(now).toISOString() });
+    }
+  }
+  let last = windows[0];
+  for (const w of windows) {
+    const sql = sqlTemplate.replaceAll("{{from}}", w.from).replaceAll("{{to}}", w.to);
+    assertReadonly(sql);
+    const rows = await driverFor(conn).queryReadonly<Record<string, unknown>>(conn, sql);
+    if (rows.length > 0) {
+      return { columns: Object.keys(rows[0]), rows: rows.slice(0, SAMPLE_ROWS), from: w.from, to: w.to };
+    }
+    last = w;
+  }
+  return { columns: [], rows: [], from: last.from, to: last.to };
+}
+
+/** Run a template's SQL against its reference line for a small sample.
+ *  Returns the window that actually produced rows (explicit windows never
+ *  fall back inside sampleWithFallback — callers retry window-less). */
+async function sampleForTemplate(tpl: CardTemplate, from?: string, to?: string): Promise<{ columns: string[]; rows: Record<string, unknown>[]; from: string; to: string }> {
   if (!tpl.referenceLineId) throw new Error("template has no reference line — set one first");
   const line = getLine(tpl.referenceLineId);
   if (!line) throw new Error("reference line not found");
   const conn = getConnection(line.connectionId);
   if (!conn) throw new Error("connection not found");
-  const end = to ?? new Date().toISOString();
-  const start = from ?? new Date(Date.now() - 24 * 3600 * 1000).toISOString();
-  const sql = tpl.sqlTemplate.replaceAll("{{from}}", start).replaceAll("{{to}}", end);
-  assertReadonly(sql);
-  const rows = await driverFor(conn).queryReadonly<Record<string, unknown>>(conn, sql);
-  return { columns: rows.length > 0 ? Object.keys(rows[0]) : [], rows: rows.slice(0, SAMPLE_ROWS) };
+  const s = await sampleWithFallback(conn, tpl.sqlTemplate, from, to);
+  return { columns: s.columns, rows: s.rows, from: s.from, to: s.to };
 }
 
 /* ---------------- merge optimizer ---------------- */
@@ -206,6 +553,57 @@ export interface MergeProposal {
 function groupKey(card: Card, spec: { xColumn: string; chartType: string }): string | null {
   if (spec.chartType === "table") return null;
   return `${card.granularity}|${isTemporalName(spec.xColumn) ? "t" : "c"}`;
+}
+
+/**
+ * Shared recommend pipeline: sample in, ranked suggestions out. Used by the
+ * stored-template route, the card route, and the unsaved-draft route — one
+ * prompt, one sanitizer, one enricher, never three diverging copies.
+ */
+export async function recommendCore(o: {
+  log: FastifyInstance["log"];
+  context: Record<string, unknown>;
+  /** First user line, e.g. `Feature: smoke (granularity hourly, unit "°C").` */
+  label: string;
+  granularity: string;
+  unit: string;
+  threshold: number | null;
+  semantics: string;
+  meanings: ReturnType<typeof listLineColumnMeta>;
+  sample: { columns: string[]; rows: Record<string, unknown>[] };
+}): Promise<{
+  suggestions: ChartSuggestion[];
+  model: string | null;
+  heuristic: boolean;
+  reason: LlmFailReason | "no-valid-candidates" | null;
+  dropped: { invented: string[]; renamed: { from: string; to: string }[] };
+}> {
+  const fallback = heuristicSuggestions(o.sample.columns, o.sample.rows, o.unit, o.threshold, o.granularity);
+  const r = await llmChatJson({
+    system: CHART_SYSTEM,
+    user: `${o.label}\nData:\n${samplePreview(o.sample.columns, o.sample.rows, { granularity: o.granularity, unit: o.unit, threshold: o.threshold, semantics: o.semantics })}`,
+    schema: chartCandidatesSchema,
+    context: o.context,
+    log: o.log,
+  });
+  const checked = r.parsed
+    ? sanitizeCandidates(toCandidateArray(r.parsed), o.sample.columns, o.sample.rows, o.granularity, o.threshold)
+    : { suggestions: [], dropped: { invented: [], renamed: [] } };
+  const raw = checked.suggestions.length > 0 ? checked.suggestions : fallback;
+  const sum = summarizeSample(o.sample.columns, o.sample.rows);
+  const suggestions = raw.map((s) =>
+    completeSuggestion(s, {
+      unit: o.unit,
+      granularity: o.granularity,
+      meanings: o.meanings,
+      rowCount: sum.rowCount,
+      timeMin: sum.timeMin,
+      timeMax: sum.timeMax,
+    }),
+  );
+  const reason: LlmFailReason | "no-valid-candidates" | null =
+    checked.suggestions.length > 0 ? null : (r.reason ?? "no-valid-candidates");
+  return { suggestions, model: r.model || null, heuristic: checked.suggestions.length === 0, reason, dropped: checked.dropped };
 }
 
 export async function chartRoutes(app: FastifyInstance) {
@@ -259,10 +657,43 @@ export async function chartRoutes(app: FastifyInstance) {
     const tpl = getTemplate(id);
     if (!tpl) return reply.code(404).send({ error: "template not found" });
     try {
-      const s = await sampleForTemplate(tpl, p.data.from, p.data.to);
-      return { columns: s.columns, rows: s.rows.slice(0, SAMPLE_ROWS), rowCount: s.rows.length };
+      let s = await sampleForTemplate(tpl, p.data.from, p.data.to);
+      // Explicit windows miss stale data (e.g. hourly on old tables) — the
+      // card sample route 409s here and the UI retries; templates instead
+      // retry server-side into the widest non-empty window so previews
+      // self-heal without a second round-trip.
+      if (s.rows.length === 0 && (p.data.from || p.data.to)) {
+        s = await sampleForTemplate(tpl);
+      }
+      return { columns: s.columns, rows: s.rows.slice(0, SAMPLE_ROWS), rowCount: s.rows.length, from: s.from, to: s.to };
     } catch (e) {
       return reply.code(409).send({ error: (e as Error).message });
+    }
+  });
+
+  /**
+   * Small sample of a card's SQL on its own line — powers card-level chart
+   * previews (Graph designer modal, Details minis). Same fallback windows
+   * as templates; read-only with no run footprint (test runs stay strict).
+   */
+  app.post("/api/ingest/cards/:id/sample", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const p = z.object({ from: z.string().optional(), to: z.string().optional() }).safeParse(req.body ?? {});
+    if (!p.success) return reply.code(400).send({ error: p.error.message });
+    const card = getCard(id);
+    if (!card) return reply.code(404).send({ error: "card not found" });
+    const line = getLine(card.lineId);
+    if (!line) return reply.code(404).send({ error: "line not found" });
+    const conn = getConnection(line.connectionId);
+    if (!conn) return reply.code(404).send({ error: "connection not found" });
+    try {
+      const s = await sampleWithFallback(conn, card.sql, p.data.from, p.data.to);
+      if (s.rows.length === 0) {
+        return reply.code(409).send({ error: "query returned no rows in the last 365 days — nothing to preview" });
+      }
+      return { columns: s.columns, rows: s.rows, rowCount: s.rows.length, from: s.from, to: s.to };
+    } catch (e) {
+      return reply.code(502).send({ error: (e as Error).message });
     }
   });
 
@@ -289,27 +720,82 @@ export async function chartRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string };
     const tpl = getTemplate(id);
     if (!tpl) return reply.code(404).send({ error: "template not found" });
+    const body = (req.body ?? {}) as { from?: string; to?: string };
     let sample: { columns: string[]; rows: Record<string, unknown>[] };
     try {
-      sample = await sampleForTemplate(tpl);
+      sample = await sampleForTemplate(tpl, body.from, body.to);
     } catch (e) {
       return reply.code(409).send({ error: (e as Error).message });
     }
     if (sample.rows.length === 0) return reply.code(409).send({ error: "reference query returned no rows — nothing to recommend from" });
-    const fallback = heuristicSuggestions(sample.columns, sample.rows, tpl.unit, null, tpl.granularity);
-    const r = await llmChatJson({
-      system: CHART_SYSTEM,
-      user: `Feature: ${tpl.name} (granularity ${tpl.granularity}, unit "${tpl.unit || "none"}").\nData:\n${samplePreview(sample.columns, sample.rows)}`,
-      schema: chartCandidatesSchema,
-      context: { route: "recommend-template", templateId: id },
+    const meanings = tpl.referenceLineId ? listLineColumnMeta(tpl.referenceLineId) : [];
+    const semantics = tpl.referenceLineId
+      ? buildSemanticsBlock(
+          tpl.sqlTemplate,
+          { description: tpl.description, context: tpl.context, extractHint: tpl.extractHint },
+          meanings,
+        )
+      : "";
+    const r = await recommendCore({
       log: app.log,
+      context: { route: "recommend-template", templateId: id },
+      label: `Feature: ${tpl.name} (granularity ${tpl.granularity}, unit "${tpl.unit || "none"}").`,
+      granularity: tpl.granularity,
+      unit: tpl.unit,
+      threshold: null,
+      semantics,
+      meanings,
+      sample,
     });
-    const llm = r.parsed ? sanitizeCandidates(toCandidateArray(r.parsed), sample.columns, sample.rows, tpl.granularity, null) : [];
-    const suggestions = llm.length > 0 ? llm : fallback;
-    updateTemplate(id, { chartSuggestions: suggestions });
-    const reason: LlmFailReason | "no-valid-candidates" | null =
-      llm.length > 0 ? null : (r.reason ?? "no-valid-candidates");
-    return { suggestions, stored: true, model: r.model || null, heuristic: llm.length === 0, reason };
+    updateTemplate(id, { chartSuggestions: r.suggestions });
+    return { ...r, stored: true };
+  });
+
+  /**
+   * Recommend charts for an UNSAVED draft (template form Suggest flow): same
+   * pipeline as stored templates, transient inputs, nothing written.
+   */
+  app.post("/api/ingest/templates/recommend-draft", async (req, reply) => {
+    const p = z.object({
+      name: z.string().max(120).default(""),
+      description: z.string().max(2000).default(""),
+      sqlTemplate: z.string().min(1).max(20000),
+      unit: z.string().max(20).default(""),
+      granularity: z.string().max(20).default("hourly"),
+      threshold: z.number().nullable().default(null),
+      referenceLineId: z.string().min(1),
+    }).safeParse(req.body ?? {});
+    if (!p.success) return reply.code(400).send({ error: p.error.message });
+    const b = p.data;
+    const line = getLine(b.referenceLineId);
+    if (!line) return reply.code(404).send({ error: "line not found" });
+    const conn = getConnection(line.connectionId);
+    if (!conn) return reply.code(404).send({ error: "connection not found" });
+    let sample;
+    try {
+      sample = await sampleWithFallback(conn, b.sqlTemplate);
+    } catch (e) {
+      return reply.code(409).send({ error: (e as Error).message });
+    }
+    if (sample.rows.length === 0) return reply.code(409).send({ error: "draft query returned no rows — nothing to recommend from" });
+    const meanings = listLineColumnMeta(line.id);
+    const semantics = buildSemanticsBlock(
+      b.sqlTemplate,
+      { description: b.description, context: "", extractHint: "" },
+      meanings,
+    );
+    const r = await recommendCore({
+      log: app.log,
+      context: { route: "recommend-draft", lineId: line.id },
+      label: `Feature: ${b.name || "(unsaved draft)"} (granularity ${b.granularity}, unit "${b.unit || "none"}").`,
+      granularity: b.granularity,
+      unit: b.unit,
+      threshold: b.threshold,
+      semantics,
+      meanings,
+      sample: { columns: sample.columns, rows: sample.rows },
+    });
+    return { ...r, stored: false };
   });
 
   /**
@@ -327,19 +813,23 @@ export async function chartRoutes(app: FastifyInstance) {
       return reply.code(502).send({ error: `test run failed: ${(e as Error).message}` });
     }
     if (t.rows.length === 0) return reply.code(409).send({ error: "test run returned no rows — nothing to recommend from" });
-    const fallback = heuristicSuggestions(t.columns, t.rows, card.unit, card.threshold, card.granularity);
-    const r = await llmChatJson({
-      system: CHART_SYSTEM,
-      user: `Card: ${card.name} (granularity ${card.granularity}, unit "${card.unit || "none"}", threshold ${card.threshold ?? "none"}).\nData:\n${samplePreview(t.columns, t.rows)}`,
-      schema: chartCandidatesSchema,
-      context: { route: "recommend-card", cardId: id },
+    const semantics = buildSemanticsBlock(
+      card.sql,
+      { description: card.name, context: card.context, extractHint: card.extractHint },
+      listLineColumnMeta(card.lineId),
+    );
+    const r = await recommendCore({
       log: app.log,
+      context: { route: "recommend-card", cardId: id },
+      label: `Card: ${card.name} (granularity ${card.granularity}, unit "${card.unit || "none"}", threshold ${card.threshold ?? "none"}).`,
+      granularity: card.granularity,
+      unit: card.unit,
+      threshold: card.threshold,
+      semantics,
+      meanings: listLineColumnMeta(card.lineId),
+      sample: t,
     });
-    const llm = r.parsed ? sanitizeCandidates(toCandidateArray(r.parsed), t.columns, t.rows, card.granularity, card.threshold) : [];
-    const suggestions = llm.length > 0 ? llm : fallback;
-    const reason: LlmFailReason | "no-valid-candidates" | null =
-      llm.length > 0 ? null : (r.reason ?? "no-valid-candidates");
-    return { suggestions, stored: false, model: r.model || null, heuristic: llm.length === 0, reason };
+    return { ...r, stored: false };
   });
 
   /**

@@ -9,7 +9,7 @@ import { z } from "zod";
 /* ---------------- chart recommendations ---------------- */
 
 const chartCandidateSchema = z.object({
-  chartType: z.enum(["table", "line", "bar", "area"]),
+  chartType: z.enum(["table", "line", "bar", "area", "histogram"]),
   xColumn: z.string().min(1),
   yColumns: z.array(z.string()).default([]),
   title: z.string().optional(),

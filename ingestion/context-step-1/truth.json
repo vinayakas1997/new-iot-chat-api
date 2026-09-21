@@ -1,0 +1,40 @@
+{
+  "window": {
+    "from": "2026-09-10T08:20:00Z",
+    "to": "2026-09-20T07:20:00Z"
+  },
+  "rows": 240,
+  "planted": {
+    "daily_dip": {
+      "at": "02:00",
+      "depth": -3.1,
+      "days": "10/10",
+      "matchesQuirk": "confirmed recalibration quirk \u2014 must be ignored with citation"
+    },
+    "breach": {
+      "day": "2026-09-16",
+      "peak": 28.5,
+      "peakAt": "17:00",
+      "threshold": 26,
+      "direction": "above",
+      "ramp": "14:00-18:00"
+    },
+    "flatline": {
+      "day": "2026-09-18",
+      "value": 22.0,
+      "buckets": 6,
+      "hours": "10:00-15:00"
+    },
+    "gap": {
+      "day": "2026-09-19",
+      "at": "06:00",
+      "column": "avg_temp_c"
+    },
+    "cross_series": {
+      "day": "2026-09-16",
+      "at": "17:00",
+      "faults": 5,
+      "note": "faults spike coincides with temp peak \u2014 cross-series catch"
+    }
+  }
+}

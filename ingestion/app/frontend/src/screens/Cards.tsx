@@ -1,17 +1,18 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  ArrowRight, Brain, ChartLine, ClipboardCheck, Copy, Database, Eye, FlaskConical, History as HistoryIcon,
-  LayoutTemplate, ListChecks, Pause, Pencil, Play, Plus, Rocket, Save, Search, SlidersHorizontal, Sparkles, Table2, Trash2, X,
+  ArrowRight, Brain, ChartLine, ChevronDown, ClipboardCheck, Copy, Database, Eye, FlaskConical, History as HistoryIcon,
+  LayoutTemplate, ListChecks, Pause, Pencil, Play, Plus, RefreshCw, Rocket, Save, Search, SlidersHorizontal, Sparkles, Table2, Trash2, X,
 } from "lucide-react";
 import { Btn, Segmented, Spinner } from "../components/ui";
 import { CardDetails } from "../components/CardDetails";
+import { TableAnalyzeDialog } from "../components/TableAnalyzeDialog";
 import { Chart, defaultChartType, isTemporalName, numericColumns } from "../components/Chart";
 import { ChartPreviewModal } from "../components/ChartPreviewModal";
 import { LinePreview } from "../components/LinePreview";
 import { windowForResolution, type Resolution } from "../components/Chart";
 import { isTradingEligible, TradingChart } from "../components/TradingChart";
-import { cardApi, api, bankApi, chartApi, graphApi, playgroundApi, llmReasonText, type BankOverviewEntry, type Card, type CardTemplate, type ChartSuggestion, type Line, type ReapplyResult, type TestResult, type GraphSpec, type ChartType, type PlaygroundResult, type QueryHistoryEntry, type LineColumn } from "../lib/api";
+import { cardApi, api, bankApi, chartApi, graphApi, playgroundApi, llmReasonText, ALL_STREAMS, SKIP_DAYS, SKIP_DAY_LABEL, defaultSkipSchedule, hasCustomSkip, skipSummary, type BankOverviewEntry, type CandidateQuirk, type Card, type CardTemplate, type CardSample, type ChartSuggestion, type HintPoint, type Line, type ReapplyResult, type TestResult, type GraphSpec, type ChartType, type PlaygroundResult, type QueryHistoryEntry, type LineColumn, type SkipSchedule, type StreamResolution } from "../lib/api";
 import { AlertBanner, StatusChip } from "../components/chips";
 import { FormattedText } from "../components/FormattedText";
 import { PushToHindsight } from "../components/PushToHindsight";
@@ -189,7 +190,142 @@ export function Cards() {
   const [appliedByTpl, setAppliedByTpl] = useState<Record<string, boolean>>({});
   const [showTplForm, setShowTplForm] = useState(false);
   const [editTpl, setEditTpl] = useState<CardTemplate | null>(null);
-  const [tplDraft, setTplDraft] = useState({ name: "", description: "", sqlTemplate: "", granularity: "hourly", unit: "", extractHint: "", context: "" });
+  const [tplDraft, setTplDraft] = useState({ name: "", description: "", sqlTemplate: "", granularity: "hourly", resolutions: [...ALL_STREAMS] as StreamResolution[], skipSchedule: defaultSkipSchedule(), unit: "", extractHint: "", context: "" });
+  // Form-level Suggest charts: draft-native (no save). Recommend runs on the
+  // unsaved draft inputs; the preview samples the draft SQL on the picked
+  // line. Save (new) carries reviewed suggestions into the created template.
+  const [formSug, setFormSug] = useState<ChartSuggestion[]>([]);
+  const [formSample, setFormSample] = useState<TestResult | null>(null);
+  const [formSampledAt, setFormSampledAt] = useState<string | null>(null);
+  const [formPreviewLoading, setFormPreviewLoading] = useState(false);
+  const [formSampleError, setFormSampleError] = useState<string | null>(null);
+  const [formRes, setFormRes] = useState<Resolution>("hourly");
+  const [formSuggestBusy, setFormSuggestBusy] = useState(false);
+  const [formSuggestError, setFormSuggestError] = useState<string | null>(null);
+  const [formModalOpen, setFormModalOpen] = useState(false);
+  const [formCtx, setFormCtx] = useState<{ lineId: string; sql: string } | null>(null);
+  async function loadFormSample(lineId: string, sql: string, res: Resolution) {
+    setFormPreviewLoading(true);
+    setFormSampleError(null);
+    try {
+      const w = windowForResolution(res);
+      let s = await chartApi.querySample(lineId, sql, w.from, w.to);
+      if (s.rows.length === 0) {
+        // Stale demo data: retry over the trailing week so the draft proves out.
+        s = await chartApi.querySample(lineId, sql, new Date(Date.now() - 7 * 86400 * 1000).toISOString());
+      }
+      setFormSample(s);
+      setFormSampledAt(new Date().toISOString());
+    } catch (e) {
+      setFormSampleError((e as Error).message);
+      setFormSample(null);
+    } finally {
+      setFormPreviewLoading(false);
+    }
+  }
+  async function onFormSuggest() {
+    const ref = lines.find((l) => l.id === tplPickLine) ?? lines[0];
+    if (!ref) {
+      setFormSuggestError("No line available — register a line first, then suggest charts.");
+      return;
+    }
+    if (!tplDraft.sqlTemplate.trim()) {
+      setFormSuggestError("Enter the SQL query first — suggestions are built from it.");
+      return;
+    }
+    setFormSuggestBusy(true);
+    setFormSuggestError(null);
+    try {
+      const r = await chartApi.recommendDraft({
+        name: tplDraft.name,
+        description: tplDraft.description,
+        sqlTemplate: tplDraft.sqlTemplate,
+        unit: tplDraft.unit,
+        granularity: granularityForStreams(tplDraft.resolutions),
+        threshold: null,
+        referenceLineId: ref.id,
+      });
+      setFormSug(r.suggestions ?? []);
+      setFormCtx({ lineId: ref.id, sql: tplDraft.sqlTemplate });
+      setFormRes("hourly");
+      setFormModalOpen(true);
+      await loadFormSample(ref.id, tplDraft.sqlTemplate, "hourly");
+    } catch (e) {
+      setFormSuggestError((e as Error).message);
+    } finally {
+      setFormSuggestBusy(false);
+    }
+  }
+  const [descExamplesOpen, setDescExamplesOpen] = useState(false);
+  const [steerOpen, setSteerOpen] = useState(false);
+  const [steerText, setSteerText] = useState("");
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestError, setSuggestError] = useState<string | null>(null);
+  const [generatingSql, setGeneratingSql] = useState(false);
+  const [sqlGenError, setSqlGenError] = useState<string | null>(null);
+  const [sqlThinking, setSqlThinking] = useState<string[] | null>(null);
+  const [thinkingOpen, setThinkingOpen] = useState(false);
+  const [testingSql, setTestingSql] = useState(false);
+  const [sqlTestError, setSqlTestError] = useState<string | null>(null);
+  /** Template-form test panel: last run rows + the SQL they came from (stale check). */
+  const [sqlTest, setSqlTest] = useState<{
+    rows: Record<string, unknown>[];
+    columns: string[];
+    rowCount: number;
+    from: string;
+    to: string;
+    label: string;
+    testedSql: string;
+    at: string;
+  } | null>(null);
+  /** Run the editor SQL (24h, then 7d fallback) and fill the test panel. */
+  const runSqlTest = (sql: string) => {
+    const ref = lines.find((l) => l.id === tplPickLine) ?? lines[0];
+    if (!ref || !sql.trim()) return;
+    setTestingSql(true);
+    setSqlTestError(null);
+    const now = new Date();
+    const dayAgo = new Date(now.getTime() - 86400 * 1000).toISOString();
+    const weekAgo = new Date(now.getTime() - 7 * 86400 * 1000).toISOString();
+    const fill = (t: TestResult, from: string, to: string, label: string) => setSqlTest({
+      rows: t.rows,
+      columns: t.columns,
+      rowCount: t.rowCount,
+      from,
+      to,
+      label,
+      testedSql: sql,
+      at: new Date().toISOString(),
+    });
+    chartApi.querySample(ref.id, sql).then(
+      (t) => (t.rowCount > 0
+        ? fill(t, dayAgo, now.toISOString(), "")
+        : chartApi.querySample(ref.id, sql, weekAgo).then(
+          (t2) => fill(t2, weekAgo, now.toISOString(), t2.rowCount > 0 ? "7d window" : "24h + 7d empty"),
+          (e3) => setSqlTestError((e3 as Error).message),
+        )),
+      (e2) => setSqlTestError((e2 as Error).message),
+    ).finally(() => setTestingSql(false));
+  };
+  const [hintPoints, setHintPointsState] = useState<HintPoint[]>([]);
+  const [hintCandidates, setHintCandidates] = useState<CandidateQuirk[]>([]);
+  const [quirkVerdicts, setQuirkVerdicts] = useState<Record<number, "yes" | "no">>({});
+  const [quirkStatus, setQuirkStatus] = useState<"ok" | "insufficient-data" | null>(null);
+  const [quirkDays, setQuirkDays] = useState(0);
+  /** Point edits are the hint: keep the saved string joined in sync. */
+  const setHintPoints = (next: HintPoint[]) => {
+    setHintPointsState(next);
+    setTplDraft((d) => ({ ...d, extractHint: next.map((p) => p.text.trim()).filter(Boolean).join(" | ") }));
+  };
+  /** (Re)opening the form resets the suggest session; edit flow preloads. */
+  const resetHintSession = (savedHint: string) => {
+    setHintPointsState(splitHintPoints(savedHint));
+    setHintCandidates([]);
+    setQuirkVerdicts({});
+    setQuirkStatus(null);
+    setQuirkDays(0);
+    setSuggestError(null);
+  };
   const [instTpl, setInstTpl] = useState<CardTemplate | null>(null);
   const [instLine, setInstLine] = useState("");
   const [instMap, setInstMap] = useState<Record<string, string>>({});
@@ -225,7 +361,7 @@ export function Cards() {
     });
   }
   const [showCardForm, setShowCardForm] = useState(false);
-  const [cardDraft, setCardDraft] = useState({ lineId: "", name: "", tables: "", sql: "", granularity: "hourly", unit: "", extractHint: "", context: "", threshold: "", changeMode: "forward", reingestFrom: "" });
+  const [cardDraft, setCardDraft] = useState({ lineId: "", name: "", tables: "", sql: "", granularity: "hourly", resolutions: [...ALL_STREAMS] as StreamResolution[], skipSchedule: defaultSkipSchedule(), unit: "", extractHint: "", context: "", threshold: "", changeMode: "forward", reingestFrom: "" });
   const [editCard, setEditCard] = useState<Card | null>(null);
   const [graphCard, setGraphCard] = useState<Card | null>(null);
   const [specificsCard, setSpecificsCard] = useState<Card | null>(null);
@@ -267,6 +403,7 @@ export function Cards() {
   const [dupSearch, setDupSearch] = useState("");
   const [dupSug, setDupSug] = useState(false);
   const [tplPickLine, setTplPickLine] = useState("");
+  const [tplDetailTable, setTplDetailTable] = useState<{ schema: string; table: string } | null>(null);
   const [tplLineSearch, setTplLineSearch] = useState("");
   const [showLineSug, setShowLineSug] = useState(false);
   const tplSqlRef = useRef<HTMLTextAreaElement>(null);
@@ -439,14 +576,20 @@ export function Cards() {
 
   function openEditCard(c: Card) {
     setEditCard(c);
-    setCardDraft({ lineId: c.lineId, name: c.name, tables: c.tables.join(", "), sql: c.sql, granularity: c.granularity, unit: c.unit, extractHint: c.extractHint, context: c.context ?? "", threshold: c.threshold != null ? String(c.threshold) : "", changeMode: "forward", reingestFrom: "" });
+    setCardDraft({ lineId: c.lineId, name: c.name, tables: c.tables.join(", "), sql: c.sql, granularity: c.granularity, resolutions: [...(c.resolutions ?? ALL_STREAMS)], skipSchedule: c.skipSchedule ?? defaultSkipSchedule(), unit: c.unit, extractHint: c.extractHint, context: c.context ?? "", threshold: c.threshold != null ? String(c.threshold) : "", changeMode: "forward", reingestFrom: "" });
     setShowCardForm(true);
   }
 
   function openEditTemplate(t: CardTemplate) {
     const ref = t.referenceLineId ? lines.find((l) => l.id === t.referenceLineId) : undefined;
     setEditTpl(t);
-    setTplDraft({ name: t.name, description: t.description, sqlTemplate: t.sqlTemplate, granularity: t.granularity, unit: t.unit, extractHint: t.extractHint, context: t.context ?? "" });
+    setTplDraft({ name: t.name, description: t.description, sqlTemplate: t.sqlTemplate, granularity: t.granularity, resolutions: [...(t.resolutions ?? ALL_STREAMS)], skipSchedule: t.skipSchedule ?? defaultSkipSchedule(), unit: t.unit, extractHint: t.extractHint, context: t.context ?? "" });
+    resetHintSession(t.extractHint ?? "");
+    setFormSug([]);
+    setFormCtx(null);
+    setFormModalOpen(false);
+    setFormSample(null);
+    setFormSuggestError(null);
     setTplPickLine(t.referenceLineId ?? "");
     setTplLineSearch(ref ? `${ref.id} — ${ref.name}` : "");
     setShowTplForm(true);
@@ -485,7 +628,7 @@ export function Cards() {
           <span className="ml-auto"><StatusChip tone={c.status === "live" ? "ok" : "mute"}>{c.status.toUpperCase()}</StatusChip></span>
         </div>
         <div className="mt-1 text-xs text-slate-400">
-          {c.granularity}{c.unit ? ` · ${c.unit}` : ""}{c.threshold != null ? ` · warn > ${c.threshold}` : ""} · tables: <FormattedText text={c.tables.join(", ") || "—"} highlightTables />
+          {c.granularity}{streamShort(c.resolutions)}{hasCustomSkip(c.skipSchedule) ? " · skips set" : ""}{c.unit ? ` · ${c.unit}` : ""}{c.threshold != null ? ` · warn > ${c.threshold}` : ""} · tables: <FormattedText text={c.tables.join(", ") || "—"} highlightTables />
           <span className="tnum ml-2">≈{tickCost(c)} queries/day</span>
         </div>
         <pre className="mt-2 max-h-28 overflow-auto rounded bg-slate-100 p-2 font-mono text-xs dark:bg-ink-900">{c.sql || "(no SQL yet)"}</pre>
@@ -575,7 +718,7 @@ export function Cards() {
           </Link>
             {tab === "cards"
             ? <Btn variant="primary" icon={Plus} onClick={() => { setShowAdd(true); setAddLine(lines[0]?.id ?? ""); setAddQ(""); setAddMaps({}); setAddChecked([]); setAddDone(null); }} title="Register features onto a line: pick the line, see its tables, search templates, attach several at once as dormant copies. SQL and thresholds live in the template." className="glass-pill glass-pill--blue">New card</Btn>
-            : <Btn variant="primary" icon={Plus} onClick={() => { setEditTpl(null); setTplDraft({ name: "", description: "", sqlTemplate: "", granularity: "hourly", unit: "", extractHint: "", context: "" }); setTplPickLine(""); setTplLineSearch(""); setShowTplForm(true); }} className="glass-pill glass-pill--blue">New template</Btn>}
+            : <Btn variant="primary" icon={Plus} onClick={() => { setEditTpl(null); setTplDraft({ name: "", description: "", sqlTemplate: "", granularity: "hourly", resolutions: [...ALL_STREAMS] as StreamResolution[], skipSchedule: defaultSkipSchedule(), unit: "", extractHint: "", context: "" }); resetHintSession(""); setFormSug([]); setFormCtx(null); setFormModalOpen(false); setFormSample(null); setFormSuggestError(null); setTplPickLine(""); setTplLineSearch(""); setShowTplForm(true); }} className="glass-pill glass-pill--blue">New template</Btn>}
         </div>
       </div>
 
@@ -747,7 +890,7 @@ export function Cards() {
                 <span className="tnum text-xs text-slate-400">{copies.length} {copies.length === 1 ? "copy" : "copies"}</span>
                 {staleCount > 0 && <StatusChip tone="warn">{staleCount} stale</StatusChip>}
                 <span className="tnum text-xs text-slate-400">{sugCount} suggestions</span>
-                <span className="ml-auto text-xs text-slate-400">{t.granularity}{t.unit ? ` · ${t.unit}` : ""}</span>
+                <span className="ml-auto text-xs text-slate-400" title={hasCustomSkip(t.skipSchedule) ? skipSummary(t.skipSchedule) : undefined}>{t.granularity}{streamShort(t.resolutions)}{hasCustomSkip(t.skipSchedule) ? " · skips set" : ""}{t.unit ? ` · ${t.unit}` : ""}</span>
               </div>
               {isOpen && (<>
               {t.description && <div className="mt-1 text-sm text-slate-500">{t.description}</div>}
@@ -1148,19 +1291,62 @@ export function Cards() {
       {showTplForm && (
         <Modal title={editTpl ? `Edit ${editTpl.name}` : "New template"} onClose={() => { setShowTplForm(false); setEditTpl(null); }}>
           <Field label="Name"><input value={tplDraft.name} onChange={(e) => setTplDraft({ ...tplDraft, name: e.target.value })} className={inp} /></Field>
-          <Field label="Description"><input value={tplDraft.description} onChange={(e) => setTplDraft({ ...tplDraft, description: e.target.value })} className={inp} /></Field>
+          <label className="block text-sm">
+            <span className="flex items-center justify-between gap-2">
+              <span>Description — plant truth lives here</span>
+              <button
+                type="button"
+                onClick={() => setDescExamplesOpen((v) => !v)}
+                className="inline-flex shrink-0 items-center gap-1 text-xs text-accent-500 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60"
+              >
+                {descExamplesOpen ? "hide examples" : "show examples"}
+                <ChevronDown size={12} className={`transition-transform duration-150 ${descExamplesOpen ? "rotate-180" : ""}`} />
+              </button>
+            </span>
+            <span className="block">
+              <textarea
+                rows={3}
+                value={tplDraft.description}
+                onChange={(e) => setTplDraft({ ...tplDraft, description: e.target.value })}
+                placeholder="Everything you think about this template: what it monitors, what's normal, what's danger — e.g. Furnace must stay hot: below 28 is danger, above is normal. Lunch dip 12–13h is normal."
+                className={inp}
+              />
+              {descExamplesOpen && (
+                <div className="mt-1 flex flex-col gap-1 rounded-lg bg-slate-50 p-2 text-xs text-slate-500 dark:bg-ink-800/50 dark:text-ink-300">
+                  <div>• Temp watch: hourly avg_temp_c, normal 20–23 °C. Warn above 26 on multi-bucket runs. 02:00 recalibration dip is maintenance, never a fault.</div>
+                  <div>• Energy safety: hourly kW per manufacturer. Counters only increase — deltas matter, never raw levels. Fridays run half-shift, low values expected.</div>
+                </div>
+              )}
+            </span>
+          </label>
           <Field label="Line — the tables below come from here">
             <div className="relative">
-              <Search size={18} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                value={tplLineSearch}
-                onChange={(e) => { setTplLineSearch(e.target.value); setShowLineSug(true); }}
-                onFocus={() => setShowLineSug(true)}
-                onBlur={() => setShowLineSug(false)}
-                placeholder="Search lines by name or id…"
-                className="w-full rounded-lg border border-slate-300 bg-transparent py-3 pl-10 pr-3 text-base focus:border-accent-500 focus:outline-none dark:border-ink-700"
-              />
-              {showLineSug && (() => {
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <Search size={18} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    value={tplLineSearch}
+                    disabled={lines.some((l) => l.id === tplPickLine)}
+                    onChange={(e) => { setTplLineSearch(e.target.value); setShowLineSug(true); }}
+                    onFocus={() => setShowLineSug(true)}
+                    onBlur={() => setShowLineSug(false)}
+                    placeholder="Search lines by name or id…"
+                    title={lines.some((l) => l.id === tplPickLine) ? "Line locked — Clear to research again" : undefined}
+                    className="w-full rounded-xl border border-slate-300 bg-slate-50/60 py-3 pl-10 pr-3 text-base shadow-sm focus:border-accent-500 focus:outline-none disabled:opacity-60 dark:border-ink-700 dark:bg-ink-800/50"
+                  />
+                </div>
+                {lines.some((l) => l.id === tplPickLine) && (
+                  <button
+                    type="button"
+                    onClick={() => { setTplPickLine(""); setTplLineSearch(""); }}
+                    title="Clear the picked line and research again"
+                    className="inline-flex shrink-0 items-center gap-1 self-center px-1 text-sm text-accent-500 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 glass-pill glass-pill--neutral"
+                  >
+                    <X size={12} />clear
+                  </button>
+                )}
+              </div>
+              {showLineSug && !lines.some((l) => l.id === tplPickLine) && (() => {
                 const q = tplLineSearch.trim().toLowerCase();
                 const scored = lines.map((l) => {
                   if (!q) return { l, score: 0 };
@@ -1196,36 +1382,201 @@ export function Cards() {
               })()}
             </div>
             {(() => {
-              const pick = lines.find((l) => l.id === tplPickLine) ?? lines[0];
-              if (!pick) return null;
+              const pick = lines.find((l) => l.id === tplPickLine);
+              if (!pick) {
+                return (
+                  <div className="mt-2 rounded-lg border border-dashed border-slate-300 px-3 py-2.5 text-sm text-slate-400 dark:border-ink-700">
+                    Choose the line above to see its tables…
+                  </div>
+                );
+              }
               return (
-                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                <div className="mt-2 flex flex-col gap-1.5">
                   <span className="tnum text-sm text-slate-500">
-                    <span className="font-mono">{pick.id}</span> · {pick.memberTables.length} tables — click to insert:
+                    <span className="font-mono">{pick.id}</span> · {pick.memberTables.length} tables — click name to insert, details for column definitions:
                   </span>
                   {pick.memberTables.length === 0 && <span className="text-sm text-slate-400">no tables on this line — add some in Lines first</span>}
-                  {pick.memberTables.map((m) => (
-                    <button
-                      key={m}
-                      type="button"
-                      onClick={() => insertAtCursor(tplSqlRef, tplDraft.sqlTemplate, (v) => setTplDraft({ ...tplDraft, sqlTemplate: v }), m)}
-                      title={`Insert ${m} at cursor`}
-                      className="rounded-lg border border-slate-200 px-2.5 py-1 font-mono text-sm transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:border-ink-700 dark:hover:bg-ink-800"
-                    >
-                      {m}
-                    </button>
-                  ))}
+                  {pick.memberTables.map((m, ti) => {
+                    const dot = m.indexOf(".");
+                    const sch = dot > 0 ? m.slice(0, dot) : "public";
+                    const tbl = dot > 0 ? m.slice(dot + 1) : m;
+                    return (
+                      <div key={m} className="flex items-center gap-1.5">
+                        <span className="tnum w-6 shrink-0 text-right text-xs text-slate-400">{ti + 1}.</span>
+                        <button
+                          type="button"
+                          onClick={() => insertAtCursor(tplSqlRef, tplDraft.sqlTemplate, (v) => setTplDraft({ ...tplDraft, sqlTemplate: v }), m)}
+                          title={`Insert ${m} at cursor`}
+                          className="rounded-lg border border-accent-500/30 bg-accent-500/5 px-2.5 py-1 font-mono text-sm text-accent-500 transition-colors hover:bg-accent-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:border-accent-500/30"
+                        >
+                          {m}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setTplDetailTable({ schema: sch, table: tbl })}
+                          title={`Column definitions for ${m}`}
+                          className="shrink-0 px-2 py-1 text-xs text-slate-500 transition-colors hover:text-accent-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 glass-pill glass-pill--neutral"
+                        >
+                          details
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               );
             })()}
           </Field>
-          <Field label="SQL template ({{from}} / {{to}} for windowed test-runs)">
+          <div>
             <SqlHint
+              title="SQL Query"
               onInsert={(sql) => {
                 if (tplDraft.sqlTemplate.trim() && !confirm("Replace the current SQL template with this example?")) return;
                 setTplDraft({ ...tplDraft, sqlTemplate: sql });
+                setSqlTest(null);
+                setSqlTestError(null);
               }}
             />
+            <div className="mb-1 text-[11px] text-slate-400">Write or generate the read-only query for this feature — {"{{from}}"} / {"{{to}}"} bound the window at tick, test, and preview time.</div>
+            <div className="mb-1 flex flex-wrap items-center gap-2">
+              <Btn
+                size="sm"
+                icon={Sparkles}
+                loading={generatingSql}
+                disabled={generatingSql || !(lines.find((l) => l.id === tplPickLine) ?? lines[0])}
+                title={(lines.find((l) => l.id === tplPickLine) ?? lines[0]) ? "Draft SQL from name, description and the reference line's tables — then auto-tests it" : "Pick a reference line first — SQL grounds on its tables"}
+                onClick={() => {
+                  const ref = lines.find((l) => l.id === tplPickLine) ?? lines[0];
+                  if (!ref) return;
+                  if (tplDraft.sqlTemplate.trim() && !confirm("Replace the current SQL template with the AI draft?")) return;
+                  setGeneratingSql(true);
+                  setSqlGenError(null);
+                  setSqlTest(null);
+                  setSqlTestError(null);
+                  setSqlThinking(null);
+                  setThinkingOpen(false);
+                  chartApi.suggestSql({
+                    name: tplDraft.name,
+                    description: tplDraft.description,
+                    granularity: granularityForStreams(tplDraft.resolutions),
+                    resolutions: tplDraft.resolutions,
+                    unit: tplDraft.unit,
+                    referenceLineId: ref.id,
+                    steer: steerText,
+                  }).then((r) => {
+                    setTplDraft((d) => ({ ...d, sqlTemplate: r.sql }));
+                    setSqlThinking(r.thinking ?? []);
+                    runSqlTest(r.sql);
+                  }).catch((e) => {
+                    setSqlGenError((e as Error).message);
+                  }).finally(() => {
+                    setGeneratingSql(false);
+                  });
+                }}
+                className="glass-pill glass-pill--blue"
+              >
+                Generate SQL
+              </Btn>
+              {sqlGenError && <span className="text-xs text-state-bad">{sqlGenError}</span>}
+              <Btn
+                size="sm"
+                icon={FlaskConical}
+                type="button"
+                loading={testingSql}
+                disabled={testingSql || generatingSql || !tplDraft.sqlTemplate.trim() || !(lines.find((l) => l.id === tplPickLine) ?? lines[0])}
+                title="Run the editor SQL now — shows window, rows, and values below"
+                onClick={() => runSqlTest(tplDraft.sqlTemplate)}
+                className="glass-pill glass-pill--ok"
+              >
+                Test
+              </Btn>
+              <Btn
+                size="sm"
+                icon={Brain}
+                type="button"
+                onClick={() => setThinkingOpen((v) => !v)}
+                disabled={generatingSql}
+                title={sqlThinking && sqlThinking.length > 0 ? "Why the LLM wrote this SQL — its summary points" : "No reasoning yet — generate SQL first"}
+                className="glass-pill glass-pill--amber"
+              >
+                LLM thinking
+              </Btn>
+            </div>
+            {thinkingOpen && (
+              sqlThinking && sqlThinking.length > 0 ? (
+                <div className="mb-1 rounded-lg border border-state-warn/40 bg-state-warn/5 p-2.5">
+                  <div className="mb-1 text-xs font-semibold text-state-warn">Why this SQL</div>
+                  <ul className="flex flex-col gap-1 text-xs text-slate-600 dark:text-ink-300">
+                    {sqlThinking.map((t, i) => (
+                      <li key={i} className="flex gap-1.5"><span className="text-state-warn">•</span><span>{t}</span></li>
+                    ))}
+                  </ul>
+                </div>
+              ) : (
+                <div className="mb-1 rounded-lg border border-slate-200 p-2.5 text-xs text-slate-400 dark:border-ink-700">
+                  {sqlGenError
+                    ? `Last generation failed (${sqlGenError}) — no thinking available. Regenerate.`
+                    : "No SQL generated yet — no LLM call made in this session. Press Generate SQL."}
+                </div>
+              )
+            )}
+            {(testingSql || sqlTestError || sqlTest) && (
+              <div className="mb-1 rounded-xl border border-slate-200 dark:border-ink-800">
+                <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-3 py-2 dark:border-ink-800">
+                  {testingSql ? (
+                    <span className="flex items-center gap-2 text-xs text-slate-400"><Spinner /> Running…</span>
+                  ) : sqlTest ? (
+                    <>
+                      <span className="tnum text-xs text-slate-500">
+                        from {new Date(sqlTest.from).toLocaleString()} → to {new Date(sqlTest.to).toLocaleString()}
+                        {sqlTest.label ? ` · ${sqlTest.label}` : ""}
+                      </span>
+                      {sqlTest.testedSql !== tplDraft.sqlTemplate && (
+                        <span className="rounded-full bg-state-warn/10 px-1.5 py-px text-[10px] text-state-warn ring-1 ring-state-warn/30">SQL changed — rerun</span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => runSqlTest(tplDraft.sqlTemplate)}
+                        disabled={testingSql}
+                        title="Re-run with the latest data"
+                        className="ml-auto inline-flex items-center gap-1 text-xs text-accent-500 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 disabled:opacity-40"
+                      >
+                        <RefreshCw size={12} />rerun
+                      </button>
+                    </>
+                  ) : null}
+                </div>
+                {sqlTestError && !testingSql && (
+                  <div className="px-3 py-2 text-xs text-state-bad">Test failed: {sqlTestError} — draft kept.</div>
+                )}
+                {sqlTest && !testingSql && (
+                  <div className="px-3 py-2">
+                    <div className="tnum mb-1.5 text-xs font-semibold text-slate-500">
+                      {sqlTest.rowCount} rows{sqlTest.columns.length > 0 ? ` · ${sqlTest.columns.join(", ")}` : ""}
+                    </div>
+                    {sqlTest.rowCount === 0 ? (
+                      <div className="text-xs text-slate-400">0 rows in this window — try a different window or check the line's data.</div>
+                    ) : (
+                      <div className="max-h-56 overflow-auto rounded-lg border border-slate-100 dark:border-ink-800">
+                        <table className="tnum w-full text-xs">
+                          <thead className="sticky top-0 bg-slate-50 dark:bg-ink-800/80">
+                            <tr className="text-left text-slate-400">
+                              {sqlTest.columns.map((c) => <th key={c} className="whitespace-nowrap px-2 py-1 font-medium">{c}</th>)}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {sqlTest.rows.slice(0, 50).map((row, i) => (
+                              <tr key={i} className="border-t border-slate-100 text-slate-600 odd:bg-slate-50/50 dark:border-ink-800/60 dark:text-ink-300 dark:odd:bg-ink-800/30">
+                                {sqlTest.columns.map((c) => <td key={c} className="whitespace-nowrap px-2 py-1">{String(row[c] ?? "")}</td>)}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             {(() => {
               const pick = lines.find((l) => l.id === tplPickLine) ?? lines[0];
               const members = pick?.memberTables ?? [];
@@ -1256,16 +1607,112 @@ export function Cards() {
               );
             })()}
             <div className="mt-1 text-[11px] text-slate-400">table names light up inside the box — teal = on the picked line, amber = missing there. Swap per line at Instantiate → line.</div>
-          </Field>
-          <div className="flex gap-3">
-            <Field label="Granularity">
-              <select value={tplDraft.granularity} onChange={(e) => setTplDraft({ ...tplDraft, granularity: e.target.value })} className={inp}>
-                <option value="hourly">hourly</option><option value="shift">shift</option><option value="daily">daily</option>
-              </select>
-            </Field>
-            <Field label="Unit"><input value={tplDraft.unit} onChange={(e) => setTplDraft({ ...tplDraft, unit: e.target.value })} placeholder="°C, pcs…" className={inp} /></Field>
           </div>
-          <Field label="Extraction hint (for the AI extractor)"><textarea rows={2} value={tplDraft.extractHint} onChange={(e) => setTplDraft({ ...tplDraft, extractHint: e.target.value })} className={inp} /></Field>
+          <div className="flex flex-wrap gap-3">
+            <StreamResolutions value={tplDraft.resolutions} onChange={(v) => setTplDraft({ ...tplDraft, resolutions: v })} hint="Finest checked queries the plant; coarser ones roll up. Copies inherit this." />
+            <Field label="Unit"><input value={tplDraft.unit} onChange={(e) => setTplDraft({ ...tplDraft, unit: e.target.value })} placeholder="°C, pcs…" className={inp} /></Field>
+            <WeeklyHours hint="Copies inherit this — unchecked hours never ingest." schedule={tplDraft.skipSchedule} onSchedule={(v) => setTplDraft({ ...tplDraft, skipSchedule: v })} />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Btn
+              size="sm"
+              icon={Sparkles}
+              onClick={() => void onFormSuggest()}
+              loading={formSuggestBusy}
+              disabled={formSuggestBusy}
+              title="Recommend charts from the unsaved draft and open the preview screen — no save needed."
+              className="glass-pill glass-pill--blue"
+            >
+              Suggest charts
+            </Btn>
+            {formSuggestError && <span className="text-xs text-state-bad">{formSuggestError}</span>}
+          </div>
+          <div className="rounded-lg border border-slate-200 p-2.5 dark:border-ink-800">
+            <div className="flex flex-wrap items-center gap-2">
+              <Btn
+                size="sm"
+                icon={Sparkles}
+                loading={suggesting}
+                disabled={suggesting || !(lines.find((l) => l.id === tplPickLine) ?? lines[0])}
+                title={(lines.find((l) => l.id === tplPickLine) ?? lines[0]) ? "Draft both fields from title, SQL and the reference line's column meanings" : "Pick a reference line first — hints ground on its tables"}
+                onClick={() => {
+                  const ref = lines.find((l) => l.id === tplPickLine) ?? lines[0];
+                  if (!ref) return;
+                  setSuggesting(true);
+                  setSuggestError(null);
+                  chartApi.suggestHints({
+                    name: tplDraft.name,
+                    description: tplDraft.description,
+                    sqlTemplate: tplDraft.sqlTemplate,
+                    unit: tplDraft.unit,
+                    threshold: null,
+                    granularity: granularityForStreams(tplDraft.resolutions),
+                    referenceLineId: ref.id,
+                    steer: steerText,
+                  }).then((r) => {
+                    setHintCandidates(r.candidateQuirks ?? []);
+                    setQuirkVerdicts({});
+                    setQuirkStatus(r.quirkStatus ?? null);
+                    setQuirkDays(r.daysAvailable ?? 0);
+                    setHintPoints((r.points ?? []).map((p) => ({ text: p.text, source: "ai" })));
+                    setTplDraft((d) => ({ ...d, context: r.context }));
+                  }).catch((e) => {
+                    setSuggestError((e as Error).message);
+                  }).finally(() => {
+                    setSuggesting(false);
+                  });
+                }}
+                className="glass-pill glass-pill--blue"
+              >
+                Suggest both
+              </Btn>
+              <button type="button" onClick={() => setSteerOpen((v) => !v)} className="text-xs text-slate-400">
+                {steerOpen ? "▾" : "▸"} Steer the AI{steerText.trim() ? " (set)" : " (optional)"}
+              </button>
+              {suggestError && <span className="text-xs text-state-bad">{suggestError}</span>}
+            </div>
+            {steerOpen && (
+              <textarea
+                rows={2}
+                value={steerText}
+                onChange={(e) => setSteerText(e.target.value)}
+                placeholder="Plant knowledge the AI can't see in columns — e.g. ignore the 2am recalibration dip, warn above 26 only on multi-bucket runs"
+                className={`${inp} mt-2`}
+              />
+            )}
+          </div>
+          {quirkStatus === "insufficient-data" && (
+            <div className="rounded-lg border border-state-warn/40 px-3 py-2 text-xs text-slate-500">
+              Only {quirkDays} day{quirkDays === 1 ? "" : "s"} of data — not enough to detect quirks (needs 5). No quirk points drafted; write your own below or pick a line with more history.
+            </div>
+          )}
+          {hintCandidates.length > 0 && (
+            <div className="rounded-lg border border-slate-200 p-2.5 dark:border-ink-800">
+              <div className="mb-1.5 text-xs font-semibold text-slate-500">Measured quirks — confirm or deny ({quirkDays} days of samples)</div>
+              <div className="flex flex-col gap-1.5">
+                {hintCandidates.map((q, i) => {
+                  const verdict = quirkVerdicts[i];
+                  return (
+                    <div key={i} className="flex flex-wrap items-center gap-1.5 text-xs">
+                      <span className="rounded bg-slate-100 px-1.5 py-px font-mono text-slate-500 dark:bg-ink-800 dark:text-ink-300">{q.kind}{q.at ? ` ${q.at}` : ""}</span>
+                      <span className="text-slate-500">{q.column} · {q.detail}</span>
+                      {verdict ? (
+                        <span className={`rounded-full px-1.5 py-px text-[10px] ring-1 ${verdict === "yes" ? "bg-state-ok/10 text-state-ok ring-state-ok/30" : "bg-state-warn/10 text-state-warn ring-state-warn/30"}`}>
+                          {verdict === "yes" ? "ignoring" : "watching"}
+                        </span>
+                      ) : (
+                        <>
+                          <button type="button" onClick={() => { setQuirkVerdicts((v) => ({ ...v, [i]: "yes" })); setHintPoints([...hintPoints, { text: q.proposedClause, source: "quirk" }]); }} className="rounded-full bg-state-ok/10 px-2 py-px text-[11px] text-state-ok ring-1 ring-state-ok/30">Yes, ignore it</button>
+                          <button type="button" onClick={() => { setQuirkVerdicts((v) => ({ ...v, [i]: "no" })); setHintPoints([...hintPoints, { text: `The ${q.at ? `${q.at} ` : ""}${q.kind} in ${q.column} is real — always report it (${q.detail}).`, source: "watch" }]); }} className="rounded-full bg-state-warn/10 px-2 py-px text-[11px] text-state-warn ring-1 ring-state-warn/30">No, it's real</button>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          <HintPointEditor points={hintPoints} onChange={setHintPoints} />
           <Field label="Retain context (shown alongside each stored fact — copies inherit this)"><input value={tplDraft.context} onChange={(e) => setTplDraft({ ...tplDraft, context: e.target.value })} placeholder="e.g. hourly temperature rollup" className={inp} /></Field>
           {editTpl && tplDraft.sqlTemplate !== editTpl.sqlTemplate && (
             <div className="rounded-lg border border-state-warn/40 px-3 py-2 text-xs text-slate-500">
@@ -1276,11 +1723,55 @@ export function Cards() {
             <button onClick={() => { setShowTplForm(false); setEditTpl(null); }} className="rounded-lg px-4 py-2 text-sm text-slate-500 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800">cancel</button>
             <Btn variant="primary" icon={Save} className="glass-pill glass-pill--blue" onClick={() => void act(() => {
               const ref = lines.find((l) => l.id === tplPickLine) ?? lines[0];
-              const body = { ...tplDraft, referenceLineId: ref?.id ?? null };
-              return (editTpl ? cardApi.updateTemplate(editTpl.id, body) : cardApi.createTemplate(body)).then(() => { setShowTplForm(false); setEditTpl(null); });
+              const body = { ...tplDraft, granularity: granularityForStreams(tplDraft.resolutions), referenceLineId: ref?.id ?? null };
+              // New templates carry reviewed draft suggestions so suggest →
+              // review → save keeps everything; edits never overwrite stored ones.
+              const payload = editTpl ? body : { ...body, chartSuggestions: formSug };
+              return (editTpl ? cardApi.updateTemplate(editTpl.id, body) : cardApi.createTemplate(payload)).then(() => { setShowTplForm(false); setEditTpl(null); });
             })}>{editTpl ? "Save changes" : "Save template"}</Btn>
           </div>
+          {tplDetailTable && (() => {
+            const pick = lines.find((l) => l.id === tplPickLine) ?? lines[0];
+            if (!pick) return null;
+            return (
+              <TableAnalyzeDialog
+                mode="view"
+                lineId={pick.id}
+                schema={tplDetailTable.schema}
+                table={tplDetailTable.table}
+                onClose={() => setTplDetailTable(null)}
+              />
+            );
+          })()}
         </Modal>
+      )}
+      {formModalOpen && (
+        <ChartPreviewModal
+          title={`Preview — ${tplDraft.name || "unsaved draft"}`}
+          subtitle={`Fresh suggestions on reference line ${(tplPickLine || editTpl?.referenceLineId) ?? "—"} · ${editTpl ? "saved to the template" : "unsaved draft — saved on Save template"}`}
+          items={formSug.filter((s) => s.chartType !== "table").map((s, i) => ({
+            key: `${i}`,
+            chartType: s.chartType,
+            xColumn: s.xColumn,
+            yColumns: s.yColumns,
+            title: s.title,
+            rationale: s.rationale,
+            conditions: s.conditions,
+            xLabel: s.xTitle ?? s.xColumn,
+            yLabel: s.yTitle ?? (s.yColumns.length > 0 ? `${s.yColumns.join(", ")}${tplDraft.unit ? ` (${tplDraft.unit})` : ""}` : undefined),
+            units: tplDraft.unit || undefined,
+            series: s.series,
+          }))}
+          sample={formSample}
+          sampledAt={formSampledAt}
+          loadingSample={formPreviewLoading}
+          sampleError={formSampleError}
+          summary={`${formSug.length} fresh suggestions${editTpl ? "" : " · unsaved draft"}`}
+          resolution={formRes}
+          onResolutionChange={(r) => { setFormRes(r); if (formCtx) void loadFormSample(formCtx.lineId, formCtx.sql, r); }}
+          onRefresh={() => { if (formCtx) void loadFormSample(formCtx.lineId, formCtx.sql, formRes); }}
+          onClose={() => setFormModalOpen(false)}
+        />
       )}
 
       {instTpl && (() => {
@@ -1580,14 +2071,11 @@ export function Cards() {
             />
             <textarea rows={5} value={cardDraft.sql} onChange={(e) => setCardDraft({ ...cardDraft, sql: e.target.value })} className={`${inp} font-mono`} />
           </Field>
-          <div className="flex gap-3">
-            <Field label="Granularity">
-              <select value={cardDraft.granularity} onChange={(e) => setCardDraft({ ...cardDraft, granularity: e.target.value })} className={inp}>
-                <option value="hourly">hourly</option><option value="shift">shift</option><option value="daily">daily</option>
-              </select>
-            </Field>
+          <div className="flex flex-wrap gap-3">
+            <StreamResolutions value={cardDraft.resolutions} onChange={(v) => setCardDraft({ ...cardDraft, resolutions: v })} hint="Unchecked streams stop ingesting for this copy." />
             <Field label="Unit"><input value={cardDraft.unit} onChange={(e) => setCardDraft({ ...cardDraft, unit: e.target.value })} placeholder="°C, pcs…" className={inp} /></Field>
             <Field label="Threshold (optional)"><input value={cardDraft.threshold} onChange={(e) => setCardDraft({ ...cardDraft, threshold: e.target.value })} placeholder="warn above…" className={inp} /></Field>
+            <WeeklyHours hint={(() => { const t = templates.find((x) => x.id === editCard?.templateId); return t && hasCustomSkip(t.skipSchedule) ? "Template has custom hours — saving here overrides them for this copy." : undefined; })()} schedule={cardDraft.skipSchedule} onSchedule={(v) => setCardDraft({ ...cardDraft, skipSchedule: v })} />
           </div>
           <Field label="Extraction hint"><textarea rows={2} value={cardDraft.extractHint} onChange={(e) => setCardDraft({ ...cardDraft, extractHint: e.target.value })} className={inp} /></Field>
           <Field label="Retain context (shown alongside each stored fact)"><input value={cardDraft.context} onChange={(e) => setCardDraft({ ...cardDraft, context: e.target.value })} placeholder="e.g. hourly temperature rollup" className={inp} /></Field>
@@ -1616,7 +2104,9 @@ export function Cards() {
                 const body = {
                   name: cardDraft.name,
                   tables: cardDraft.tables.split(",").map((s) => s.trim()).filter(Boolean),
-                  sql: cardDraft.sql, granularity: cardDraft.granularity,
+                  sql: cardDraft.sql, granularity: granularityForStreams(cardDraft.resolutions),
+                  resolutions: cardDraft.resolutions,
+                  skipSchedule: cardDraft.skipSchedule,
                   unit: cardDraft.unit, extractHint: cardDraft.extractHint,
                   context: cardDraft.context,
                   threshold: cardDraft.threshold === "" ? null : Number(cardDraft.threshold),
@@ -1722,6 +2212,243 @@ const inp = "mt-1 w-full rounded-lg border border-slate-300 bg-transparent px-3 
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return <label className="block text-sm">{label}<span className="block">{children}</span></label>;
+}
+
+/** Time settings expander: production-day anchor (shift start HH:MM) + shift
+ *  length in hours. Collapsed to a one-line readout so form rows stay short;
+ *  "default (midnight)" reproduces the old behavior exactly. */
+function WeeklyHours({ hint, schedule, onSchedule }: {
+  hint?: string;
+  schedule: SkipSchedule;
+  onSchedule: (v: SkipSchedule) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [skipOpen, setSkipOpen] = useState(false);
+  const [local, setLocal] = useState<SkipSchedule>(schedule);
+  const custom = hasCustomSkip(schedule);
+  const openSkip = () => {
+    const copy: SkipSchedule = {};
+    for (const d of SKIP_DAYS) copy[d] = (schedule[d] ?? []).map((w) => ({ ...w }));
+    setLocal(copy);
+    setSkipOpen(true);
+  };
+  const setDay = (d: string, on: boolean, from?: string, to?: string) => {
+    setLocal((prev) => {
+      const next: SkipSchedule = { ...prev };
+      if (!on) { next[d] = []; return next; }
+      const cur = prev[d]?.[0];
+      next[d] = [{ from: from ?? cur?.from ?? "00:00", to: to ?? cur?.to ?? "24:00" }];
+      return next;
+    });
+  };
+  const preset = (kind: "all" | "weekdays" | "nonights") => {
+    const next = defaultSkipSchedule();
+    if (kind === "weekdays") { next.sat = []; next.sun = []; }
+    if (kind === "nonights") {
+      for (const d of SKIP_DAYS) next[d] = [{ from: "06:00", to: "24:00" }];
+    }
+    setLocal(next);
+  };
+  return (
+    <Field label="Time settings">
+      <button type="button" onClick={() => setOpen((v) => !v)} title="Weekly running hours — which days and hours ingest" className="mt-1 flex w-full items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-left text-sm dark:border-ink-700">
+        <span className="text-slate-400">{open ? "▾" : "▸"}</span>
+        <span className="tnum">{custom ? skipSummary(schedule) : "24/7"}</span>
+      </button>
+      {open && !skipOpen && (
+        <button
+          type="button"
+          onClick={openSkip}
+          title="Weekly running hours — which days and hours ingest (default 24/7)"
+          className="mt-2 inline-flex items-center gap-1 text-xs text-accent-500 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60"
+        >
+          <span className="text-slate-400">▸</span> Edit weekly hours{custom ? " (custom)" : " (24/7)"}
+        </button>
+      )}
+      {open && skipOpen && (
+        <div className="anim-pop-in mt-2 rounded-xl border border-slate-200 p-3 dark:border-ink-700">
+          <div className="mb-2 text-xs font-semibold text-slate-500">Weekly running hours — unchecked hours never ingest</div>
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {([["all", "24/7"], ["weekdays", "weekdays"], ["nonights", "no nights"]] as const).map(([k, label]) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => preset(k)}
+                className="rounded-full px-2 py-0.5 text-[11px] text-slate-500 ring-1 ring-slate-300 transition-colors hover:bg-slate-100 dark:text-ink-300 dark:ring-ink-700 dark:hover:bg-ink-800"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-col gap-1">
+            {SKIP_DAYS.map((d) => {
+              const w = local[d] ?? [];
+              const on = w.length > 0;
+              const cur = w[0] ?? { from: "00:00", to: "24:00" };
+              return (
+                <div key={d} className="flex items-center gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    onChange={(e) => setDay(d, e.target.checked)}
+                    className="h-3.5 w-3.5 accent-teal-500"
+                  />
+                  <span className={`w-8 ${on ? "text-slate-600 dark:text-ink-200" : "text-slate-400"}`}>{SKIP_DAY_LABEL[d]}</span>
+                  <input
+                    type="time"
+                    value={cur.from}
+                    disabled={!on}
+                    onChange={(e) => setDay(d, true, e.target.value, undefined)}
+                    className={`${inp} mt-0 max-w-28 py-1 text-xs disabled:opacity-40`}
+                  />
+                  <span className="text-slate-400">→</span>
+                  <input
+                    type="time"
+                    value={cur.to === "24:00" ? "23:59" : cur.to}
+                    disabled={!on}
+                    onChange={(e) => setDay(d, true, undefined, e.target.value === "23:59" ? "24:00" : e.target.value)}
+                    className={`${inp} mt-0 max-w-28 py-1 text-xs disabled:opacity-40`}
+                  />
+                </div>
+              );
+            })}
+          </div>
+          {skipSummary(local) && (
+            <div className="mt-2 text-[11px] text-slate-400">{skipSummary(local)}</div>
+          )}
+          <div className="mt-2 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => { onSchedule(defaultSkipSchedule()); setSkipOpen(false); }}
+              title="Back to 24/7 running"
+              className="rounded-lg px-3 py-1.5 text-xs text-slate-500 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800"
+            >
+              Reset
+            </button>
+            <Btn
+              size="sm"
+              variant="primary"
+              onClick={() => { onSchedule(local); setSkipOpen(false); }}
+              className="glass-pill glass-pill--blue"
+            >
+              Set
+            </Btn>
+          </div>
+        </div>
+      )}
+      {hint && <span className="mt-1 block text-[11px] text-slate-400">{hint}</span>}
+    </Field>
+  );
+}
+
+/** Ingest-stream checkboxes: 5-min, hourly, daily, weekly, monthly — all
+ *  checked by default. Finest checked = base sampler (plant queries); coarser
+ *  checked = scheduled readers (rollups). Unchecked streams never ingest. */
+function StreamResolutions({ value, onChange, hint }: {
+  value: StreamResolution[];
+  onChange: (v: StreamResolution[]) => void;
+  hint?: string;
+}) {
+  const toggle = (r: StreamResolution) => {
+    const next = value.includes(r) ? value.filter((x) => x !== r) : [...value, r];
+    // Never allow zero: last uncheck is ignored (server also rejects empty).
+    if (next.length === 0) return;
+    onChange(ALL_STREAMS.filter((x) => next.includes(x)));
+  };
+  return (
+    <Field label="Ingest streams">
+      <span className="mt-1 flex flex-wrap gap-1.5">
+        {ALL_STREAMS.map((r) => (
+          <button
+            key={r}
+            type="button"
+            onClick={() => toggle(r)}
+            title={r === value.slice().sort((a, b) => ALL_STREAMS.indexOf(a) - ALL_STREAMS.indexOf(b))[0] ? "base sampler — finest checked stream queries the plant" : "scheduled reader — rolls up wider windows"}
+            className={`rounded-full px-2.5 py-1 text-xs ring-1 transition-colors ${value.includes(r) ? "bg-accent-500/15 text-accent-500 ring-accent-500/40" : "text-slate-400 ring-slate-300 dark:ring-ink-700"}`}
+          >
+            {r}
+          </button>
+        ))}
+      </span>
+      {hint && <span className="mt-1 block text-[11px] text-slate-400">{hint}</span>}
+    </Field>
+  );
+}
+
+/** Legacy granularity column from the finest checked stream (recommend
+ *  titles + tick-cost display still read it; ticks use the streams). */
+function granularityForStreams(v: StreamResolution[]): "hourly" | "shift" | "daily" {
+  const finest = ALL_STREAMS.find((r) => v.includes(r)) ?? "hourly";
+  return finest === "daily" || finest === "weekly" || finest === "monthly" ? "daily" : "hourly";
+}
+
+/** Split a saved hint back into editable points (same rule as the server). */
+export function splitHintPoints(s: string, source = "saved"): HintPoint[] {
+  return s.split(/\s*\|\s*|\.\s+(?=[A-Z0-9])/)
+    .map((t) => t.trim().replace(/\.*$/, ""))
+    .filter(Boolean)
+    .map((text) => ({ text, source }));
+}
+
+/** Extraction-hint point editor: each AI point its own row — edit text,
+ *  delete what you don't need, add your own. Source tags say why each
+ *  point exists (ai = drafted, quirk = confirmed finding, watch = denied
+ *  finding to always report, steer/custom/saved = human). */
+function HintPointEditor({ points, onChange }: {
+  points: HintPoint[];
+  onChange: (p: HintPoint[]) => void;
+}) {
+  const [examplesOpen, setExamplesOpen] = useState(false);
+  const tone: Record<string, string> = {
+    ai: "bg-accent-500/10 text-accent-500 ring-accent-500/30",
+    quirk: "bg-state-ok/10 text-state-ok ring-state-ok/30",
+    watch: "bg-state-warn/10 text-state-warn ring-state-warn/30",
+  };
+  return (
+    <Field label="Extraction hint (for the AI extractor) — points, edit or delete any">
+      {points.length === 0 && (
+        <div className="mt-1 text-xs text-slate-400">No points yet — Suggest both above, or add your own below.</div>
+      )}
+      <div className="mt-1 flex flex-col gap-1.5">
+        {points.map((p, i) => (
+          <div key={i} className="flex items-center gap-1.5">
+            <span className={`shrink-0 rounded-full px-1.5 py-px text-[10px] ring-1 ${tone[p.source] ?? "bg-slate-500/10 text-slate-400 ring-slate-500/30"}`}>{p.source}</span>
+            <input
+              value={p.text}
+              onChange={(e) => onChange(points.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)))}
+              placeholder="hint point…"
+              className={`${inp} mt-0 flex-1`}
+            />
+            <button
+              type="button"
+              onClick={() => onChange(points.filter((_, j) => j !== i))}
+              title="Delete this point"
+              className="shrink-0 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-state-bad dark:hover:bg-ink-800"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="mt-1.5 flex items-center gap-2">
+        <button type="button" onClick={() => onChange([...points, { text: "", source: "custom" }])} className="text-xs text-accent-500">+ add point</button>
+        <button type="button" onClick={() => setExamplesOpen((v) => !v)} className="text-xs text-slate-400">{examplesOpen ? "▾" : "▸"} examples</button>
+      </div>
+      {examplesOpen && (
+        <div className="mt-1 flex flex-col gap-1 rounded-lg bg-slate-50 p-2 text-xs text-slate-500 dark:bg-ink-800/50 dark:text-ink-300">
+          <div>• Extract hourly avg_temp_c (°C) with its hour; warn above 26. 12:00–13:00 is lunch break — idle dip is normal, never a fault.</div>
+          <div>• Extract shift energy_kwh per manufacturer; counters only increase — report deltas between shifts, never raw levels.</div>
+        </div>
+      )}
+    </Field>
+  );
+}
+
+/** Compact stream readout for list rows (empty = default all-checked). */
+function streamShort(v: StreamResolution[] | undefined): string {
+  if (!v || v.length === 0 || v.length === ALL_STREAMS.length) return "";
+  const short: Record<string, string> = { "5min": "5m", hourly: "h", daily: "d", weekly: "w", monthly: "M" };
+  return ` · streams ${ALL_STREAMS.filter((r) => v.includes(r)).map((r) => short[r]).join("/")}`;
 }
 
 function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
@@ -1964,7 +2691,7 @@ function PlaygroundTab({ lines, lineId, setLineId, sql, setSql, result, error, r
 function TemplateCharts({ template, onChanged }: { template: CardTemplate; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [meta, setMeta] = useState<{ model: string | null; heuristic: boolean; reason: string | null } | null>(null);
+  const [meta, setMeta] = useState<{ model: string | null; heuristic: boolean; reason: string | null; dropped?: { invented: string[]; renamed: { from: string; to: string }[] } } | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [sample, setSample] = useState<TestResult | null>(null);
   const [sampledAt, setSampledAt] = useState<string | null>(null);
@@ -1977,7 +2704,7 @@ function TemplateCharts({ template, onChanged }: { template: CardTemplate; onCha
     setError(null);
     try {
       const r = await chartApi.recommendTemplate(template.id);
-      setMeta({ model: r.model, heuristic: r.heuristic, reason: r.reason });
+      setMeta({ model: r.model, heuristic: r.heuristic, reason: r.reason, dropped: r.dropped });
       onChanged();
     } catch (e) {
       setError((e as Error).message);
@@ -2001,7 +2728,14 @@ function TemplateCharts({ template, onChanged }: { template: CardTemplate; onCha
     setSampleError(null);
     try {
       const w = windowForResolution(res);
-      setSample(await chartApi.sampleTemplate(template.id, w.from, w.to));
+      let s = await chartApi.sampleTemplate(template.id, w.from, w.to);
+      // Safety net (mirrors the card modal): an explicit window that misses
+      // stale data retries window-less into the widest non-empty window.
+      // The server already retries, so this fires only on older backends.
+      if (s.rows.length === 0) {
+        s = await chartApi.sampleTemplate(template.id);
+      }
+      setSample(s);
       setSampledAt(new Date().toISOString());
     } catch (e) {
       setSampleError((e as Error).message);
@@ -2014,6 +2748,28 @@ function TemplateCharts({ template, onChanged }: { template: CardTemplate; onCha
   function openPreview() {
     setModalOpen(true);
     void loadSample("hourly");
+  }
+
+  /** Combined happy path: recommend fresh, then open the same preview
+   *  screen on the new suggestions. Failures stay inline; the modal never
+   *  opens on stale data. */
+  const [suggestBusy, setSuggestBusy] = useState(false);
+  async function onSuggest() {
+    setSuggestBusy(true);
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await chartApi.recommendTemplate(template.id);
+      setMeta({ model: r.model, heuristic: r.heuristic, reason: r.reason, dropped: r.dropped });
+      onChanged();
+      setModalOpen(true);
+      await loadSample("hourly");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSuggestBusy(false);
+      setBusy(false);
+    }
   }
 
   function changeResolution(res: Resolution) {
@@ -2041,6 +2797,14 @@ function TemplateCharts({ template, onChanged }: { template: CardTemplate; onCha
             {meta.heuristic ? "heuristic" : `LLM · ${meta.model}`}
           </span>
         )}
+        {meta && ((meta.dropped?.invented.length ?? 0) > 0 || (meta.dropped?.renamed.length ?? 0) > 0) && (
+          <span
+            className="rounded-full bg-state-warn/10 px-2 py-0.5 text-xs text-state-warn ring-1 ring-state-warn/30"
+            title={`Checker: dropped invented [${(meta.dropped?.invented ?? []).join(", ")}]${(meta.dropped?.renamed.length ?? 0) > 0 ? `; canonicalized ${(meta.dropped?.renamed ?? []).map((r) => `${r.from}→${r.to}`).join(", ")}` : ""}`}
+          >
+            names checked: {meta.dropped?.invented.length ?? 0} dropped{(meta.dropped?.renamed.length ?? 0) > 0 ? `, ${meta.dropped?.renamed.length} fixed` : ""}
+          </span>
+        )}
         {sug.length > 0 && <span className="text-xs text-slate-400">{sug.length} ranked · checked ones inherit to new cards</span>}
         <div className="ml-auto flex gap-2">
           {sug.length > 0 && (
@@ -2048,6 +2812,9 @@ function TemplateCharts({ template, onChanged }: { template: CardTemplate; onCha
               Preview charts
             </Btn>
           )}
+          <Btn size="sm" icon={Sparkles} onClick={() => void onSuggest()} loading={suggestBusy} disabled={suggestBusy || busy} title={template.referenceLineId ? "Recommend fresh and open the preview screen on the new suggestions — one click." : "Set a reference line first — recommendations run on its data."} className="glass-pill glass-pill--blue">
+            Suggest charts
+          </Btn>
           <Btn size="sm" icon={Sparkles} onClick={() => void onRecommend()} loading={busy} disabled={busy} title={template.referenceLineId ? "Recommend once from the reference line's data. Stores ranked candidates on this feature." : "Set a reference line first — recommendations run on its data."} className="glass-pill glass-pill--neutral">
             {sug.length > 0 ? "Re-recommend" : "Recommend charts"}
           </Btn>
@@ -2076,7 +2843,6 @@ function TemplateCharts({ template, onChanged }: { template: CardTemplate; onCha
                     <StatusChip tone="accent">{s.chartType}</StatusChip>
                     {rank != null && rank < 2 && <span className="rounded-full bg-state-ok/10 px-1.5 py-px text-[10px] text-state-ok ring-1 ring-state-ok/30">auto top-{rank + 1}</span>}
                     <span className="font-medium">{s.title}</span>
-                    <span className="text-xs text-slate-400">x:{s.xColumn} y:{s.yColumns.join(",") || "—"}</span>
                   </div>
                   {s.rationale && <div className="mt-0.5 text-xs text-slate-500">{s.rationale}</div>}
                   {s.conditions && <div className="mt-0.5 text-xs text-accent-500/90">◷ {s.conditions}</div>}
@@ -2104,16 +2870,17 @@ function TemplateCharts({ template, onChanged }: { template: CardTemplate; onCha
               badges: rank != null && rank < 2 ? [{ text: `auto top-${rank + 1}`, tone: "ok" as const }] : [],
               checked: on,
               onToggle: (v: boolean) => void onToggle(i, v),
-              xLabel: s.xColumn,
-              yLabel: s.yColumns.length > 0 ? `${s.yColumns.join(", ")}${template.unit ? ` (${template.unit})` : ""}` : undefined,
+              xLabel: s.xTitle ?? s.xColumn,
+              yLabel: s.yTitle ?? (s.yColumns.length > 0 ? `${s.yColumns.join(", ")}${template.unit ? ` (${template.unit})` : ""}` : undefined),
               units: template.unit || undefined,
+              series: s.series,
             };
           })}
           sample={sample}
           sampledAt={sampledAt}
           loadingSample={previewLoading}
           sampleError={sampleError}
-          summary={`${enabledCount} of ${sug.length} checked`}
+          summary={`${enabledCount} of ${sug.length} checked${sample?.from ? ` · sample ${sample.from.slice(0, 10)}..${(sample.to ?? "").slice(0, 10)}` : ""}`}
           resolution={resolution}
           onResolutionChange={changeResolution}
           onRefresh={() => void loadSample()}
@@ -2141,6 +2908,13 @@ function GraphDesigner({ card, template, onClose }: { card: Card; template: Card
   // Template-chart preview (viewer mode): big charts rendered on this card's sample.
   const [chartModal, setChartModal] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  // Modal sample uses the read-only fallback sampler (never the strict
+  // 24h test-run): stale/sparse lines still preview instead of showing
+  // nothing. Window label keeps staleness honest.
+  const [modalSample, setModalSample] = useState<CardSample | null>(null);
+  const [modalSampledAt, setModalSampledAt] = useState<string | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
+  const [modalRes, setModalRes] = useState<Resolution>(card.granularity === "shift" ? "hourly" : card.granularity);
 
   useEffect(() => {
     Promise.all([
@@ -2188,6 +2962,37 @@ function GraphDesigner({ card, template, onClose }: { card: Card; template: Card
     }
   }
 
+  async function loadModalSample(res: Resolution) {
+    setRefreshing(true);
+    setModalError(null);
+    try {
+      const w = windowForResolution(res);
+      const s = await cardApi.cardSample(card.id, w.from, w.to);
+      setModalSample(s);
+      setModalSampledAt(new Date().toISOString());
+    } catch {
+      // Explicit resolution windows miss stale data (e.g. hourly on old
+      // tables) — fall back once to the server's widest non-empty window.
+      try {
+        const s = await cardApi.cardSample(card.id);
+        setModalSample(s);
+        setModalSampledAt(new Date().toISOString());
+      } catch (e2) {
+        setModalError((e2 as Error).message);
+        setModalSample(null);
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  function openChartModal() {
+    setChartModal(true);
+    setModalSample(null);
+    setModalError(null);
+    void loadModalSample(modalRes);
+  }
+
   async function onRecommend() {
     setSuggesting(true);
     setError(null);
@@ -2221,6 +3026,9 @@ function GraphDesigner({ card, template, onClose }: { card: Card; template: Card
             conditions: c.conditions,
             units: card.unit || undefined,
             threshold: card.threshold,
+            xTitle: c.xTitle,
+            yTitle: c.yTitle,
+            series: c.series,
           },
         });
       }
@@ -2258,11 +3066,15 @@ function GraphDesigner({ card, template, onClose }: { card: Card; template: Card
       // Scaffolding travels with the spec so the prompt builder later gets
       // rows + spec + meaning without new plumbing.
       const config = { units: card.unit || undefined, threshold: card.threshold };
+      // Histogram bins the X column itself — mirror it into Y for storage.
+      const spec = draft.chartType === "histogram" && draft.xColumn && draft.yColumns.length === 0
+        ? { ...draft, yColumns: [draft.xColumn] }
+        : draft;
       if (editing) {
         const cur = graphs.find((g) => g.id === editing);
-        await graphApi.update(editing, { ...draft, config: { ...cur?.config, ...config } });
+        await graphApi.update(editing, { ...spec, config: { ...cur?.config, ...config } });
       } else {
-        await graphApi.create(card.id, { ...draft, config: { source: "manual", selected_for_rag: true, ...config } });
+        await graphApi.create(card.id, { ...spec, config: { source: "manual", selected_for_rag: true, ...config } });
       }
       const g = await graphApi.listForCard(card.id);
       setGraphs(g);
@@ -2310,7 +3122,7 @@ function GraphDesigner({ card, template, onClose }: { card: Card; template: Card
                   <Segmented
                     value={draft.chartType}
                     onChange={(v) => setDraft({ ...draft, chartType: v })}
-                    options={(["table", "line", "bar", "area"] as const).map((t) => ({ value: t, label: t }))}
+                    options={(["table", "line", "bar", "area", "histogram"] as const).map((t) => ({ value: t, label: t }))}
                   />
                 </div>
               </Field>
@@ -2322,7 +3134,10 @@ function GraphDesigner({ card, template, onClose }: { card: Card; template: Card
                   {cols.map((c) => <option key={c} value={c}>{c}</option>)}
                 </select>
               </Field>
-              <Field label="Y axis (series, click to toggle)">
+              <Field label={draft.chartType === "histogram" ? "Value column (X axis — binned automatically)" : "Y axis (series, click to toggle)"}>
+                {draft.chartType === "histogram" ? (
+                  <div className="mt-1 text-xs text-slate-500">Uses the X-axis column above — set it to the numeric measure to distribute.</div>
+                ) : (
                 <div className="mt-1 flex flex-wrap gap-1">
                   {numCols.map((c) => (
                     <button
@@ -2335,6 +3150,7 @@ function GraphDesigner({ card, template, onClose }: { card: Card; template: Card
                   ))}
                   {numCols.length === 0 && <span className="text-xs text-slate-400">no numeric columns</span>}
                 </div>
+                )}
               </Field>
             </div>
             <Field label="Title (optional)">
@@ -2342,13 +3158,13 @@ function GraphDesigner({ card, template, onClose }: { card: Card; template: Card
             </Field>
 
             {/* Live preview */}
-            {draft.chartType !== "table" && draft.xColumn && draft.yColumns.length > 0 && (
+            {(draft.chartType === "histogram" ? !!draft.xColumn : draft.chartType !== "table" && draft.xColumn && draft.yColumns.length > 0) && (
               <div className="mt-4 rounded-lg border border-slate-200 p-4 dark:border-ink-800">
                 <div className="text-xs font-semibold text-slate-400">Preview</div>
-                {isTradingEligible(testResult.rows, draft.xColumn, draft.yColumns, draft.chartType) ? (
-                  <TradingChart rows={testResult.rows} x={draft.xColumn} yCols={draft.yColumns} type={draft.chartType as "line" | "area"} title={draft.title} threshold={card.threshold} height={220} units={card.unit || undefined} />
+                {isTradingEligible(testResult.rows, draft.xColumn, draft.chartType === "histogram" ? [draft.xColumn] : draft.yColumns, draft.chartType) ? (
+                  <TradingChart rows={testResult.rows} x={draft.xColumn} yCols={draft.yColumns} type={draft.chartType as "line" | "area" | "histogram"} title={draft.title} threshold={card.threshold} height={220} units={card.unit || undefined} series={(draft.chartType === "histogram" ? [draft.xColumn] : draft.yColumns).map((c) => ({ column: c, label: c }))} xTitle={draft.xColumn} yTitle={(draft.chartType === "histogram" ? [draft.xColumn] : draft.yColumns).join(", ") || undefined} />
                 ) : (
-                  <Chart rows={testResult.rows} x={draft.xColumn} yCols={draft.yColumns} type={draft.chartType} title={draft.title} threshold={card.threshold} />
+                  <Chart rows={testResult.rows} x={draft.xColumn} yCols={draft.chartType === "histogram" ? [draft.xColumn] : draft.yColumns} type={draft.chartType} title={draft.title} threshold={card.threshold} series={(draft.chartType === "histogram" ? [draft.xColumn] : draft.yColumns).map((c) => ({ column: c, label: c, unit: card.unit || "", color: "" }))} xLabel={draft.xColumn} yLabel={(draft.chartType === "histogram" ? [draft.xColumn] : draft.yColumns).join(", ") || undefined} />
                 )}
               </div>
             )}
@@ -2379,7 +3195,7 @@ function GraphDesigner({ card, template, onClose }: { card: Card; template: Card
               )}
               <div className="ml-auto flex gap-2">
                 {isTemplated && tplSug.length > 0 && (
-                  <Btn size="sm" icon={Eye} onClick={() => setChartModal(true)} title="Open the big charts screen: template charts rendered on this copy's data." className="glass-pill glass-pill--neutral">
+                  <Btn size="sm" icon={Eye} onClick={openChartModal} title="Open the big charts screen: template charts rendered on this copy's data." className="glass-pill glass-pill--neutral">
                     Preview charts
                   </Btn>
                 )}
@@ -2411,7 +3227,6 @@ function GraphDesigner({ card, template, onClose }: { card: Card; template: Card
                         <StatusChip tone="accent">{c.chartType}</StatusChip>
                         {i < 2 && <span className="rounded-full bg-state-ok/10 px-1.5 py-px text-[10px] text-state-ok ring-1 ring-state-ok/30">auto top-{i + 1}</span>}
                         <span className="font-medium">{c.title}</span>
-                        <span className="text-xs text-slate-400">x:{c.xColumn} y:{c.yColumns.join(",") || "—"}</span>
                       </div>
                       {c.rationale && <div className="mt-0.5 text-xs text-slate-500">{c.rationale}</div>}
                       {c.conditions && <div className="mt-0.5 text-xs text-accent-500/90">◷ {c.conditions}</div>}
@@ -2437,7 +3252,6 @@ function GraphDesigner({ card, template, onClose }: { card: Card; template: Card
                         <StatusChip tone="accent">{s.chartType}</StatusChip>
                         {rank != null && rank < 2 && <span className="rounded-full bg-state-ok/10 px-1.5 py-px text-[10px] text-state-ok ring-1 ring-state-ok/30">auto top-{rank + 1}</span>}
                         <span className="font-medium">{s.title}</span>
-                        <span className="text-xs text-slate-400">x:{s.xColumn} y:{s.yColumns.join(",") || "—"}</span>
                         <span className="ml-auto rounded-full bg-accent-500/10 px-1.5 py-px text-[10px] text-accent-500 ring-1 ring-accent-500/30">from template</span>
                       </div>
                       {s.rationale && <div className="mt-0.5 text-xs text-slate-500">{s.rationale}</div>}
@@ -2467,19 +3281,20 @@ function GraphDesigner({ card, template, onClose }: { card: Card; template: Card
                     conditions: s.conditions,
                     badges: rank != null && rank < 2 ? [{ text: `auto top-${rank + 1}`, tone: "ok" as const }] : [],
                     checked: s.enabled !== false,
-                    xLabel: s.xColumn,
-                    yLabel: s.yColumns.length > 0 ? `${s.yColumns.join(", ")}${card.unit ? ` (${card.unit})` : ""}` : undefined,
+                    xLabel: s.xTitle ?? s.xColumn,
+                    yLabel: s.yTitle ?? (s.yColumns.length > 0 ? `${s.yColumns.join(", ")}${card.unit ? ` (${card.unit})` : ""}` : undefined),
                     units: card.unit || undefined,
+                    series: s.series,
                   };
                 })}
-                sample={testResult}
-                sampledAt={card.lastTest?.at ?? null}
+                sample={modalSample ? { columns: modalSample.columns, rows: modalSample.rows, rowCount: modalSample.rowCount, sql: "" } : null}
+                sampledAt={modalSampledAt}
                 loadingSample={refreshing}
-                sampleError={null}
-                summary={`${tplRank.size} of ${tplSug.length} enabled in template`}
-                resolution={card.granularity === "shift" ? "hourly" : card.granularity}
-                onResolutionChange={() => void refreshTest()}
-                onRefresh={() => void refreshTest()}
+                sampleError={modalError}
+                summary={`${tplRank.size} of ${tplSug.length} enabled in template${modalSample ? ` · sample ${modalSample.from.slice(0, 10)}..${modalSample.to.slice(0, 10)}` : ""}`}
+                resolution={modalRes}
+                onResolutionChange={(r) => { setModalRes(r); void loadModalSample(r); }}
+                onRefresh={() => void loadModalSample(modalRes)}
                 onClose={() => setChartModal(false)}
               />
             )}
@@ -2506,7 +3321,6 @@ function GraphDesigner({ card, template, onClose }: { card: Card; template: Card
                     {merged && <span className="rounded-full bg-violet-500/10 px-1.5 py-px text-[10px] text-violet-400 ring-1 ring-violet-500/30">merged</span>}
                     {(cfg.source as string) === "ai-recommended" && <span className="rounded-full bg-accent-500/10 px-1.5 py-px text-[10px] text-accent-500 ring-1 ring-accent-500/30">AI</span>}
                     <span className="font-medium">{g.name || g.title || "Untitled"}</span>
-                    <span className="text-xs text-slate-400">x:{g.xColumn} y:{g.yColumns.join(",")}</span>
                     <span className="tnum text-xs text-slate-400">v{g.version}</span>
                     <div className="ml-auto flex gap-1">
                       <Btn size="sm" icon={Pencil} onClick={() => startEdit(g)} className="glass-pill glass-pill--neutral">edit</Btn>
