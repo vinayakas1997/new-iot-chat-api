@@ -32,11 +32,22 @@ export interface LlmResult<T> {
   reason: LlmFailReason | null;
   latencyMs: number;
   attempts: number;
+  /** Audit row id in llm_calls (null only when the audit write itself failed). */
+  llmCallId: number | null;
 }
+
+export type ChatContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
 
 export interface LlmCallOptions<T> {
   system: string;
   user: string;
+  /**
+   * PNG data-URL images appended to the user message (vision reads).
+   * Never logged: the audit row records count + byte size only.
+   */
+  images?: string[];
   /**
    * Zod schema the model's JSON must satisfy. Typed on the *output* side
    * only (Input = unknown) so schemas with defaults/coercion infer T
@@ -65,7 +76,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+type ChatMessage = { role: "system" | "user" | "assistant"; content: string | ChatContentPart[] };
 
 /** response_format=json_object support probe per provider base URL. */
 const jsonModeOk = new Map<string, boolean>();
@@ -145,11 +156,14 @@ function persistCall<T>(
   r: LlmResult<T>,
   timeline: LlmCallAttempt[],
   system: string,
-  user: string
-): void {
+  user: string,
+  images: string[]
+): number | null {
   try {
     const str = (v: unknown) => (typeof v === "string" ? v : null);
-    recordLlmCall({
+    const bytes = images.reduce((n, u) => n + u.length, 0);
+    const imgNote = images.length > 0 ? `\n\n[images: ${images.length} attached, ~${bytes} base64 chars — bytes in chart_readings, not here]` : "";
+    return recordLlmCall({
       route: str(ctx.route) ?? "",
       lineId: str(ctx.lineId),
       cardId: str(ctx.cardId),
@@ -160,11 +174,12 @@ function persistCall<T>(
       attempts: r.attempts,
       latencyMs: r.latencyMs,
       attemptsJson: timeline,
-      prompt: `SYSTEM:\n${system}\n\nUSER:\n${user}`,
+      prompt: `SYSTEM:\n${system}\n\nUSER:\n${user}${imgNote}`,
       responseText: r.text,
       parsedJson: r.parsed != null ? JSON.stringify(r.parsed) : "",
     });
   } catch { /* audit must never break the call */ }
+  return null;
 }
 
 /* ---------------- public entry ---------------- */
@@ -183,19 +198,24 @@ export async function llmChatJson<T>(opts: LlmCallOptions<T>): Promise<LlmResult
   const ctx = { ...(opts.context ?? {}) };
 
   const active = activeLlmProvider();
+  const images = (opts.images ?? []).filter((u) => typeof u === "string" && u.startsWith("data:image/"));
   if (!active) {
     log?.warn(ctx, "llm call skipped: no active provider");
-    const empty: LlmResult<T> = { parsed: null, text: "", model: "", reason: "no-provider", latencyMs: Date.now() - start, attempts: 0 };
-    persistCall(ctx, "", empty, [], opts.system, opts.user);
+    const empty: LlmResult<T> = { parsed: null, text: "", model: "", reason: "no-provider", latencyMs: Date.now() - start, attempts: 0, llmCallId: null };
+    empty.llmCallId = persistCall(ctx, "", empty, [], opts.system, opts.user, images);
     return empty;
   }
   const baseUrl = active.baseUrl.replace(/\/$/, "");
   const model = active.activeModel;
   const logCtx = { ...ctx, model };
 
+  const userContent: string | ChatContentPart[] =
+    images.length === 0
+      ? opts.user
+      : [{ type: "text", text: opts.user }, ...images.map((url): ChatContentPart => ({ type: "image_url", image_url: { url } }))];
   const messages: ChatMessage[] = [
     { role: "system", content: opts.system },
-    { role: "user", content: opts.user },
+    { role: "user", content: userContent },
   ];
 
   let lastText = "";
@@ -247,8 +267,8 @@ export async function llmChatJson<T>(opts: LlmCallOptions<T>): Promise<LlmResult
     if (v.success) {
       if (n > 1) log?.info({ ...logCtx, attempts, stage: found.stage }, "llm call succeeded after retry");
       timeline.push({ n, outcome: "ok", detail: found.stage, latencyMs: Date.now() - attemptStart, temperature: temp });
-      const ok: LlmResult<T> = { parsed: v.data, text: a.text, model, reason: null, latencyMs: Date.now() - start, attempts };
-      persistCall(ctx, model, ok, timeline, opts.system, opts.user);
+      const ok: LlmResult<T> = { parsed: v.data, text: a.text, model, reason: null, latencyMs: Date.now() - start, attempts, llmCallId: null };
+      ok.llmCallId = persistCall(ctx, model, ok, timeline, opts.system, opts.user, images);
       return ok;
     }
     lastReason = "schema-reject";
@@ -270,7 +290,7 @@ export async function llmChatJson<T>(opts: LlmCallOptions<T>): Promise<LlmResult
   }
 
   log?.warn({ ...logCtx, attempts, reason: lastReason, latencyMs: Date.now() - start }, "llm call failed");
-  const failed: LlmResult<T> = { parsed: null, text: lastText, model, reason: lastReason, latencyMs: Date.now() - start, attempts };
-  persistCall(ctx, model, failed, timeline, opts.system, opts.user);
+  const failed: LlmResult<T> = { parsed: null, text: lastText, model, reason: lastReason, latencyMs: Date.now() - start, attempts, llmCallId: null };
+  failed.llmCallId = persistCall(ctx, model, failed, timeline, opts.system, opts.user, images);
   return failed;
 }

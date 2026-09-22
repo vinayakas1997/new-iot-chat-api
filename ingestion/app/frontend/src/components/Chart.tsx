@@ -40,6 +40,9 @@ export interface ChartProps {
   title?: string;
   /** Warn threshold: drawn as a dashed line; points at/above get breach dots. */
   threshold?: number | null;
+  /** Direction-aware warn lines (preview): one dashed line per condition;
+   *  points breaching ANY condition redden. Wins over `threshold` when set. */
+  thresholdConditions?: { column: string; op: string; value: number; label?: string; comment?: string }[];
   height?: number;
   compact?: boolean;
   /** Per-series legend metadata (label/unit/color). Falls back to column
@@ -51,6 +54,9 @@ export interface ChartProps {
   /** Grafana variant (preview modal): time-aware ticks, gradient line fill,
    *  threshold band, hover dots on all series, stats legend. */
   grafana?: boolean;
+  /** Docked single-line legend above the plot (preview modal); default is
+   *  the floating top-right overlay. */
+  legendDocked?: boolean;
   /** Unit suffix for tooltip + legend stats (e.g. "°C"). */
   units?: string;
 }
@@ -114,7 +120,7 @@ function seriesStats(vals: number[]): { min: number; max: number; mean: number; 
 
 /** Shared dependency-free SVG chart: line / bar / area + table fallback.
  *  Dark-first industrial styling, colorful data series, calm chrome. */
-export function Chart({ rows, x, yCols, type, title, threshold, height = 180, compact = false, xLabel, yLabel, grafana = false, units, series }: ChartProps) {
+export function Chart({ rows, x, yCols, type, title, threshold, thresholdConditions, height = 180, compact = false, xLabel, yLabel, grafana = false, units, series, legendDocked }: ChartProps) {
   const seriesOf = (col: string) => series?.find((s) => s.column === col);
   const serieColor = (col: string, ci: number) => seriesOf(col)?.color ?? SERIES_COLORS[ci % SERIES_COLORS.length];
   const serieLabel = (col: string) => seriesOf(col)?.label ?? col;
@@ -155,6 +161,7 @@ export function Chart({ rows, x, yCols, type, title, threshold, height = 180, co
         xLabel={compact ? undefined : (xLabel ?? `${vcol} bins`)}
         yLabel={compact ? undefined : (yLabel ?? "count")}
         grafana={grafana}
+        legendDocked={legendDocked}
       />
     );
   }
@@ -208,9 +215,16 @@ export function Chart({ rows, x, yCols, type, title, threshold, height = 180, co
   if (allNums.length === 0) return <div className="text-xs text-slate-400">No plottable values</div>;
   let yMin = Math.min(...allNums);
   let yMax = Math.max(...allNums);
-  if (threshold != null) { yMin = Math.min(yMin, threshold); yMax = Math.max(yMax, threshold); }
+  // Effective warn lines: per-direction conditions win; legacy single
+  // threshold behaves as one above-line (back-compat for older callers).
+  const conds = thresholdConditions && thresholdConditions.length > 0
+    ? thresholdConditions.map((c) => ({ op: c.op === "<=" ? "<=" : ">=", value: c.value }))
+    : threshold != null ? [{ op: ">=", value: threshold }] : [];
+  const breached = (v: number) => conds.some((c) => (c.op === "<=" ? v <= c.value : v >= c.value));
+  for (const c of conds) { yMin = Math.min(yMin, c.value); yMax = Math.max(yMax, c.value); }
   if (yMax === yMin) { yMax = yMin + 1; }
-  const pad = (yMax - yMin) * 0.08;
+  // 12% headroom: peaks sit below the top-right legend overlay.
+  const pad = (yMax - yMin) * 0.12;
   yMin -= pad; yMax += pad;
   // Grafana variant: snap the grid to nice numbers.
   const yTicks = grafana && !compact ? niceTicks(yMin, yMax, 5) : null;
@@ -245,9 +259,17 @@ export function Chart({ rows, x, yCols, type, title, threshold, height = 180, co
   const hoverRow = hover != null ? rows[hover] : null;
   const hoverTime = hover != null && temporal ? (xTimes[hover] as number) : null;
 
+  const legendItems = numCols.slice(0, 6).map((col, ci) => ({
+    label: serieLabel(col),
+    color: serieColor(col, ci),
+    unit: seriesOf(col)?.unit || units,
+  }));
   return (
     <div className="relative">
       {title && !compact && <div className="mb-1 text-xs font-semibold text-slate-500">{title}</div>}
+      {!compact && legendDocked && (
+        <ChartLegend xTitle={xLabel} yTitle={yLabel} items={legendItems} docked breachKey={breachKeyFor(conds)} />
+      )}
       <svg
         viewBox={`0 0 ${W} ${H}`}
         className="w-full"
@@ -283,15 +305,17 @@ export function Chart({ rows, x, yCols, type, title, threshold, height = 180, co
             </g>
           );
         })}
-        {threshold != null && grafana && !compact && (
-          <rect x={PAD} width={W - PAD - 12} y={yi(yMax)} height={Math.max(yi(threshold) - yi(yMax), 0)} fill="#f59e0b" fillOpacity={0.08} />
-        )}
-        {threshold != null && (
-          <g>
-            <line x1={PAD} x2={W - 12} y1={yi(threshold)} y2={yi(threshold)} stroke="#f59e0b" strokeWidth={1} strokeDasharray="5 3" opacity={0.8} />
-            {!compact && <text x={W - 14} y={yi(threshold) - 3} textAnchor="end" className="fill-state-warn text-[9px]">warn {fmtTick(threshold)}</text>}
+        {grafana && !compact && conds.map((c, i) => (
+          c.op === "<="
+            ? <rect key={i} x={PAD} width={W - PAD - 12} y={yi(c.value)} height={Math.max(H - PADB - yi(c.value), 0)} fill="#f59e0b" fillOpacity={0.08} />
+            : <rect key={i} x={PAD} width={W - PAD - 12} y={yi(yMax)} height={Math.max(yi(c.value) - yi(yMax), 0)} fill="#f59e0b" fillOpacity={0.08} />
+        ))}
+        {conds.map((c, i) => (
+          <g key={i}>
+            <line x1={PAD} x2={W - 12} y1={yi(c.value)} y2={yi(c.value)} stroke="#f59e0b" strokeWidth={1} strokeDasharray="5 3" opacity={0.8} />
+            {!compact && <text x={W - 14} y={c.op === "<=" ? yi(c.value) + 10 : yi(c.value) - 3} textAnchor="end" className="fill-state-warn text-[9px]">warn {fmtTick(c.value)}</text>}
           </g>
-        )}
+        ))}
         {type === "area" && !grafana && numCols.map((col, ci) => {
           const base = yi(yMin);
           return (
@@ -310,7 +334,7 @@ export function Chart({ rows, x, yCols, type, title, threshold, height = 180, co
             if (v == null) return null;
             const zeroY = yi(Math.max(0, yMin));
             const barH = Math.abs(yi(v) - zeroY);
-            const colr = threshold != null && v >= threshold ? "#ef4444" : serieColor(col, ci);
+            const colr = v != null && breached(v) ? "#ef4444" : serieColor(col, ci);
             return <rect key={`${i}-${col}`} x={xi(i) - (bw * numCols.length) / 2 + ci * bw} y={v >= 0 ? yi(v) : zeroY} width={Math.max(bw - 1, 1)} height={Math.max(barH, 1)} fill={colr} fillOpacity={0.88} rx={1.5} />;
           });
         })}
@@ -331,12 +355,12 @@ export function Chart({ rows, x, yCols, type, title, threshold, height = 180, co
           if (v == null) return null;
           return <circle key={col} cx={xi(hover)} cy={yi(v)} r={3.5} fill={serieColor(col, ci)} strokeWidth={1.5} className="stroke-white dark:stroke-ink-900" />;
         })}
-        {/* breach dots */}
-        {threshold != null && type !== "bar" && numCols.map((col) => (
+        {/* breach dots: red on the breaching side of any warn line */}
+        {conds.length > 0 && type !== "bar" && numCols.map((col) => (
           <g key={`b-${col}`}>
             {rows.map((r, i) => {
               const v = numAt(r[col]);
-              if (v == null || v < threshold) return null;
+              if (v == null || !breached(v)) return null;
               return <circle key={i} cx={xi(i)} cy={yi(v)} r={compact ? 2 : 2.8} fill="#ef4444" strokeWidth={1} className="stroke-white dark:stroke-ink-900" opacity={hover === i ? 1 : 0.75} />;
             })}
           </g>
@@ -360,15 +384,12 @@ export function Chart({ rows, x, yCols, type, title, threshold, height = 180, co
         {/* hover cursor */}
         {hover != null && <line x1={xi(hover)} x2={xi(hover)} y1={10} y2={H - PADB} className="stroke-slate-300 dark:stroke-ink-600" strokeWidth={1} />}
       </svg>
-      {!compact && (
+      {!compact && !legendDocked && (
         <ChartLegend
           xTitle={xLabel}
           yTitle={yLabel}
-          items={numCols.slice(0, 6).map((col, ci) => ({
-            label: serieLabel(col),
-            color: serieColor(col, ci),
-            unit: seriesOf(col)?.unit || units,
-          }))}
+          items={legendItems}
+          breachKey={breachKeyFor(conds)}
         />
       )}
       {hoverRow && !compact && (
@@ -432,19 +453,65 @@ export interface LegendItem {
   unit?: string;
 }
 
-export function ChartLegend({ xTitle, yTitle, items }: { xTitle?: string; yTitle?: string; items: LegendItem[] }) {
+/** Self-explanatory breach key from warn-line directions (image-capture
+ *  readable: the picture explains itself with no surrounding UI). */
+export function breachKeyFor(conds: { op: string }[]): "above" | "below" | "both" | null {
+  const above = conds.some((c) => c.op !== "<=");
+  const below = conds.some((c) => c.op === "<=");
+  if (above && below) return "both";
+  if (above) return "above";
+  if (below) return "below";
+  return null;
+}
+
+const BREACH_TEXT = {
+  above: "breach above warn line",
+  below: "breach below warn line",
+  both: "breach outside warn lines",
+} as const;
+
+export function ChartLegend({ xTitle, yTitle, items, docked, breachKey }: { xTitle?: string; yTitle?: string; items: LegendItem[]; docked?: boolean; breachKey?: "above" | "below" | "both" | null }) {
   if (!xTitle && !yTitle && items.length === 0) return null;
+  // Docked: single-line caption bar above the chart (zero plot overlap).
+  // Floating (default): top-right overlay inside the plot.
+  if (docked) {
+    return (
+      <div className="mb-1 flex w-full items-center gap-x-3 gap-y-0.5 overflow-hidden whitespace-nowrap rounded-lg border border-slate-200 bg-white/95 px-2.5 py-1 text-xs shadow-sm dark:border-ink-700 dark:bg-ink-800/95">
+        {xTitle && <span className="shrink-0 text-slate-500 dark:text-ink-300">X · <span className="font-semibold text-slate-700 dark:text-ink-100">{xTitle}</span></span>}
+        {yTitle && <span className="shrink-0 text-slate-500 dark:text-ink-300">Y · <span className="font-semibold text-slate-700 dark:text-ink-100">{yTitle}</span></span>}
+        {items.slice(0, 6).map((it, i) => (
+          <span key={i} className="tnum flex min-w-0 items-center gap-1.5 text-slate-600 dark:text-ink-300">
+            <span className="h-2 w-2 shrink-0 rounded-sm" style={{ background: it.color }} />
+            <span className="truncate">{it.label}</span>
+            {it.unit && <span className="shrink-0 pl-1 text-slate-400">({it.unit})</span>}
+          </span>
+        ))}
+        {breachKey && (
+          <span className="flex shrink-0 items-center gap-1.5 text-slate-500 dark:text-ink-300">
+            <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: "#ef4444" }} />
+            <span>{BREACH_TEXT[breachKey]}</span>
+          </span>
+        )}
+      </div>
+    );
+  }
   return (
-    <div className="pointer-events-none absolute right-2 top-2 max-w-60 rounded-lg border border-slate-200 bg-white/95 px-2.5 py-1.5 text-[11px] shadow-lg dark:border-ink-700 dark:bg-ink-800/95">
+    <div className="pointer-events-none absolute right-2 top-2 z-10 max-w-44 rounded-lg border border-slate-200 bg-white/95 px-2.5 py-1.5 text-[11px] shadow-lg dark:border-ink-700 dark:bg-ink-800/95">
       {xTitle && <div className="text-slate-500 dark:text-ink-300">X · <span className="font-semibold text-slate-700 dark:text-ink-100">{xTitle}</span></div>}
       {yTitle && <div className="text-slate-500 dark:text-ink-300">Y · <span className="font-semibold text-slate-700 dark:text-ink-100">{yTitle}</span></div>}
       {items.slice(0, 6).map((it, i) => (
-        <div key={i} className="tnum flex items-center gap-1.5 text-slate-600 dark:text-ink-300">
-          <span className="h-2 w-2 shrink-0 rounded-sm" style={{ background: it.color }} />
-          <span className="truncate">{it.label}</span>
-          {it.unit && <span className="shrink-0 pl-1 text-slate-400">({it.unit})</span>}
-        </div>
-      ))}
+          <div key={i} className="tnum flex items-center gap-1.5 text-slate-600 dark:text-ink-300">
+            <span className="h-2 w-2 shrink-0 rounded-sm" style={{ background: it.color }} />
+            <span className="truncate">{it.label}</span>
+            {it.unit && <span className="shrink-0 pl-1 text-slate-400">({it.unit})</span>}
+          </div>
+        ))}
+        {breachKey && (
+          <div className="flex items-center gap-1.5 text-slate-500 dark:text-ink-300">
+            <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: "#ef4444" }} />
+            <span>{BREACH_TEXT[breachKey]}</span>
+          </div>
+        )}
     </div>
   );
 }

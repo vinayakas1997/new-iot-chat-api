@@ -79,6 +79,13 @@ input[type="radio"] {
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.25) inset, 0 -6px 10px -6px rgba(0, 0, 0, 0.5) inset, 0 6px 14px -6px rgba(245, 158, 11, 0.45);
 }
 .glass-pill--amber:hover:not(:disabled) { border-color: rgba(245, 158, 11, 0.75); }
+.glass-pill--orange {
+  color: #fb923c;
+  border-color: rgba(249, 115, 22, 0.55);
+  background: linear-gradient(155deg, rgba(249, 115, 22, 0.38), rgba(249, 115, 22, 0.14) 55%, rgba(249, 115, 22, 0.22));
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.25) inset, 0 -6px 10px -6px rgba(0, 0, 0, 0.5) inset, 0 6px 14px -6px rgba(249, 115, 22, 0.45);
+}
+.glass-pill--orange:hover:not(:disabled) { border-color: rgba(249, 115, 22, 0.75); }
 .glass-pill--neutral {
   color: #b6bfd4;
   border-color: rgba(255, 255, 255, 0.14);

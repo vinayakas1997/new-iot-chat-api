@@ -1,0 +1,85 @@
+Feature: furnace-temp-watch (granularity hourly, unit "°C").
+Data:
+{
+ "columns": [
+  "ts",
+  "avg_temp_c",
+  "humidity_pct"
+ ],
+ "profile": {
+  "rows": 72,
+  "granularity": "hourly",
+  "unit": "\u00b0C",
+  "threshold": 26,
+  "numeric_stats": {
+   "avg_temp_c": {
+    "min": "17.0",
+    "max": "28.5",
+    "avg": "22.031",
+    "n": 72,
+    "distinct": 22
+   },
+   "humidity_pct": {
+    "min": "48.4",
+    "max": "55.9",
+    "avg": "51.756",
+    "n": 72,
+    "distinct": 46
+   }
+  },
+  "time_span": {
+   "column": "ts",
+   "min": "2026-09-14T00:00:00Z:00",
+   "max": "2026-09-16T23:00:00Z:00",
+   "distinct": 72
+  }
+ },
+ "sample_rows": [
+  {
+   "ts": "2026-09-14T00:00:00Z",
+   "avg_temp_c": "21.7",
+   "humidity_pct": "49.2"
+  },
+  {
+   "ts": "2026-09-14T01:00:00Z",
+   "avg_temp_c": "22.2",
+   "humidity_pct": "48.6"
+  },
+  {
+   "ts": "2026-09-14T02:00:00Z",
+   "avg_temp_c": "22.1",
+   "humidity_pct": "50.9"
+  },
+  {
+   "ts": "2026-09-14T03:00:00Z",
+   "avg_temp_c": "21.3",
+   "humidity_pct": "52.1"
+  },
+  {
+   "ts": "2026-09-14T04:00:00Z",
+   "avg_temp_c": "21.3",
+   "humidity_pct": "51.5"
+  },
+  {
+   "ts": "2026-09-14T05:00:00Z",
+   "avg_temp_c": "21.3",
+   "humidity_pct": "48.7"
+  }
+ ]
+}
+
+AIM:
+- description: Furnace must stay hot: below 18 is danger (sensor icing suspected), above 26 is danger on multi-bucket runs. Normal band is 20-23 C.
+- context: (none)
+- extractHint: (none)
+
+COLUMN MEANINGS:
+- readings_furnace.temp_c [double]: furnace chamber temperature in degrees C, the primary safety measure
+- readings_furnace.humidity [double]: relative humidity percent, secondary comfort signal
+
+SQL (maps raw columns to output columns):
+SELECT date_trunc('hour', ts) AS ts, avg(temp_c) AS avg_temp_c, avg(humidity) AS humidity_pct FROM readings_furnace WHERE ts >= '{{from}}' AND ts < '{{to}}' GROUP BY 1 ORDER BY 1
+
+THRESHOLDS (breach conditions defined on this template — cite applicable ones in rationale/conditions and prefer their columns as Y measures):
+- Overheat warn · avg_temp_c · above 26 · multi-bucket runs only
+- Freeze watch · avg_temp_c · below 18 · sensor icing suspected

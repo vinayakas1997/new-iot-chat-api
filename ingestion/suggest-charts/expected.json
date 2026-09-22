@@ -1,0 +1,17 @@
+{
+  "_note": "Pre-declared BEFORE running trials. Graded blind against responses/A.json and responses/B.json.",
+  "A": {
+    "valid_json_with_candidates": "reply parses as JSON with a non-empty candidates[] array",
+    "verbatim_columns": "every xColumn/yColumns value is character-identical to ts|avg_temp_c|humidity_pct",
+    "measure_choice": "at least one candidate plots avg_temp_c as Y (the threshold + AIM measure)",
+    "threshold_cited": "rationale or conditions of >=1 candidate cites 26/Overheat (name or value)",
+    "below_row_visible": "rationale or conditions of >=1 candidate cites 18/Freeze (the row-2 below-direction signal)",
+    "at_most_4": "no more than 4 candidates"
+  },
+  "B_control": {
+    "valid_json_with_candidates": "same parse bar as A",
+    "verbatim_columns": "same verbatim bar as A",
+    "observation_only": "record whether B cites 26 on its own (profile-only signal) — no pass/fail"
+  },
+  "verdict_rule": "PASS if A meets all 6 A-bars. B is observation-only; if B also cites 26, the block's marginal value is the below-row + naming, still a PASS for A if below_row_visible holds."
+}

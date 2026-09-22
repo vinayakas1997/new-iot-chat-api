@@ -68,7 +68,19 @@ const suggestionSchema = z.object({
   enabled: z.boolean().default(true),
   resolutions: z.array(z.string()).default([]),
   xCondition: z.object({ column: z.string(), bucket: z.string() }).nullable().default(null),
-  yConditions: z.array(z.object({ column: z.string(), op: z.string(), value: z.number() })).default([]),
+  // label/comment ride from the template threshold rows (display in preview
+  // chips). Optional so pre-extension suggestions validate unchanged.
+  yConditions: z.array(z.object({ column: z.string(), op: z.string(), value: z.number(), label: z.string().max(120).default(""), comment: z.string().max(500).default("") })).default([]),
+});
+
+// Threshold definition row (§8): breach condition on a SQL output column.
+// Max 2 per template — third regime → new template.
+const thresholdSchema = z.object({
+  name: z.string().max(120).default(""),
+  column: z.string().min(1).max(120),
+  direction: z.enum(["above", "below"]).default("above"),
+  value: z.number(),
+  comment: z.string().max(500).default(""),
 });
 
 const tplSchema = z.object({
@@ -84,6 +96,7 @@ const tplSchema = z.object({
   unit: z.string().max(20).default(""),
   extractHint: z.string().max(2000).default(""),
   context: z.string().max(2000).default(""),
+  thresholds: z.array(thresholdSchema).max(2).default([]),
   chartSuggestions: z.array(suggestionSchema).default([]),
 });
 

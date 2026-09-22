@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { RefreshCw, X } from "lucide-react";
 import type { ChartSeriesMeta, ChartType, TestResult } from "../lib/api";
+import { llmReasonText } from "../lib/api";
 import { bucketRows, Chart, formatTimeFull, numericColumns, RESOLUTIONS, RESOLUTION_X_LABEL, type Resolution } from "./Chart";
 import { isTradingEligible, TradingChart } from "./TradingChart";
 import { StatusChip } from "./chips";
@@ -20,11 +21,44 @@ export interface PreviewItem {
   checked?: boolean;
   onToggle?: (on: boolean) => void;
   threshold?: number | null;
+  /** Direction-aware warn lines (backend yConditions); renderers draw them. */
+  thresholdConditions?: ThresholdCond[];
   xLabel?: string;
   yLabel?: string;
   units?: string;
   /** Per-series legend metadata; falls back to column names when absent. */
   series?: ChartSeriesMeta[];
+}
+
+/** AI run behind the shown suggestions: status + exact sent prompt echo. */
+export interface AiRunInfo {
+  status: "idle" | "running" | "done" | "error";
+  model?: string | null;
+  heuristic?: boolean;
+  reason?: string | null;
+  prompt?: { system: string; user: string } | null;
+  error?: string | null;
+}
+
+export interface ThresholdCond {
+  column: string;
+  op: string;
+  value: number;
+  label?: string;
+  comment?: string;
+}
+
+/** One display-only threshold chip: `Name · column ≥ value`, comment as
+ *  tooltip. Editing lives in the template form (§8), never in Preview. */
+function ThresholdChip({ cond }: { cond: ThresholdCond }) {
+  const sym = cond.op === "<=" ? "≤" : "≥";
+  const fmt = (n: number) => Number(n.toFixed(3)).toString();
+  return (
+    <span title={cond.comment?.trim() || undefined} className="tnum inline-flex items-center gap-1 rounded-full bg-state-warn/10 px-2.5 py-1 text-xs text-state-warn ring-1 ring-state-warn/30">
+      {cond.label?.trim() ? <span className="font-semibold">{cond.label.trim()} ·</span> : null}
+      <span>{cond.column} {sym} <span className="font-semibold">{fmt(cond.value)}</span></span>
+    </span>
+  );
 }
 
 /**
@@ -64,7 +98,7 @@ function fmtCell(v: unknown): string {
   if (!isNaN(t) && /[T\-:]/.test(String(v))) return formatTimeFull(t);
   return String(v);
 }
-export function ChartPreviewModal({ title, subtitle, items, sample, sampledAt, loadingSample, sampleError, summary, resolution, onResolutionChange, onRefresh, onClose }: {
+export function ChartPreviewModal({ title, subtitle, items, sample, sampledAt, loadingSample, sampleError, summary, resolution, onResolutionChange, onRefresh, onClose, ai, onResuggest }: {
   title: string;
   subtitle?: string;
   items: PreviewItem[];
@@ -77,6 +111,9 @@ export function ChartPreviewModal({ title, subtitle, items, sample, sampledAt, l
   onResolutionChange: (r: Resolution) => void;
   onRefresh: () => void;
   onClose: () => void;
+  /** AI section: omitted (e.g. card viewer) hides it entirely. */
+  ai?: AiRunInfo | null;
+  onResuggest?: () => void;
 }) {
   const toneCls: Record<string, string> = {
     ok: "bg-state-ok/10 text-state-ok ring-state-ok/30",
@@ -90,6 +127,21 @@ export function ChartPreviewModal({ title, subtitle, items, sample, sampledAt, l
   const [page, setPage] = useState(0);
   // Reset paging whenever the underlying rows or resolution change.
   useEffect(() => { setPage(0); }, [sample, resolution]);
+  // AI accordion: prompt details + resuggest. Auto-opens while the LLM runs.
+  const [aiOpen, setAiOpen] = useState(false);
+  const [promptOpen, setPromptOpen] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
+  useEffect(() => { if (ai?.status === "running") setAiOpen(true); }, [ai?.status]);
+  function copyPrompt(key: string, text: string) {
+    try {
+      void navigator.clipboard?.writeText(text).then(
+        () => setCopied(key),
+        () => setCopied(null),
+      );
+    } catch {
+      setCopied(null);
+    }
+  }
 
   // Data-table rows: raw sample at hourly, bucketed above (same rows the
   // charts draw, so table and charts always agree). Bucketing needs an X:
@@ -147,6 +199,53 @@ export function ChartPreviewModal({ title, subtitle, items, sample, sampledAt, l
         </div>
 
         <div className="overflow-auto px-5 py-4">
+          {ai && (
+            <section className="mb-5 rounded-xl border border-slate-200 dark:border-ink-800">
+              <div className="flex flex-wrap items-center gap-2 px-4 py-2.5">
+                <button onClick={() => setAiOpen((v) => !v)} className="flex min-w-0 items-center gap-2 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60">
+                  <span className="shrink-0 text-slate-400">{aiOpen ? "▾" : "▸"}</span>
+                  <span className="shrink-0 text-sm font-bold">AI</span>
+                  {ai.status === "running" && <span className="inline-flex items-center gap-1.5 text-xs text-accent-500"><Spinner /> LLM is running — wait for response…</span>}
+                  {ai.status === "done" && !ai.heuristic && <span className="truncate text-xs text-slate-400">Recommended by {ai.model ?? "LLM"}</span>}
+                  {ai.status === "done" && ai.heuristic && <span className="truncate text-xs text-state-warn">Heuristic fallback — {llmReasonText(ai.reason)}</span>}
+                  {ai.status === "error" && <span className="truncate text-xs text-state-bad">{ai.error ?? "Suggestion failed"}</span>}
+                  {ai.status === "idle" && <span className="text-xs text-slate-400">Press Resuggest to run the AI.</span>}
+                </button>
+                <span className="ml-auto flex shrink-0 items-center gap-2">
+                  <Btn size="sm" onClick={() => { setAiOpen(true); setPromptOpen((v) => !v); }} title="Show the exact prompt sent to the LLM" className="glass-pill glass-pill--neutral">
+                    Details
+                  </Btn>
+                  {onResuggest && (
+                    <Btn size="sm" icon={RefreshCw} onClick={onResuggest} loading={ai.status === "running"} disabled={ai.status === "running"} title="Run the suggestion again on current inputs" className="glass-pill glass-pill--blue">
+                      Resuggest
+                    </Btn>
+                  )}
+                </span>
+              </div>
+              {aiOpen && promptOpen && (
+                <div className="flex flex-col gap-3 border-t border-slate-100 px-4 py-3 dark:border-ink-800">
+                  {ai.prompt ? (
+                    ([
+                      ["system", "System", ai.prompt.system],
+                      ["user", `User message (${ai.prompt.user.length} chars)`, ai.prompt.user],
+                    ] as [string, string, string][]).map(([key, label, text]) => (
+                      <div key={key}>
+                        <div className="mb-1 flex items-center gap-2">
+                          <span className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">{label}</span>
+                          <button onClick={() => copyPrompt(key, text)} className="text-[11px] text-accent-500 hover:underline focus:outline-none">
+                            {copied === key ? "copied ✓" : "copy"}
+                          </button>
+                        </div>
+                        <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-slate-50 p-3 font-mono text-[11px] leading-relaxed text-slate-600 dark:bg-ink-800/60 dark:text-ink-300">{text}</pre>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-xs text-slate-400">No prompt captured for this run — re-run Suggest to capture it.</div>
+                  )}
+                </div>
+              )}
+            </section>
+          )}
           {loadingSample && (
             <div className="flex items-center gap-2 py-10 text-sm text-slate-400"><Spinner /> Sampling fresh rows…</div>
           )}
@@ -208,6 +307,30 @@ export function ChartPreviewModal({ title, subtitle, items, sample, sampledAt, l
               )}
             </section>
           )}
+          {hasRows && (() => {
+            // Thresholds strip: deduped applied conditions across charts.
+            // Naked + always visible; inactive line when none defined.
+            const seen = new Map<string, ThresholdCond>();
+            for (const it of charts) {
+              for (const c of it.thresholdConditions ?? []) {
+                const k = `${c.column}|${c.op}|${c.value}`;
+                if (!seen.has(k)) seen.set(k, c);
+              }
+            }
+            const all = [...seen.values()];
+            return (
+              <div className="mb-5 flex flex-wrap items-center gap-1.5">
+                <span className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">Thresholds</span>
+                {all.length === 0 ? (
+                  <span className="text-xs text-slate-400 opacity-60">inactive — no thresholds, charts render without warn lines</span>
+                ) : (
+                  all.map((c) => (
+                    <ThresholdChip key={`${c.column}|${c.op}|${c.value}`} cond={c} />
+                  ))
+                )}
+              </div>
+            );
+          })()}
           {hasRows && tableCount > 0 && charts.length > 0 && (
             <div className="mb-3 text-xs text-slate-400">{tableCount} table suggestion{tableCount === 1 ? "" : "s"} hidden from this view — exact values via “View table” in Details.</div>
           )}
@@ -255,7 +378,9 @@ export function ChartPreviewModal({ title, subtitle, items, sample, sampledAt, l
                       yCols={it.yColumns}
                       type={it.chartType as "line" | "area" | "histogram"}
                       threshold={it.threshold}
-                      height={260}
+                      thresholdConditions={it.thresholdConditions}
+                      height={300}
+                      legendDocked
                       units={it.units}
                       series={it.series}
                       xTitle={xTitle}
@@ -268,7 +393,9 @@ export function ChartPreviewModal({ title, subtitle, items, sample, sampledAt, l
                       yCols={it.yColumns}
                       type={it.chartType}
                       threshold={it.threshold}
-                      height={260}
+                      thresholdConditions={it.thresholdConditions}
+                      height={300}
+                      legendDocked
                       xLabel={xTitle}
                       yLabel={yTitle}
                       grafana

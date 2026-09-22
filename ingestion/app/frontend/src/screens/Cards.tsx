@@ -8,11 +8,11 @@ import { Btn, Segmented, Spinner } from "../components/ui";
 import { CardDetails } from "../components/CardDetails";
 import { TableAnalyzeDialog } from "../components/TableAnalyzeDialog";
 import { Chart, defaultChartType, isTemporalName, numericColumns } from "../components/Chart";
-import { ChartPreviewModal } from "../components/ChartPreviewModal";
+import { ChartPreviewModal, type AiRunInfo } from "../components/ChartPreviewModal";
 import { LinePreview } from "../components/LinePreview";
 import { windowForResolution, type Resolution } from "../components/Chart";
 import { isTradingEligible, TradingChart } from "../components/TradingChart";
-import { cardApi, api, bankApi, chartApi, graphApi, playgroundApi, llmReasonText, ALL_STREAMS, SKIP_DAYS, SKIP_DAY_LABEL, defaultSkipSchedule, hasCustomSkip, skipSummary, type BankOverviewEntry, type CandidateQuirk, type Card, type CardTemplate, type CardSample, type ChartSuggestion, type HintPoint, type Line, type ReapplyResult, type TestResult, type GraphSpec, type ChartType, type PlaygroundResult, type QueryHistoryEntry, type LineColumn, type SkipSchedule, type StreamResolution } from "../lib/api";
+import { cardApi, api, bankApi, chartApi, graphApi, playgroundApi, llmReasonText, ALL_STREAMS, SKIP_DAYS, SKIP_DAY_LABEL, defaultSkipSchedule, hasCustomSkip, skipSummary, type BankOverviewEntry, type CandidateQuirk, type Card, type CardTemplate, type CardSample, type ChartSuggestion, type HintPoint, type Line, type ReapplyResult, type TestResult, type GraphSpec, type ChartType, type PlaygroundResult, type QueryHistoryEntry,   type LineColumn, type SkipSchedule, type StreamResolution, type ThresholdCondition } from "../lib/api";
 import { AlertBanner, StatusChip } from "../components/chips";
 import { FormattedText } from "../components/FormattedText";
 import { PushToHindsight } from "../components/PushToHindsight";
@@ -190,7 +190,7 @@ export function Cards() {
   const [appliedByTpl, setAppliedByTpl] = useState<Record<string, boolean>>({});
   const [showTplForm, setShowTplForm] = useState(false);
   const [editTpl, setEditTpl] = useState<CardTemplate | null>(null);
-  const [tplDraft, setTplDraft] = useState({ name: "", description: "", sqlTemplate: "", granularity: "hourly", resolutions: [...ALL_STREAMS] as StreamResolution[], skipSchedule: defaultSkipSchedule(), unit: "", extractHint: "", context: "" });
+  const [tplDraft, setTplDraft] = useState({ name: "", description: "", sqlTemplate: "", granularity: "hourly", resolutions: [...ALL_STREAMS] as StreamResolution[], skipSchedule: defaultSkipSchedule(), unit: "", extractHint: "", context: "", thresholds: [] as ThresholdCondition[] });
   // Form-level Suggest charts: draft-native (no save). Recommend runs on the
   // unsaved draft inputs; the preview samples the draft SQL on the picked
   // line. Save (new) carries reviewed suggestions into the created template.
@@ -203,7 +203,10 @@ export function Cards() {
   const [formSuggestBusy, setFormSuggestBusy] = useState(false);
   const [formSuggestError, setFormSuggestError] = useState<string | null>(null);
   const [formModalOpen, setFormModalOpen] = useState(false);
+  const [formAi, setFormAi] = useState<AiRunInfo>({ status: "idle" });
   const [formCtx, setFormCtx] = useState<{ lineId: string; sql: string } | null>(null);
+  // C: stamp a dormant card onto the picked line on first save (new only).
+  const [stampCard, setStampCard] = useState(true);
   async function loadFormSample(lineId: string, sql: string, res: Resolution) {
     setFormPreviewLoading(true);
     setFormSampleError(null);
@@ -235,6 +238,7 @@ export function Cards() {
     }
     setFormSuggestBusy(true);
     setFormSuggestError(null);
+    setFormAi({ status: "running" });
     try {
       const r = await chartApi.recommendDraft({
         name: tplDraft.name,
@@ -242,16 +246,20 @@ export function Cards() {
         sqlTemplate: tplDraft.sqlTemplate,
         unit: tplDraft.unit,
         granularity: granularityForStreams(tplDraft.resolutions),
-        threshold: null,
+        // Row 1 drives the profile number; all rows drive block + warn lines.
+        threshold: validThresholds(tplDraft.thresholds)[0]?.value ?? null,
+        thresholdRows: validThresholds(tplDraft.thresholds),
         referenceLineId: ref.id,
       });
       setFormSug(r.suggestions ?? []);
+      setFormAi({ status: "done", model: r.model, heuristic: r.heuristic, reason: r.reason, prompt: r.prompt ?? null });
       setFormCtx({ lineId: ref.id, sql: tplDraft.sqlTemplate });
       setFormRes("hourly");
       setFormModalOpen(true);
       await loadFormSample(ref.id, tplDraft.sqlTemplate, "hourly");
     } catch (e) {
       setFormSuggestError((e as Error).message);
+      setFormAi({ status: "error", error: (e as Error).message });
     } finally {
       setFormSuggestBusy(false);
     }
@@ -583,7 +591,7 @@ export function Cards() {
   function openEditTemplate(t: CardTemplate) {
     const ref = t.referenceLineId ? lines.find((l) => l.id === t.referenceLineId) : undefined;
     setEditTpl(t);
-    setTplDraft({ name: t.name, description: t.description, sqlTemplate: t.sqlTemplate, granularity: t.granularity, resolutions: [...(t.resolutions ?? ALL_STREAMS)], skipSchedule: t.skipSchedule ?? defaultSkipSchedule(), unit: t.unit, extractHint: t.extractHint, context: t.context ?? "" });
+    setTplDraft({ name: t.name, description: t.description, sqlTemplate: t.sqlTemplate, granularity: t.granularity, resolutions: [...(t.resolutions ?? ALL_STREAMS)], skipSchedule: t.skipSchedule ?? defaultSkipSchedule(), unit: t.unit, extractHint: t.extractHint, context: t.context ?? "", thresholds: [...(t.thresholds ?? [])] });
     resetHintSession(t.extractHint ?? "");
     setFormSug([]);
     setFormCtx(null);
@@ -718,7 +726,7 @@ export function Cards() {
           </Link>
             {tab === "cards"
             ? <Btn variant="primary" icon={Plus} onClick={() => { setShowAdd(true); setAddLine(lines[0]?.id ?? ""); setAddQ(""); setAddMaps({}); setAddChecked([]); setAddDone(null); }} title="Register features onto a line: pick the line, see its tables, search templates, attach several at once as dormant copies. SQL and thresholds live in the template." className="glass-pill glass-pill--blue">New card</Btn>
-            : <Btn variant="primary" icon={Plus} onClick={() => { setEditTpl(null); setTplDraft({ name: "", description: "", sqlTemplate: "", granularity: "hourly", resolutions: [...ALL_STREAMS] as StreamResolution[], skipSchedule: defaultSkipSchedule(), unit: "", extractHint: "", context: "" }); resetHintSession(""); setFormSug([]); setFormCtx(null); setFormModalOpen(false); setFormSample(null); setFormSuggestError(null); setTplPickLine(""); setTplLineSearch(""); setShowTplForm(true); }} className="glass-pill glass-pill--blue">New template</Btn>}
+            : <Btn variant="primary" icon={Plus} onClick={() => { setEditTpl(null); setTplDraft({ name: "", description: "", sqlTemplate: "", granularity: "hourly", resolutions: [...ALL_STREAMS] as StreamResolution[], skipSchedule: defaultSkipSchedule(), unit: "", extractHint: "", context: "", thresholds: [] as ThresholdCondition[] }); resetHintSession(""); setFormSug([]); setFormCtx(null); setFormModalOpen(false); setFormSample(null); setFormSuggestError(null); setStampCard(true); setTplPickLine(""); setTplLineSearch(""); setShowTplForm(true); }} className="glass-pill glass-pill--blue">New template</Btn>}
         </div>
       </div>
 
@@ -1289,11 +1297,11 @@ export function Cards() {
       )}
 
       {showTplForm && (
-        <Modal title={editTpl ? `Edit ${editTpl.name}` : "New template"} onClose={() => { setShowTplForm(false); setEditTpl(null); }}>
-          <Field label="Name"><input value={tplDraft.name} onChange={(e) => setTplDraft({ ...tplDraft, name: e.target.value })} className={inp} /></Field>
+        <Modal wide title={editTpl ? `Edit ${editTpl.name}` : "New template"} onClose={() => { setShowTplForm(false); setEditTpl(null); }}>
+          <Field label="1. Name"><input value={tplDraft.name} onChange={(e) => setTplDraft({ ...tplDraft, name: e.target.value })} className={inp} /></Field>
           <label className="block text-sm">
             <span className="flex items-center justify-between gap-2">
-              <span>Description — plant truth lives here</span>
+              <span>2. Description — plant truth lives here</span>
               <button
                 type="button"
                 onClick={() => setDescExamplesOpen((v) => !v)}
@@ -1319,7 +1327,7 @@ export function Cards() {
               )}
             </span>
           </label>
-          <Field label="Line — the tables below come from here">
+          <Field label="3. Line — the tables below come from here">
             <div className="relative">
               <div className="flex items-center gap-2">
                 <div className="relative flex-1">
@@ -1428,7 +1436,7 @@ export function Cards() {
           </Field>
           <div>
             <SqlHint
-              title="SQL Query"
+              title="4. SQL Query"
               onInsert={(sql) => {
                 if (tplDraft.sqlTemplate.trim() && !confirm("Replace the current SQL template with this example?")) return;
                 setTplDraft({ ...tplDraft, sqlTemplate: sql });
@@ -1609,23 +1617,38 @@ export function Cards() {
             <div className="mt-1 text-[11px] text-slate-400">table names light up inside the box — teal = on the picked line, amber = missing there. Swap per line at Instantiate → line.</div>
           </div>
           <div className="flex flex-wrap gap-3">
-            <StreamResolutions value={tplDraft.resolutions} onChange={(v) => setTplDraft({ ...tplDraft, resolutions: v })} hint="Finest checked queries the plant; coarser ones roll up. Copies inherit this." />
-            <Field label="Unit"><input value={tplDraft.unit} onChange={(e) => setTplDraft({ ...tplDraft, unit: e.target.value })} placeholder="°C, pcs…" className={inp} /></Field>
-            <WeeklyHours hint="Copies inherit this — unchecked hours never ingest." schedule={tplDraft.skipSchedule} onSchedule={(v) => setTplDraft({ ...tplDraft, skipSchedule: v })} />
+            <StreamResolutions label="5. Ingest streams" value={tplDraft.resolutions} onChange={(v) => setTplDraft({ ...tplDraft, resolutions: v })} hint="Finest checked queries the plant; coarser ones roll up. Copies inherit this." />
+            <Field label="6. Unit"><input value={tplDraft.unit} onChange={(e) => setTplDraft({ ...tplDraft, unit: e.target.value })} placeholder="°C, pcs…" className={inp} /></Field>
+            <WeeklyHours label="7. Time settings" hint="Copies inherit this — unchecked hours never ingest." schedule={tplDraft.skipSchedule} onSchedule={(v) => setTplDraft({ ...tplDraft, skipSchedule: v })} />
           </div>
+          <Field label="8. Threshold">
+            <ThresholdEditor
+              value={tplDraft.thresholds}
+              onChange={(v) => setTplDraft({ ...tplDraft, thresholds: v })}
+              columns={sqlTest && sqlTest.testedSql === tplDraft.sqlTemplate ? sqlTest.columns : []}
+            />
+          </Field>
+          <Field label="9. Charts creation">
           <div className="flex flex-wrap items-center gap-2">
             <Btn
               size="sm"
-              icon={Sparkles}
+              icon={ChartLine}
               onClick={() => void onFormSuggest()}
               loading={formSuggestBusy}
               disabled={formSuggestBusy}
               title="Recommend charts from the unsaved draft and open the preview screen — no save needed."
-              className="glass-pill glass-pill--blue"
+              className="glass-pill glass-pill--orange"
             >
               Suggest charts
             </Btn>
             {formSuggestError && <span className="text-xs text-state-bad">{formSuggestError}</span>}
+          </div>
+          </Field>
+          <div className="border-t border-slate-200 dark:border-ink-700" />
+          <div className="text-[11px] text-slate-400">Control how the data is to be organised — charts preview first, hints and context stay optional.</div>
+          <div className="flex items-center gap-2">
+            <Brain size={18} className="text-accent-500" />
+            <span className="text-base font-semibold text-slate-700 dark:text-ink-100">Specifics</span>
           </div>
           <div className="rounded-lg border border-slate-200 p-2.5 dark:border-ink-800">
             <div className="flex flex-wrap items-center gap-2">
@@ -1645,7 +1668,7 @@ export function Cards() {
                     description: tplDraft.description,
                     sqlTemplate: tplDraft.sqlTemplate,
                     unit: tplDraft.unit,
-                    threshold: null,
+                    threshold: validThresholds(tplDraft.thresholds)[0]?.value ?? null,
                     granularity: granularityForStreams(tplDraft.resolutions),
                     referenceLineId: ref.id,
                     steer: steerText,
@@ -1712,23 +1735,40 @@ export function Cards() {
               </div>
             </div>
           )}
-          <HintPointEditor points={hintPoints} onChange={setHintPoints} />
-          <Field label="Retain context (shown alongside each stored fact — copies inherit this)"><input value={tplDraft.context} onChange={(e) => setTplDraft({ ...tplDraft, context: e.target.value })} placeholder="e.g. hourly temperature rollup" className={inp} /></Field>
+          <HintPointEditor label="10. Extraction hint (for the AI extractor) — points, edit or delete any" points={hintPoints} onChange={setHintPoints} />
+          <Field label="11. Retain context (shown alongside each stored fact — copies inherit this)"><input value={tplDraft.context} onChange={(e) => setTplDraft({ ...tplDraft, context: e.target.value })} placeholder="e.g. hourly temperature rollup" className={inp} /></Field>
           {editTpl && tplDraft.sqlTemplate !== editTpl.sqlTemplate && (
             <div className="rounded-lg border border-state-warn/40 px-3 py-2 text-xs text-slate-500">
               Saving this SQL bumps the template to <b>v{editTpl.version + 1}</b>. Copies keep their current SQL and show as <b>stale</b> until you Check / Apply.
             </div>
           )}
-          <div className="mt-3 flex justify-end gap-2">
+          <div className="mt-3 flex items-center justify-between gap-2">
+            {!editTpl && (() => {
+              const stampRef = lines.find((l) => l.id === tplPickLine) ?? lines[0];
+              return (
+                <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-500" title={stampRef ? "Stamps one dormant card onto the picked line right after saving — test it, then go live." : "No line available — register a line first"}>
+                  <input type="checkbox" checked={stampCard && !!stampRef} disabled={!stampRef} onChange={(e) => setStampCard(e.target.checked)} className="h-4 w-4 accent-accent-500" />
+                  {stampRef ? `Also stamp a dormant card onto "${stampRef.name}"` : "Also stamp a dormant card (no line yet)"}
+                </label>
+              );
+            })()}
+            <div className="ml-auto flex gap-2">
             <button onClick={() => { setShowTplForm(false); setEditTpl(null); }} className="rounded-lg px-4 py-2 text-sm text-slate-500 transition-colors hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:hover:bg-ink-800">cancel</button>
             <Btn variant="primary" icon={Save} className="glass-pill glass-pill--blue" onClick={() => void act(() => {
               const ref = lines.find((l) => l.id === tplPickLine) ?? lines[0];
-              const body = { ...tplDraft, granularity: granularityForStreams(tplDraft.resolutions), referenceLineId: ref?.id ?? null };
+              // Incomplete threshold rows never persist (backend caps at 2 too).
+              const body = { ...tplDraft, thresholds: validThresholds(tplDraft.thresholds), granularity: granularityForStreams(tplDraft.resolutions), referenceLineId: ref?.id ?? null };
               // New templates carry reviewed draft suggestions so suggest →
               // review → save keeps everything; edits never overwrite stored ones.
               const payload = editTpl ? body : { ...body, chartSuggestions: formSug };
-              return (editTpl ? cardApi.updateTemplate(editTpl.id, body) : cardApi.createTemplate(payload)).then(() => { setShowTplForm(false); setEditTpl(null); });
+              const save = editTpl ? cardApi.updateTemplate(editTpl.id, body) : cardApi.createTemplate(payload);
+              return save.then((t) => {
+                // C: first save stamps one dormant card onto the picked line.
+                if (!editTpl && stampCard && ref) return cardApi.instantiate(t.id, { lineId: ref.id }).then(() => undefined);
+                return undefined;
+              }).then(() => { setShowTplForm(false); setEditTpl(null); });
             })}>{editTpl ? "Save changes" : "Save template"}</Btn>
+            </div>
           </div>
           {tplDetailTable && (() => {
             const pick = lines.find((l) => l.id === tplPickLine) ?? lines[0];
@@ -1757,6 +1797,7 @@ export function Cards() {
             title: s.title,
             rationale: s.rationale,
             conditions: s.conditions,
+            thresholdConditions: s.yConditions,
             xLabel: s.xTitle ?? s.xColumn,
             yLabel: s.yTitle ?? (s.yColumns.length > 0 ? `${s.yColumns.join(", ")}${tplDraft.unit ? ` (${tplDraft.unit})` : ""}` : undefined),
             units: tplDraft.unit || undefined,
@@ -1771,6 +1812,8 @@ export function Cards() {
           onResolutionChange={(r) => { setFormRes(r); if (formCtx) void loadFormSample(formCtx.lineId, formCtx.sql, r); }}
           onRefresh={() => { if (formCtx) void loadFormSample(formCtx.lineId, formCtx.sql, formRes); }}
           onClose={() => setFormModalOpen(false)}
+          ai={formAi}
+          onResuggest={() => void onFormSuggest()}
         />
       )}
 
@@ -2217,10 +2260,11 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 /** Time settings expander: production-day anchor (shift start HH:MM) + shift
  *  length in hours. Collapsed to a one-line readout so form rows stay short;
  *  "default (midnight)" reproduces the old behavior exactly. */
-function WeeklyHours({ hint, schedule, onSchedule }: {
+function WeeklyHours({ hint, schedule, onSchedule, label }: {
   hint?: string;
   schedule: SkipSchedule;
   onSchedule: (v: SkipSchedule) => void;
+  label?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [skipOpen, setSkipOpen] = useState(false);
@@ -2250,7 +2294,7 @@ function WeeklyHours({ hint, schedule, onSchedule }: {
     setLocal(next);
   };
   return (
-    <Field label="Time settings">
+    <Field label={label ?? "Time settings"}>
       <button type="button" onClick={() => setOpen((v) => !v)} title="Weekly running hours — which days and hours ingest" className="mt-1 flex w-full items-center gap-1.5 rounded-lg border border-slate-300 px-3 py-2 text-left text-sm dark:border-ink-700">
         <span className="text-slate-400">{open ? "▾" : "▸"}</span>
         <span className="tnum">{custom ? skipSummary(schedule) : "24/7"}</span>
@@ -2344,10 +2388,11 @@ function WeeklyHours({ hint, schedule, onSchedule }: {
 /** Ingest-stream checkboxes: 5-min, hourly, daily, weekly, monthly — all
  *  checked by default. Finest checked = base sampler (plant queries); coarser
  *  checked = scheduled readers (rollups). Unchecked streams never ingest. */
-function StreamResolutions({ value, onChange, hint }: {
+function StreamResolutions({ value, onChange, hint, label }: {
   value: StreamResolution[];
   onChange: (v: StreamResolution[]) => void;
   hint?: string;
+  label?: string;
 }) {
   const toggle = (r: StreamResolution) => {
     const next = value.includes(r) ? value.filter((x) => x !== r) : [...value, r];
@@ -2356,7 +2401,7 @@ function StreamResolutions({ value, onChange, hint }: {
     onChange(ALL_STREAMS.filter((x) => next.includes(x)));
   };
   return (
-    <Field label="Ingest streams">
+    <Field label={label ?? "Ingest streams"}>
       <span className="mt-1 flex flex-wrap gap-1.5">
         {ALL_STREAMS.map((r) => (
           <button
@@ -2382,6 +2427,75 @@ function granularityForStreams(v: StreamResolution[]): "hourly" | "shift" | "dai
   return finest === "daily" || finest === "weekly" || finest === "monthly" ? "daily" : "hourly";
 }
 
+/** Threshold definitions (§8): up to 2 breach rows on SQL output columns.
+ *  Only complete rows (column + finite value) count; row 1 drives the chart
+ *  warn line, the hint seeding, and the card breach flag. */
+function validThresholds(v: ThresholdCondition[]): ThresholdCondition[] {
+  return v
+    .filter((t) => t.column.trim() && Number.isFinite(t.value))
+    .slice(0, 2)
+    .map((t) => ({ name: t.name.trim(), column: t.column, direction: t.direction, value: t.value, comment: t.comment.trim() }));
+}
+
+function ThresholdEditor({ value, onChange, columns }: {
+  value: ThresholdCondition[];
+  onChange: (v: ThresholdCondition[]) => void;
+  columns: string[];
+}) {
+  const set = (i: number, patch: Partial<ThresholdCondition>) =>
+    onChange(value.map((t, j) => (j === i ? { ...t, ...patch } : t)));
+  const cell = "w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm dark:border-ink-700 dark:bg-ink-800/50";
+  return (
+    <div>
+      {value.length > 0 && (
+        <table className="w-full border-collapse text-sm">
+          <thead>
+            <tr className="text-left text-xs text-slate-400">
+              <th className="px-1 py-1 font-medium">Name</th>
+              <th className="px-1 py-1 font-medium">Column</th>
+              <th className="px-1 py-1 font-medium">Breach</th>
+              <th className="px-1 py-1 font-medium">Value</th>
+              <th className="px-1 py-1 font-medium">Comment</th>
+              <th className="w-8" />
+            </tr>
+          </thead>
+          <tbody>
+            {value.map((t, i) => (
+              <tr key={i} className="border-t border-slate-100 dark:border-ink-800">
+                <td className="px-1 py-1"><input value={t.name} onChange={(e) => set(i, { name: e.target.value })} placeholder="Overheat warn" title="Short label for this condition" className={cell} /></td>
+                <td className="px-1 py-1">
+                  <select value={t.column} onChange={(e) => set(i, { column: e.target.value })} title="SQL output columns only — Test the SQL above to list them" className={cell}>
+                    <option value="">pick…</option>
+                    {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </td>
+                <td className="px-1 py-1">
+                  <select value={t.direction} onChange={(e) => set(i, { direction: e.target.value as "above" | "below" })} title="Warn when the reading goes above or below the value" className={cell}>
+                    <option value="above">above ≥</option>
+                    <option value="below">below ≤</option>
+                  </select>
+                </td>
+                <td className="px-1 py-1"><input type="number" value={Number.isFinite(t.value) ? t.value : ""} onChange={(e) => set(i, { value: e.target.value === "" ? NaN : Number(e.target.value) })} placeholder="26" title="Breach value" className={cell} /></td>
+                <td className="px-1 py-1"><input value={t.comment} onChange={(e) => set(i, { comment: e.target.value })} placeholder="multi-bucket runs only" title="Note carried into hints and chart rationale" className={cell} /></td>
+                <td className="px-1 py-1"><button type="button" onClick={() => onChange(value.filter((_, j) => j !== i))} title="Delete this threshold" className="text-slate-400 hover:text-state-bad focus:outline-none"><X size={14} /></button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {value.length === 0 && <div className="text-xs text-slate-400">No thresholds — charts preview without a warn line, extractor uses no breach flag.</div>}
+      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+        {value.length < 2 ? (
+          <button type="button" onClick={() => onChange([...value, { name: "", column: columns[0] ?? "", direction: "above", value: NaN, comment: "" }])} className="text-xs text-accent-500 hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60">+ Add threshold ({value.length}/2)</button>
+        ) : (
+          <span className="text-[11px] text-slate-400">Max 2 reached — further regimes → new template.</span>
+        )}
+        {columns.length === 0 && <span className="text-[11px] text-slate-400">Test the SQL above to list its columns.</span>}
+      </div>
+    </div>
+  );
+}
+
 /** Split a saved hint back into editable points (same rule as the server). */
 export function splitHintPoints(s: string, source = "saved"): HintPoint[] {
   return s.split(/\s*\|\s*|\.\s+(?=[A-Z0-9])/)
@@ -2394,9 +2508,10 @@ export function splitHintPoints(s: string, source = "saved"): HintPoint[] {
  *  delete what you don't need, add your own. Source tags say why each
  *  point exists (ai = drafted, quirk = confirmed finding, watch = denied
  *  finding to always report, steer/custom/saved = human). */
-function HintPointEditor({ points, onChange }: {
+function HintPointEditor({ points, onChange, label }: {
   points: HintPoint[];
   onChange: (p: HintPoint[]) => void;
+  label?: string;
 }) {
   const [examplesOpen, setExamplesOpen] = useState(false);
   const tone: Record<string, string> = {
@@ -2405,7 +2520,7 @@ function HintPointEditor({ points, onChange }: {
     watch: "bg-state-warn/10 text-state-warn ring-state-warn/30",
   };
   return (
-    <Field label="Extraction hint (for the AI extractor) — points, edit or delete any">
+    <Field label={label ?? "Extraction hint (for the AI extractor) — points, edit or delete any"}>
       {points.length === 0 && (
         <div className="mt-1 text-xs text-slate-400">No points yet — Suggest both above, or add your own below.</div>
       )}
@@ -2451,10 +2566,10 @@ function streamShort(v: StreamResolution[] | undefined): string {
   return ` · streams ${ALL_STREAMS.filter((r) => v.includes(r)).map((r) => short[r]).join("/")}`;
 }
 
-function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+function Modal({ title, onClose, children, wide }: { title: string; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
   return (
     <div className="anim-fade-in fixed inset-0 z-10 flex items-center justify-center bg-black/60" onClick={onClose}>
-      <div className="anim-pop-in max-h-[90vh] w-[36rem] overflow-auto rounded-xl bg-white p-6 dark:bg-ink-900" onClick={(e) => e.stopPropagation()}>
+      <div className={`anim-pop-in max-h-[90vh] overflow-auto rounded-xl bg-white p-6 dark:bg-ink-900 ${wide ? "w-[52rem] max-w-[94vw]" : "w-[36rem]"}`} onClick={(e) => e.stopPropagation()}>
         <h2 className="text-lg font-bold">{title}</h2>
         <div className="mt-4 flex flex-col gap-3">{children}</div>
       </div>
@@ -2691,7 +2806,7 @@ function PlaygroundTab({ lines, lineId, setLineId, sql, setSql, result, error, r
 function TemplateCharts({ template, onChanged }: { template: CardTemplate; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [meta, setMeta] = useState<{ model: string | null; heuristic: boolean; reason: string | null; dropped?: { invented: string[]; renamed: { from: string; to: string }[] } } | null>(null);
+  const [meta, setMeta] = useState<{ model: string | null; heuristic: boolean; reason: string | null; dropped?: { invented: string[]; renamed: { from: string; to: string }[] }; prompt?: { system: string; user: string } | null } | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [sample, setSample] = useState<TestResult | null>(null);
   const [sampledAt, setSampledAt] = useState<string | null>(null);
@@ -2704,7 +2819,7 @@ function TemplateCharts({ template, onChanged }: { template: CardTemplate; onCha
     setError(null);
     try {
       const r = await chartApi.recommendTemplate(template.id);
-      setMeta({ model: r.model, heuristic: r.heuristic, reason: r.reason, dropped: r.dropped });
+      setMeta({ model: r.model, heuristic: r.heuristic, reason: r.reason, dropped: r.dropped, prompt: r.prompt ?? null });
       onChanged();
     } catch (e) {
       setError((e as Error).message);
@@ -2760,7 +2875,7 @@ function TemplateCharts({ template, onChanged }: { template: CardTemplate; onCha
     setError(null);
     try {
       const r = await chartApi.recommendTemplate(template.id);
-      setMeta({ model: r.model, heuristic: r.heuristic, reason: r.reason, dropped: r.dropped });
+      setMeta({ model: r.model, heuristic: r.heuristic, reason: r.reason, dropped: r.dropped, prompt: r.prompt ?? null });
       onChanged();
       setModalOpen(true);
       await loadSample("hourly");
@@ -2867,6 +2982,7 @@ function TemplateCharts({ template, onChanged }: { template: CardTemplate; onCha
               title: s.title,
               rationale: s.rationale,
               conditions: s.conditions,
+              thresholdConditions: s.yConditions,
               badges: rank != null && rank < 2 ? [{ text: `auto top-${rank + 1}`, tone: "ok" as const }] : [],
               checked: on,
               onToggle: (v: boolean) => void onToggle(i, v),
@@ -2885,6 +3001,8 @@ function TemplateCharts({ template, onChanged }: { template: CardTemplate; onCha
           onResolutionChange={changeResolution}
           onRefresh={() => void loadSample()}
           onClose={() => setModalOpen(false)}
+          ai={suggestBusy || busy ? { status: "running" } : error ? { status: "error", error } : meta ? { status: "done", model: meta.model, heuristic: meta.heuristic, reason: meta.reason, prompt: meta.prompt ?? null } : { status: "idle" }}
+          onResuggest={() => void onSuggest()}
         />
       )}
     </div>
@@ -3279,6 +3397,7 @@ function GraphDesigner({ card, template, onClose }: { card: Card; template: Card
                     title: s.title,
                     rationale: s.rationale,
                     conditions: s.conditions,
+                    thresholdConditions: s.yConditions,
                     badges: rank != null && rank < 2 ? [{ text: `auto top-${rank + 1}`, tone: "ok" as const }] : [],
                     checked: s.enabled !== false,
                     xLabel: s.xTitle ?? s.xColumn,

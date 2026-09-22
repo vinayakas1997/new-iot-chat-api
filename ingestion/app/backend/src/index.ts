@@ -15,6 +15,9 @@ import { columnTemplateRoutes } from "./routes/columnTemplates.js";
 import { llmRoutes } from "./routes/llm.js";
 import { llmCallRoutes } from "./routes/llmcalls.js";
 import { playgroundRoutes } from "./routes/playground.js";
+import { readingRoutes } from "./routes/readings.js";
+import { ticketRoutes } from "./routes/tickets.js";
+import { overviewRoutes } from "./routes/overview.js";
 import { runTick, startTicker } from "./ticker.js";
 
 const PORT = Number(process.env.PORT ?? 3100);
@@ -41,6 +44,9 @@ async function main() {
   await app.register(llmRoutes);
   await app.register(llmCallRoutes);
   await app.register(playgroundRoutes);
+  await app.register(readingRoutes);
+  await app.register(ticketRoutes);
+  await app.register(overviewRoutes);
 
   // Manual tick trigger (setter action + verification hook).
   app.post("/api/ingest/tick", async () => runTick(app.log));

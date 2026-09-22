@@ -285,6 +285,13 @@ export function openStore(path: string): Database.Database {
   if (!cardCols.some((c) => c.name === "skip_schedule")) {
     db.exec(`ALTER TABLE cards ADD COLUMN skip_schedule TEXT NOT NULL DEFAULT '${SKIP_ALL}'`);
   }
+  // Threshold definitions: up to 2 breach conditions per template
+  // ({name, column, direction above|below, value, comment}). Third regime →
+  // new template. Stored as JSON; inherited by cards at instantiate time
+  // (row 1 also fills the card's single breach flag).
+  if (!tplCols.some((c) => c.name === "thresholds")) {
+    db.exec("ALTER TABLE card_templates ADD COLUMN thresholds TEXT NOT NULL DEFAULT '[]'");
+  }
   // Lightweight migration: allow 'histogram' graph specs. The original
   // CREATE TABLE pins chart_type with a CHECK over 4 values, so widen it
   // by rebuilding the table once (data-preserving copy).
@@ -311,6 +318,45 @@ export function openStore(path: string): Database.Database {
       CREATE INDEX IF NOT EXISTS idx_graph_specs_card ON graph_specs(card_id);
     `);
   }
+  // Line 360° context loop: chart readings (snapshot → Step-1 LLM read) and
+  // tickets. reading_json holds the full Step-1 JSON; image_png the snapshot,
+  // image_thumb a small browser-scaled copy for fast lists. Tickets freeze
+  // their ai_reason copy so they explain themselves after pruning.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chart_readings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      at TEXT NOT NULL,
+      line_id TEXT NOT NULL,
+      card_id TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+      chart_key TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'done',
+      breach INTEGER NOT NULL DEFAULT 0,
+      summary TEXT NOT NULL DEFAULT '',
+      reading_json TEXT NOT NULL DEFAULT '{}',
+      prompt TEXT NOT NULL DEFAULT '',
+      response_text TEXT NOT NULL DEFAULT '',
+      reason TEXT NOT NULL DEFAULT '',
+      llm_call_id INTEGER,
+      image_png BLOB,
+      image_thumb BLOB
+    );
+    CREATE INDEX IF NOT EXISTS idx_readings_line ON chart_readings(line_id, at DESC);
+    CREATE INDEX IF NOT EXISTS idx_readings_card ON chart_readings(card_id, at DESC);
+    CREATE TABLE IF NOT EXISTS tickets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      at TEXT NOT NULL,
+      line_id TEXT NOT NULL,
+      card_id TEXT,
+      reading_id INTEGER REFERENCES chart_readings(id) ON DELETE SET NULL,
+      run_id INTEGER,
+      title TEXT NOT NULL DEFAULT '',
+      ai_reason TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'open',
+      closed_at TEXT,
+      note TEXT NOT NULL DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_tickets_line ON tickets(line_id, status, at DESC);
+  `);
   return db;
 }
 
@@ -864,10 +910,46 @@ export interface ChartSuggestion {
    */
   resolutions?: string[];
   xCondition?: { column: string; bucket: string } | null;
-  yConditions?: { column: string; op: string; value: number }[];
+  /** Warn lines: label/comment ride from the template threshold rows. */
+  yConditions?: { column: string; op: string; value: number; label?: string; comment?: string }[];
 }
 
 export const RESOLUTION_LADDER = ["hourly", "daily", "weekly", "monthly", "yearly"];
+
+/** Threshold definition row (template form §8): breach condition on a SQL
+ *  output column. Max 2 per template — third regime → new template. */
+export interface ThresholdCondition {
+  name: string;
+  column: string;
+  direction: "above" | "below";
+  value: number;
+  comment: string;
+}
+
+/** Parse + sanitize threshold rows: valid shape only, cap 2. Accepts the
+ *  DB string form or an already-parsed array (e.g. zod route bodies). */
+export function parseThresholds(raw: unknown): ThresholdCondition[] {
+  try {
+    const arr = typeof raw === "string" ? (JSON.parse(raw || "[]") as unknown) : raw;
+    if (!Array.isArray(arr)) return [];
+    return arr.filter(
+      (t): t is ThresholdCondition => {
+        if (!t || typeof t !== "object") return false;
+        const c = (t as { column?: unknown }).column;
+        const v = (t as { value?: unknown }).value;
+        return typeof c === "string" && c.length > 0 && typeof v === "number" && Number.isFinite(v);
+      }
+    ).slice(0, 2).map((t) => ({
+      name: typeof (t as { name?: string }).name === "string" ? (t as { name?: string }).name as string : "",
+      column: (t as { column?: string }).column as string,
+      direction: (t as { direction?: string }).direction === "below" ? "below" : "above",
+      value: (t as { value?: number }).value as number,
+      comment: typeof (t as { comment?: string }).comment === "string" ? (t as { comment?: string }).comment as string : "",
+    }));
+  } catch {
+    return [];
+  }
+}
 
 export function parseChartSuggestions(raw: unknown): ChartSuggestion[] {
   try {
@@ -899,6 +981,7 @@ export interface CardTemplate {
   unit: string;
   extractHint: string;
   context: string;
+  thresholds: ThresholdCondition[];
   chartSuggestions: ChartSuggestion[];
   version: number;
   createdAt: string;
@@ -950,6 +1033,7 @@ function tplRow(r: Record<string, unknown>): CardTemplate {
     unit: (r.unit as string) ?? "",
     extractHint: (r.extract_hint as string) ?? "",
     context: (r.context as string) ?? "",
+    thresholds: parseThresholds(r.thresholds),
     chartSuggestions: parseChartSuggestions(r.chart_suggestions),
     version: r.version as number,
     createdAt: r.created_at as string,
@@ -1007,10 +1091,10 @@ export function createTemplate(t: Omit<CardTemplate, "id" | "version" | "created
   const now = new Date().toISOString();
   getDb()
     .prepare(
-      `INSERT INTO card_templates (id,name,description,reference_line_id,sql_template,granularity,shift_start,shift_hours,resolutions,skip_schedule,unit,extract_hint,context,chart_suggestions,version,created_at,updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)`
+       `INSERT INTO card_templates (id,name,description,reference_line_id,sql_template,granularity,shift_start,shift_hours,resolutions,skip_schedule,unit,extract_hint,context,thresholds,chart_suggestions,version,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)`
     )
-    .run(id, t.name, t.description, t.referenceLineId ?? null, t.sqlTemplate, t.granularity, t.shiftStart ?? "00:00", t.shiftHours ?? 8, JSON.stringify(t.resolutions ?? ALL_RESOLUTIONS), JSON.stringify(t.skipSchedule ?? defaultSkipSchedule()), t.unit, t.extractHint, t.context ?? "", JSON.stringify(t.chartSuggestions ?? []), now, now);
+    .run(id, t.name, t.description, t.referenceLineId ?? null, t.sqlTemplate, t.granularity, t.shiftStart ?? "00:00", t.shiftHours ?? 8, JSON.stringify(t.resolutions ?? ALL_RESOLUTIONS), JSON.stringify(t.skipSchedule ?? defaultSkipSchedule()), t.unit, t.extractHint, t.context ?? "", JSON.stringify(t.thresholds ?? []), JSON.stringify(t.chartSuggestions ?? []), now, now);
   return getTemplate(id)!;
 }
 
@@ -1025,7 +1109,7 @@ export function updateTemplate(id: string, patch: Partial<Omit<CardTemplate, "id
   const bump = patch.sqlTemplate !== undefined && patch.sqlTemplate !== cur.sqlTemplate;
   getDb()
     .prepare(
-      `UPDATE card_templates SET name=?,description=?,reference_line_id=?,sql_template=?,granularity=?,shift_start=?,shift_hours=?,resolutions=?,skip_schedule=?,unit=?,extract_hint=?,context=?,chart_suggestions=?,
+      `UPDATE card_templates SET name=?,description=?,reference_line_id=?,sql_template=?,granularity=?,shift_start=?,shift_hours=?,resolutions=?,skip_schedule=?,unit=?,extract_hint=?,context=?,thresholds=?,chart_suggestions=?,
        version=version+?,updated_at=? WHERE id=?`
     )
     .run(
@@ -1041,6 +1125,7 @@ export function updateTemplate(id: string, patch: Partial<Omit<CardTemplate, "id
       patch.unit ?? cur.unit,
       patch.extractHint ?? cur.extractHint,
       patch.context ?? cur.context,
+      patch.thresholds !== undefined ? JSON.stringify(patch.thresholds) : JSON.stringify(cur.thresholds),
       patch.chartSuggestions !== undefined ? JSON.stringify(patch.chartSuggestions) : JSON.stringify(cur.chartSuggestions),
       bump ? 1 : 0,
       new Date().toISOString(),
@@ -1106,8 +1191,8 @@ export function createCard(input: CardInput): Card {
   const tpl = input.templateId ? getTemplate(input.templateId) : null;
   getDb()
     .prepare(
-      `INSERT INTO cards (id,template_id,template_version,line_id,name,tables_json,sql_text,granularity,shift_start,shift_hours,resolutions,skip_schedule,unit,extract_hint,context,threshold,status,version,created_at,updated_at)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'dormant',1,?,?)`
+       `INSERT INTO cards (id,template_id,template_version,line_id,name,tables_json,sql_text,granularity,shift_start,shift_hours,resolutions,skip_schedule,unit,extract_hint,context,threshold,status,version,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'dormant',1,?,?)`
     )
     .run(
       id, tpl?.id ?? null, tpl?.version ?? null, input.lineId, input.name,
@@ -1140,6 +1225,9 @@ export function instantiateTemplate(templateId: string, lineId: string, override
     unit: tpl.unit,
     extractHint: tpl.extractHint,
     context: tpl.context,
+    // Row 1 fills the card's single breach flag (per-copy Specifics override
+    // stays the tuning path; extractor keeps above-semantics).
+    threshold: tpl.thresholds[0]?.value ?? null,
     templateId: tpl.id,
   });
   // Inherit the feature's chart suggestions as the card's default specs.
@@ -1164,6 +1252,9 @@ export function instantiateTemplate(templateId: string, lineId: string, override
         xTitle: s.xTitle,
         yTitle: s.yTitle,
         series: s.series,
+        // Warn lines ride the spec so card-level views can draw them
+        // without re-reading the template (names + comments included).
+        yConditions: s.yConditions ?? [],
       },
     });
   });
@@ -1790,4 +1881,268 @@ export function llmCallStats(): LlmCallStats {
     retained,
     cap: LLM_CALLS_CAP,
   };
+}
+
+/* ---------------- chart readings + tickets (Line 360° context loop) ---------------- */
+
+const READINGS_CAP = 500;
+
+export interface ChartReading {
+  id: number;
+  at: string;
+  lineId: string;
+  cardId: string;
+  chartKey: string;
+  status: string;
+  breach: boolean;
+  summary: string;
+  readingJson: string;
+  prompt: string;
+  responseText: string;
+  reason: string;
+  llmCallId: number | null;
+  /** Base64 data-URL PNG; thumb on list rows, full image on detail only. */
+  image: string | null;
+}
+
+function readingRow(r: Record<string, unknown>, withImage: "thumb" | "full" | "none"): ChartReading {
+  const pick = (v: unknown): string | null => {
+    if (v == null) return null;
+    if (typeof v === "string") return v;
+    if (v instanceof Uint8Array || Buffer.isBuffer(v)) {
+      return `data:image/png;base64,${Buffer.from(v as Uint8Array).toString("base64")}`;
+    }
+    return null;
+  };
+  return {
+    id: r.id as number,
+    at: r.at as string,
+    lineId: r.line_id as string,
+    cardId: r.card_id as string,
+    chartKey: (r.chart_key as string) ?? "",
+    status: (r.status as string) ?? "done",
+    breach: (r.breach as number) === 1,
+    summary: (r.summary as string) ?? "",
+    readingJson: (r.reading_json as string) ?? "{}",
+    prompt: withImage === "none" ? "" : ((r.prompt as string) ?? ""),
+    responseText: withImage === "none" ? "" : ((r.response_text as string) ?? ""),
+    reason: (r.reason as string) ?? "",
+    llmCallId: (r.llm_call_id as number) ?? null,
+    image: withImage === "full" ? pick(r.image_png) : withImage === "thumb" ? pick(r.image_thumb) : null,
+  };
+}
+
+function pngBytes(dataUrl: string | null | undefined): Buffer | null {
+  if (!dataUrl) return null;
+  const m = /^data:image\/png;base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl.trim());
+  if (!m) return null;
+  try {
+    const b = Buffer.from(m[1], "base64");
+    if (b.length === 0 || b.length > 5 * 1024 * 1024) return null;
+    return b;
+  } catch {
+    return null;
+  }
+}
+
+export function createReading(e: {
+  lineId: string;
+  cardId: string;
+  chartKey: string;
+  status: string;
+  breach: boolean;
+  summary: string;
+  readingJson: string;
+  prompt: string;
+  responseText: string;
+  reason?: string | null;
+  llmCallId?: number | null;
+  imageB64?: string | null;
+  thumbB64?: string | null;
+}): number {
+  const db = getDb();
+  const r = db
+    .prepare(
+      `INSERT INTO chart_readings (at,line_id,card_id,chart_key,status,breach,summary,reading_json,prompt,response_text,reason,llm_call_id,image_png,image_thumb)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+    )
+    .run(
+      new Date().toISOString(),
+      e.lineId,
+      e.cardId,
+      e.chartKey,
+      e.status,
+      e.breach ? 1 : 0,
+      e.summary,
+      e.readingJson,
+      e.prompt,
+      e.responseText,
+      e.reason ?? "",
+      e.llmCallId ?? null,
+      pngBytes(e.imageB64),
+      pngBytes(e.thumbB64)
+    );
+  db.prepare(
+    `DELETE FROM chart_readings WHERE id NOT IN (SELECT id FROM chart_readings ORDER BY id DESC LIMIT ?)`
+  ).run(READINGS_CAP);
+  return Number(r.lastInsertRowid);
+}
+
+export function listReadings(f: { lineId?: string; cardId?: string; limit?: number; offset?: number } = {}): {
+  rows: ChartReading[];
+  total: number;
+} {
+  const where: string[] = [];
+  const args: unknown[] = [];
+  if (f.lineId) {
+    where.push("line_id = ?");
+    args.push(f.lineId);
+  }
+  if (f.cardId) {
+    where.push("card_id = ?");
+    args.push(f.cardId);
+  }
+  const whereSql = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
+  const db = getDb();
+  const total = (db.prepare(`SELECT COUNT(*) AS n FROM chart_readings ${whereSql}`).get(...args) as { n: number }).n;
+  const limit = Math.min(Math.max(f.limit ?? 50, 1), 200);
+  const offset = Math.max(f.offset ?? 0, 0);
+  // List carries the thumb only — full PNGs ride the detail endpoint.
+  const rows = (
+    db
+      .prepare(
+        `SELECT id,at,line_id,card_id,chart_key,status,breach,summary,reading_json,prompt,response_text,reason,llm_call_id,image_thumb
+         FROM chart_readings ${whereSql} ORDER BY id DESC LIMIT ? OFFSET ?`
+      )
+      .all(...args, limit, offset) as Record<string, unknown>[]
+  ).map((r) => readingRow(r, "thumb"));
+  return { rows, total };
+}
+
+export function getReading(id: number): ChartReading | null {
+  const x = getDb().prepare("SELECT * FROM chart_readings WHERE id=?").get(id) as Record<string, unknown> | undefined;
+  return x ? readingRow(x, "full") : null;
+}
+
+export interface Ticket {
+  id: number;
+  at: string;
+  lineId: string;
+  cardId: string | null;
+  readingId: number | null;
+  runId: number | null;
+  title: string;
+  aiReason: string;
+  status: "open" | "closed";
+  closedAt: string | null;
+  note: string;
+}
+
+function ticketRow(r: Record<string, unknown>): Ticket {
+  return {
+    id: r.id as number,
+    at: r.at as string,
+    lineId: r.line_id as string,
+    cardId: (r.card_id as string) ?? null,
+    readingId: (r.reading_id as number) ?? null,
+    runId: (r.run_id as number) ?? null,
+    title: (r.title as string) ?? "",
+    aiReason: (r.ai_reason as string) ?? "",
+    status: ((r.status as string) ?? "open") as "open" | "closed",
+    closedAt: (r.closed_at as string) ?? null,
+    note: (r.note as string) ?? "",
+  };
+}
+
+/**
+ * Open a ticket, freezing the AI's reasoning at open time so the ticket
+ * explains itself even after readings/runs are pruned. One open ticket
+ * per reading/run source — reopen deliberately, never by duplicate.
+ */
+export function openTicket(e: {
+  lineId: string;
+  cardId?: string | null;
+  readingId?: number | null;
+  runId?: number | null;
+  title?: string;
+}): { id: number; deduped: boolean } {
+  const db = getDb();
+  if (e.readingId != null) {
+    const dup = db.prepare("SELECT id FROM tickets WHERE reading_id=? AND status='open'").get(e.readingId) as { id: number } | undefined;
+    if (dup) return { id: dup.id, deduped: true };
+  }
+  if (e.runId != null) {
+    const dup = db.prepare("SELECT id FROM tickets WHERE run_id=? AND status='open'").get(e.runId) as { id: number } | undefined;
+    if (dup) return { id: dup.id, deduped: true };
+  }
+  let title = e.title?.trim() ?? "";
+  let aiReason = "";
+  if (e.readingId != null) {
+    const rd = getReading(e.readingId);
+    if (rd) {
+      aiReason = `Reading #${rd.id} (${rd.at}, ${rd.chartKey || "chart"}): ${rd.summary} Breach=${rd.breach ? "yes" : "no"}. Model: ${JSON.stringify(safeJson(rd.readingJson)).slice(0, 800)}`;
+      if (!title) title = `${rd.breach ? "Breach" : "Reading flag"} — ${rd.cardId}${rd.chartKey ? ` (${rd.chartKey})` : ""}`;
+    }
+  }
+  if (!aiReason && e.runId != null) {
+    const run = db.prepare("SELECT * FROM runs WHERE id=?").get(e.runId) as Record<string, unknown> | undefined;
+    if (run) {
+      const ok = (run.ok as number) === 1;
+      aiReason = `Run #${e.runId} (${run.at}, ${run.kind}, ${run.resolution ?? "base"}): ${ok ? "ok" : `FAILED — ${run.error ?? "unknown error"}`} Rows pulled: ${run.rows_pulled ?? 0}.`;
+      if (!title) title = `${ok ? "Run flag" : "Failed run"} — ${run.card_id}`;
+    }
+  }
+  if (!title) title = `Ticket — ${e.lineId}`;
+  const r = db
+    .prepare(
+      `INSERT INTO tickets (at,line_id,card_id,reading_id,run_id,title,ai_reason,status) VALUES (?,?,?,?,?,?,?,'open')`
+    )
+    .run(new Date().toISOString(), e.lineId, e.cardId ?? null, e.readingId ?? null, e.runId ?? null, title, aiReason);
+  return { id: Number(r.lastInsertRowid), deduped: false };
+}
+
+function safeJson(s: string): unknown {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return s;
+  }
+}
+
+export function closeTicket(id: number, note: string): boolean {
+  const r = getDb()
+    .prepare("UPDATE tickets SET status='closed', closed_at=?, note=? WHERE id=? AND status='open'")
+    .run(new Date().toISOString(), note ?? "", id);
+  return r.changes > 0;
+}
+
+export function getTicket(id: number): Ticket | null {
+  const x = getDb().prepare("SELECT * FROM tickets WHERE id=?").get(id) as Record<string, unknown> | undefined;
+  return x ? ticketRow(x) : null;
+}
+
+export function listTickets(f: { lineId?: string; status?: "open" | "closed" | "all"; limit?: number; offset?: number } = {}): {
+  rows: Ticket[];
+  total: number;
+  open: number;
+} {
+  const where: string[] = [];
+  const args: unknown[] = [];
+  if (f.lineId) {
+    where.push("line_id = ?");
+    args.push(f.lineId);
+  }
+  if (f.status && f.status !== "all") {
+    where.push("status = ?");
+    args.push(f.status);
+  }
+  const whereSql = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
+  const db = getDb();
+  const total = (db.prepare(`SELECT COUNT(*) AS n FROM tickets ${whereSql}`).get(...args) as { n: number }).n;
+  const openArgs: unknown[] = f.lineId ? [f.lineId] : [];
+  const open = (db.prepare(`SELECT COUNT(*) AS n FROM tickets ${f.lineId ? "WHERE line_id=? AND" : "WHERE"} status='open'`).get(...openArgs) as { n: number }).n;
+  const limit = Math.min(Math.max(f.limit ?? 50, 1), 200);
+  const offset = Math.max(f.offset ?? 0, 0);
+  const rows = (db.prepare(`SELECT * FROM tickets ${whereSql} ORDER BY id DESC LIMIT ? OFFSET ?`).all(...args, limit, offset) as Record<string, unknown>[]).map(ticketRow);
+  return { rows, total, open };
 }

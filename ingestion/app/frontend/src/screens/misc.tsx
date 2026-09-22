@@ -25,7 +25,7 @@ export function Home() {
       <div className="mt-6 grid max-w-2xl grid-cols-2 gap-4">
         <Link to="/setter/connections" className="rounded-xl border border-slate-200 p-6 hover:border-accent-500 dark:border-ink-800">
           <div className="font-bold">Setter console</div>
-          <div className="mt-1 text-sm text-slate-500">F1–F6: connections, lines, cards, history, Hindsight, AI logs</div>
+          <div className="mt-1 text-sm text-slate-500">F1–F7: connections, lines, cards, history, Hindsight, AI logs, overview</div>
         </Link>
         <div className="rounded-xl border border-dashed border-slate-300 p-6 opacity-60 dark:border-ink-700">
           <div className="font-bold">Main app</div>

@@ -186,7 +186,8 @@ export interface ChartSuggestion {
   enabled?: boolean;
   resolutions?: string[];
   xCondition?: { column: string; bucket: string } | null;
-  yConditions?: { column: string; op: string; value: number }[];
+  /** Warn lines; label/comment ride from the template threshold rows. */
+  yConditions?: { column: string; op: string; value: number; label?: string; comment?: string }[];
   /** Per-series legend metadata; absent on pre-enrichment suggestions. */
   series?: ChartSeriesMeta[];
   xTitle?: string;
@@ -248,6 +249,16 @@ export function skipSummary(s: SkipSchedule | undefined): string {
   return bits.length > 0 ? `Skips: ${bits.join(" · ")}` : "custom hours";
 }
 
+/** Threshold definition row (template form §8): breach condition on a SQL
+ *  output column. Max 2 per template — third regime → new template. */
+export interface ThresholdCondition {
+  name: string;
+  column: string;
+  direction: "above" | "below";
+  value: number;
+  comment: string;
+}
+
 export interface CardTemplate {
   id: string;
   name: string;
@@ -265,6 +276,7 @@ export interface CardTemplate {
   unit: string;
   extractHint: string;
   context: string;
+  thresholds: ThresholdCondition[];
   chartSuggestions: ChartSuggestion[];
   version: number;
   createdAt: string;
@@ -582,6 +594,8 @@ export interface RecommendResponse {
   reason: string | null;
   /** Verbatim-copy checker output: invented names dropped, recased names canonicalized. */
   dropped?: DroppedColumns;
+  /** Exact sent prompt (AI → Details view). Present even on heuristic results. */
+  prompt?: { system: string; user: string } | null;
 }
 
 /** Human-readable cause for an LLM fallback — shown in badge tooltips. */
@@ -613,7 +627,7 @@ export interface MergeProposal {
 export const chartApi = {
   recommendTemplate: (id: string) =>
     req<RecommendResponse>(`/api/ingest/templates/${id}/recommend-charts`, { method: "POST", body: JSON.stringify({}) }),
-  recommendDraft: (input: { name?: string; description?: string; sqlTemplate: string; unit?: string; granularity?: string; threshold?: number | null; referenceLineId: string }) =>
+  recommendDraft: (input: { name?: string; description?: string; sqlTemplate: string; unit?: string; granularity?: string; threshold?: number | null; thresholdRows?: ThresholdCondition[]; referenceLineId: string }) =>
     req<RecommendResponse>(`/api/ingest/templates/recommend-draft`, { method: "POST", body: JSON.stringify(input) }),
   sampleTemplate: (id: string, from?: string, to?: string) =>
     req<TestResult>(`/api/ingest/templates/${id}/sample`, { method: "POST", body: JSON.stringify({ from, to }) }),
@@ -641,4 +655,85 @@ export const columnTemplateApi = {
 export const globalTableApi = {
   meta: (connectionId?: string) =>
     req<{ meta: { tableName: string; connectionId: string; sourceLineId: string; sourceLineName: string; total: number; filled: number; analyzed: boolean; columns: { name: string; meaning: string; datatype: string }[] }[] }>(`/api/ingest/global/tables/meta${connectionId ? `?connectionId=${connectionId}` : ""}`),
+};
+
+/* ---- F7 Overview (Line 360°): health + readings + tickets ---- */
+
+export interface HealthStream {
+  resolution: string;
+  cards: number;
+  lastRun: string | null;
+  nextRun: string | null;
+  /** Tick runs judge the schedule; test runs are human activity (footnote). */
+  runs24h: { tick: number; test: number };
+}
+
+export interface LineHealth {
+  lineId: string;
+  lastTick: string | null;
+  quietHours: number | null;
+  windows: { last5min: { runs: number; ok: number; failed: number }; last1h: { runs: number; ok: number; failed: number } };
+  streams: HealthStream[];
+}
+
+export interface ChartReadingRow {
+  id: number;
+  at: string;
+  lineId: string;
+  cardId: string;
+  chartKey: string;
+  status: string;
+  breach: boolean;
+  summary: string;
+  readingJson: string;
+  prompt: string;
+  responseText: string;
+  reason: string;
+  llmCallId: number | null;
+  /** Thumb data-URL on list rows, full PNG on detail, null when absent. */
+  image: string | null;
+}
+
+export interface TicketRow {
+  id: number;
+  at: string;
+  lineId: string;
+  cardId: string | null;
+  readingId: number | null;
+  runId: number | null;
+  title: string;
+  aiReason: string;
+  status: "open" | "closed";
+  closedAt: string | null;
+  note: string;
+}
+
+export const overviewApi = {
+  health: (lineId: string) =>
+    req<LineHealth>(`/api/ingest/overview/health?line=${encodeURIComponent(lineId)}`),
+};
+
+export const readingApi = {
+  list: (lineId: string, limit = 50, offset = 0) =>
+    req<{ rows: ChartReadingRow[]; total: number }>(
+      `/api/ingest/readings?line=${encodeURIComponent(lineId)}&limit=${limit}&offset=${offset}`
+    ),
+  get: (id: number) => req<ChartReadingRow>(`/api/ingest/readings/${id}`),
+};
+
+export const ticketApi = {
+  list: (lineId: string, status: "open" | "closed" | "all" = "open") =>
+    req<{ rows: TicketRow[]; total: number; open: number }>(
+      `/api/ingest/tickets?line=${encodeURIComponent(lineId)}&status=${status}`
+    ),
+  open: (input: { lineId: string; cardId?: string; readingId?: number; runId?: number; title?: string }) =>
+    req<{ id: number; deduped: boolean; ticket: TicketRow }>("/api/ingest/tickets/open", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  close: (id: number, note: string) =>
+    req<{ id: number; ticket: TicketRow }>(`/api/ingest/tickets/${id}/close`, {
+      method: "POST",
+      body: JSON.stringify({ note }),
+    }),
 };

@@ -8,12 +8,14 @@ import {
   listCards,
   listGraphsForCard,
   listLineColumnMeta,
+  parseThresholds,
   RESOLUTION_LADDER,
   updateTemplate,
   type Card,
   type CardTemplate,
   type ChartSuggestion,
   type ConnectionRecord,
+  type ThresholdCondition,
 } from "../db/store.js";
 import { assertReadonly, driverFor } from "../drivers/index.js";
 import { runCardTest } from "./cards.js";
@@ -51,19 +53,62 @@ function numericCols(rows: Record<string, unknown>[], columns: string[]): string
  * chart per numeric column; else categorical X -> bar; non-numeric heavy ->
  * table. Same vocabulary the LLM prompt uses, so results stay comparable.
  */
+/**
+ * Warn lines for a chart's plotted columns: one condition per threshold row
+ * whose column is actually on the chart, op from the row direction. Falls
+ * back to the legacy single-threshold stamp (row-1 value on the first Y)
+ * when no row matches — e.g. cards, which carry one bare number.
+ */
+export function yConditionsFor(
+  cols: string[],
+  rows: ThresholdCondition[],
+  legacy: number | null,
+): { column: string; op: string; value: number; label?: string; comment?: string }[] {
+  const matched = rows
+    .filter((r) => cols.includes(r.column))
+    .map((r) => ({
+      column: r.column,
+      op: r.direction === "below" ? "<=" : ">=",
+      value: r.value,
+      // Name + comment ride along for preview chips (omitted when empty).
+      ...(r.name.trim() ? { label: r.name.trim() } : {}),
+      ...(r.comment.trim() ? { comment: r.comment.trim() } : {}),
+    }));
+  if (matched.length > 0) return matched;
+  if (legacy != null && cols.length > 0) return [{ column: cols[0], op: ">=", value: legacy }];
+  return [];
+}
+
+/**
+ * THRESHOLDS prompt block (dry-run proven in ingestion/suggest-charts):
+ * one line per definition row so the model cites names/values/directions
+ * in rationale/conditions and prefers threshold columns as Y measures.
+ */
+export function buildThresholdsBlock(rows: ThresholdCondition[]): string {
+  if (rows.length === 0) return "";
+  const lines = rows.map((r) => {
+    const dir = r.direction === "below" ? "below" : "above";
+    const comment = r.comment.trim() ? ` · ${r.comment.trim()}` : "";
+    const name = r.name.trim() ? `${r.name.trim()} · ` : "";
+    return `- ${name}${r.column} · ${dir} ${r.value}${comment}`;
+  });
+  return `THRESHOLDS (breach conditions defined on this template — cite applicable ones in rationale/conditions and prefer their columns as Y measures):\n${lines.join("\n")}`;
+}
+
 export function heuristicSuggestions(
   columns: string[],
   rows: Record<string, unknown>[],
   unit: string,
   threshold: number | null,
-  granularity = "hourly"
+  granularity = "hourly",
+  thresholdRows: ThresholdCondition[] = []
 ): ChartSuggestion[] {
   if (rows.length === 0 || columns.length === 0) return [];
   const nums = numericCols(rows, columns);
   const recipeFor = (x: string, y: string[]) => ({
     resolutions: [...RESOLUTION_LADDER],
     xCondition: { column: x, bucket: granularity },
-    yConditions: threshold != null && y.length > 0 ? [{ column: y[0], op: ">=", value: threshold }] : [],
+    yConditions: yConditionsFor(y, thresholdRows, threshold),
   });
   if (nums.length === 0) {
     return [{
@@ -403,7 +448,8 @@ function sanitizeCandidates(
   columns: string[],
   rows: Record<string, unknown>[],
   granularity: string,
-  threshold: number | null
+  threshold: number | null,
+  thresholdRows: ThresholdCondition[] = []
 ): { suggestions: ChartSuggestion[]; dropped: DroppedColumns } {
   const cols = new Set(columns);
   // Verbatim-copy checker: exact match accepts; case-only drift is
@@ -454,7 +500,7 @@ function sanitizeCandidates(
         enabled: true,
         resolutions: [...RESOLUTION_LADDER],
         xCondition: { column: xCol, bucket: granularity },
-        yConditions: threshold != null ? [{ column: xCol, op: ">=", value: threshold }] : [],
+        yConditions: yConditionsFor([xCol], thresholdRows, threshold),
       });
       continue;
     }
@@ -480,7 +526,7 @@ function sanitizeCandidates(
       enabled: true,
       resolutions: [...RESOLUTION_LADDER],
       xCondition: { column: xCol, bucket: granularity },
-      yConditions: threshold != null && yCols.length > 0 ? [{ column: yCols[0], op: ">=", value: threshold }] : [],
+      yConditions: yConditionsFor(yCols, thresholdRows, threshold),
     });
   }
   return { suggestions: out, dropped };
@@ -568,6 +614,8 @@ export async function recommendCore(o: {
   granularity: string;
   unit: string;
   threshold: number | null;
+  /** Full definition rows (templates): prompt block + direction-aware lines. */
+  thresholdRows?: ThresholdCondition[];
   semantics: string;
   meanings: ReturnType<typeof listLineColumnMeta>;
   sample: { columns: string[]; rows: Record<string, unknown>[] };
@@ -577,17 +625,22 @@ export async function recommendCore(o: {
   heuristic: boolean;
   reason: LlmFailReason | "no-valid-candidates" | null;
   dropped: { invented: string[]; renamed: { from: string; to: string }[] };
+  prompt: { system: string; user: string };
 }> {
-  const fallback = heuristicSuggestions(o.sample.columns, o.sample.rows, o.unit, o.threshold, o.granularity);
+  const rows = o.thresholdRows ?? [];
+  const fallback = heuristicSuggestions(o.sample.columns, o.sample.rows, o.unit, o.threshold, o.granularity, rows);
+  const block = buildThresholdsBlock(rows);
+  const user = `${o.label}\nData:\n${samplePreview(o.sample.columns, o.sample.rows, { granularity: o.granularity, unit: o.unit, threshold: o.threshold, semantics: o.semantics })}${block ? `\n\n${block}` : ""}`;
   const r = await llmChatJson({
     system: CHART_SYSTEM,
-    user: `${o.label}\nData:\n${samplePreview(o.sample.columns, o.sample.rows, { granularity: o.granularity, unit: o.unit, threshold: o.threshold, semantics: o.semantics })}`,
+    user,
     schema: chartCandidatesSchema,
     context: o.context,
     log: o.log,
   });
+  const prompt = { system: CHART_SYSTEM, user };
   const checked = r.parsed
-    ? sanitizeCandidates(toCandidateArray(r.parsed), o.sample.columns, o.sample.rows, o.granularity, o.threshold)
+    ? sanitizeCandidates(toCandidateArray(r.parsed), o.sample.columns, o.sample.rows, o.granularity, o.threshold, rows)
     : { suggestions: [], dropped: { invented: [], renamed: [] } };
   const raw = checked.suggestions.length > 0 ? checked.suggestions : fallback;
   const sum = summarizeSample(o.sample.columns, o.sample.rows);
@@ -603,7 +656,9 @@ export async function recommendCore(o: {
   );
   const reason: LlmFailReason | "no-valid-candidates" | null =
     checked.suggestions.length > 0 ? null : (r.reason ?? "no-valid-candidates");
-  return { suggestions, model: r.model || null, heuristic: checked.suggestions.length === 0, reason, dropped: checked.dropped };
+  // Prompt echo: powers the preview "AI → Details" view (exact sent text).
+  // Included on heuristic results too ("what would be sent").
+  return { suggestions, model: r.model || null, heuristic: checked.suggestions.length === 0, reason, dropped: checked.dropped, prompt };
 }
 
 export async function chartRoutes(app: FastifyInstance) {
@@ -742,7 +797,9 @@ export async function chartRoutes(app: FastifyInstance) {
       label: `Feature: ${tpl.name} (granularity ${tpl.granularity}, unit "${tpl.unit || "none"}").`,
       granularity: tpl.granularity,
       unit: tpl.unit,
-      threshold: null,
+      // Row 1 drives the profile number; all rows drive block + warn lines.
+      threshold: tpl.thresholds[0]?.value ?? null,
+      thresholdRows: tpl.thresholds,
       semantics,
       meanings,
       sample,
@@ -763,6 +820,13 @@ export async function chartRoutes(app: FastifyInstance) {
       unit: z.string().max(20).default(""),
       granularity: z.string().max(20).default("hourly"),
       threshold: z.number().nullable().default(null),
+      thresholdRows: z.array(z.object({
+        name: z.string().max(120).default(""),
+        column: z.string().min(1).max(120),
+        direction: z.enum(["above", "below"]).default("above"),
+        value: z.number(),
+        comment: z.string().max(500).default(""),
+      })).max(2).default([]),
       referenceLineId: z.string().min(1),
     }).safeParse(req.body ?? {});
     if (!p.success) return reply.code(400).send({ error: p.error.message });
@@ -784,13 +848,15 @@ export async function chartRoutes(app: FastifyInstance) {
       { description: b.description, context: "", extractHint: "" },
       meanings,
     );
+    const rows = parseThresholds(b.thresholdRows);
     const r = await recommendCore({
       log: app.log,
       context: { route: "recommend-draft", lineId: line.id },
       label: `Feature: ${b.name || "(unsaved draft)"} (granularity ${b.granularity}, unit "${b.unit || "none"}").`,
       granularity: b.granularity,
       unit: b.unit,
-      threshold: b.threshold,
+      threshold: b.threshold ?? rows[0]?.value ?? null,
+      thresholdRows: rows,
       semantics,
       meanings,
       sample: { columns: sample.columns, rows: sample.rows },
