@@ -8,6 +8,7 @@ Internet fix: IMAGE FIRST in the user content blocks (measured +13-18% on
 chart parsing) — the model sees, then reads instructions.
 """
 import base64
+import hashlib
 import json
 import os
 import sys
@@ -15,6 +16,46 @@ import urllib.request
 from build_envelope import build
 
 BASE = "/home/somic_cps/Vina/new-iot-chat-api/context-building-new/part1"
+
+
+def write_prompt_record(name: str, system_file: str, system: str,
+                        image: str, fixture: str, user_text: str,
+                        backfilled: bool = False) -> None:
+    """Complete prompt as sent: system inlined (never referenced) + hash,
+    image block first with file facts, then envelope. Grade against the
+    pair (<trial>.json reply + <trial>.prompt.md), never the reply alone."""
+    digest = hashlib.sha256(system.encode()).hexdigest()[:12]
+    try:
+        img_bytes = os.path.getsize(image)
+    except OSError:
+        img_bytes = -1
+    md = [
+        f"# Trial {name} — complete prompt as sent",
+        "",
+        "## 1. system",
+        f"file: `{system_file}` · chars: {len(system)} · sha12: `{digest}`"
+        + (" · BACKFILLED (system file may differ from run-time version)" if backfilled else ""),
+        "",
+        "```",
+        system,
+        "```",
+        "",
+        "## 2. user block 1: image (FIRST — image-first ordering)",
+        f"file: `{image}` · bytes: {img_bytes} · sent as base64 data-URL image part",
+        "",
+        "## 3. user block 2: envelope text",
+        f"fixture: `{fixture}` · chars: {len(user_text)}",
+        "",
+        "```",
+        user_text,
+        "```",
+        "",
+        "## Order note",
+        "image block → text block (image-first, measured +13–18% on chart parsing).",
+        "",
+    ]
+    with open(f"{BASE}/responses/{name}.prompt.md", "w") as f:
+        f.write("\n".join(md))
 
 
 def main() -> None:
@@ -51,9 +92,11 @@ def main() -> None:
         open(f"{BASE}/responses/{name}.json", "w"),
         indent=1,
     )
+    write_prompt_record(name, system_file, system, image, fixture, user_text)
     print(f"===== TRIAL {name} ENVELOPE CHARS: {len(user_text)} SYSTEM CHARS: {len(system)} (saved responses/{name}.json) =====")
     print(f"===== TRIAL {name} REPLY =====")
     print(reply)
 
 
-main()
+if __name__ == "__main__":
+    main()
