@@ -2,7 +2,7 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   ArrowRight, Brain, ChartLine, ChevronDown, ClipboardCheck, Copy, Database, Eye, FlaskConical, History as HistoryIcon,
-  LayoutTemplate, ListChecks, Pause, Pencil, Play, Plus, RefreshCw, Rocket, Save, Search, SlidersHorizontal, Sparkles, Table2, Trash2, X,
+  Info,   LayoutTemplate, ListChecks, Pause, Pencil, Play, Plus, RefreshCw, Rocket, Save, Search, Send, SlidersHorizontal, Sparkles, Table2, Trash2, X,
 } from "lucide-react";
 import { Btn, Segmented, Spinner } from "../components/ui";
 import { CardDetails } from "../components/CardDetails";
@@ -12,7 +12,7 @@ import { ChartPreviewModal, type AiRunInfo } from "../components/ChartPreviewMod
 import { LinePreview } from "../components/LinePreview";
 import { windowForResolution, type Resolution } from "../components/Chart";
 import { isTradingEligible, TradingChart } from "../components/TradingChart";
-import { cardApi, api, bankApi, chartApi, graphApi, playgroundApi, llmReasonText, ALL_STREAMS, SKIP_DAYS, SKIP_DAY_LABEL, defaultSkipSchedule, hasCustomSkip, skipSummary, type BankOverviewEntry, type CandidateQuirk, type Card, type CardTemplate, type CardSample, type ChartSuggestion, type HintPoint, type Line, type ReapplyResult, type TestResult, type GraphSpec, type ChartType, type PlaygroundResult, type QueryHistoryEntry,   type LineColumn, type SkipSchedule, type StreamResolution, type ThresholdCondition } from "../lib/api";
+import { cardApi, api, bankApi, chartApi, graphApi, playgroundApi, llmReasonText, ALL_STREAMS, SKIP_DAYS, SKIP_DAY_LABEL, defaultSkipSchedule, hasCustomSkip, skipSummary, type BankOverviewEntry, type CandidateQuirk, type Card, type CardTemplate, type CardSample, type ChartSuggestion, type HintPoint, type Line, type ReapplyResult, type TestResult, type GraphSpec, type ChartType, type PlaygroundResult, type QueryHistoryEntry,   type LineColumn, type LineRanges, type SkipSchedule, type StreamResolution, type TableColumnsDetails, type ThresholdCondition } from "../lib/api";
 import { AlertBanner, StatusChip } from "../components/chips";
 import { FormattedText } from "../components/FormattedText";
 import { PushToHindsight } from "../components/PushToHindsight";
@@ -425,6 +425,10 @@ export function Cards() {
   const [pgHistory, setPgHistory] = useState<QueryHistoryEntry[]>([]);
   const [pgShowHistory, setPgShowHistory] = useState(false);
   const [pgCols, setPgCols] = useState<LineColumn[]>([]);
+  const [pgRanges, setPgRanges] = useState<LineRanges | null>(null);
+  const [pgRangesLoading, setPgRangesLoading] = useState(false);
+  const [pgFrom, setPgFrom] = useState("");
+  const [pgTo, setPgTo] = useState("");
   const [pgShowSave, setPgShowSave] = useState(false);
   const [pgSaveDraft, setPgSaveDraft] = useState({ name: "", tables: "", granularity: "hourly", unit: "", extractHint: "" });
 
@@ -456,13 +460,42 @@ export function Cards() {
   }
   useEffect(() => void refresh(), []);
 
-  // Load playground history + columns when line changes
+  // Load playground history + columns + time ranges when line changes
   useEffect(() => {
     if (tab === "playground" && pgLineId) {
       playgroundApi.history(pgLineId).then(setPgHistory).catch(() => {});
       playgroundApi.columns(pgLineId).then((r) => setPgCols(r.columns)).catch(() => setPgCols([]));
+      setPgRangesLoading(true);
+      playgroundApi.ranges(pgLineId)
+        .then((r) => {
+          setPgRanges(r);
+          // Default the picker to the line's full range (earliest start → latest end).
+          setPgFrom((f) => f || (r.overall.start ? pgToLocalInput(r.overall.start) : ""));
+          setPgTo((t) => t || (r.overall.end ? pgToLocalInput(r.overall.end) : ""));
+        })
+        .catch(() => setPgRanges(null))
+        .finally(() => setPgRangesLoading(false));
     }
   }, [tab, pgLineId]);
+
+  function applyPgPreset(hours: number | null) {
+    if (!pgRanges) return;
+    const r = pgPresetRange(hours, pgRanges.overall);
+    setPgFrom(r.from);
+    setPgTo(r.to);
+  }
+
+  // Active preset = the preset whose range exactly matches the picker.
+  // Before ranges load the picker will default to full, so full shows green initially.
+  // Any manual From/To edit matches nothing → no button green.
+  const pgActivePreset: string | null = (() => {
+    if (!pgRanges) return "full";
+    for (const p of PG_PRESETS) {
+      const r = pgPresetRange(p.hours, pgRanges.overall);
+      if (r.from === pgFrom && r.to === pgTo) return p.label;
+    }
+    return null;
+  })();
 
   const liveCount = cards.filter((c) => c.status === "live").length;
 
@@ -1263,7 +1296,7 @@ export function Cards() {
         <PlaygroundTab
           lines={lines}
           lineId={pgLineId}
-          setLineId={setPgLineId}
+          setLineId={(v) => { setPgLineId(v); setPgFrom(""); setPgTo(""); setPgRanges(null); }}
           sql={pgSql}
           setSql={setPgSql}
           result={pgResult}
@@ -1272,13 +1305,26 @@ export function Cards() {
           history={pgHistory}
           showHistory={pgShowHistory}
           cols={pgCols}
+          ranges={pgRanges}
+          rangesLoading={pgRangesLoading}
+          from={pgFrom}
+          to={pgTo}
+          setFrom={setPgFrom}
+          setTo={setPgTo}
+          onPreset={applyPgPreset}
+          activePreset={pgActivePreset}
           showSave={pgShowSave}
           saveDraft={pgSaveDraft}
           onRun={async () => {
             if (!pgLineId || !pgSql.trim()) return;
             setPgRunning(true); setPgError(null); setPgResult(null);
             try {
-              const r = await playgroundApi.run(pgLineId, pgSql);
+              const r = await playgroundApi.run(
+                pgLineId,
+                pgSql,
+                pgFrom ? new Date(pgFrom).toISOString() : undefined,
+                pgTo ? new Date(pgTo).toISOString() : undefined,
+              );
               setPgResult(r);
               const h = await playgroundApi.history(pgLineId);
               setPgHistory(h);
@@ -2679,8 +2725,55 @@ function SpecificsModal({ card, templateName, line, onClose, onSaved }: {
   );
 }
 
+const PG_PRESETS: { label: string; hours: number | null }[] = [
+  { label: "24h", hours: 24 },
+  { label: "7d", hours: 24 * 7 },
+  { label: "30d", hours: 24 * 30 },
+  { label: "full", hours: null },
+];
+
+/** The From/To a preset produces for a line's overall range (single source of truth). */
+function pgPresetRange(hours: number | null, overall: { start: string | null; end: string | null }): { from: string; to: string } {
+  const endMs = Date.parse(overall.end ?? "");
+  const end = Number.isNaN(endMs) ? new Date() : new Date(endMs);
+  const to = pgToLocalInput(end.toISOString());
+  if (hours == null) return { from: overall.start ? pgToLocalInput(overall.start) : "", to };
+  return { from: pgToLocalInput(new Date(end.getTime() - hours * 3600_000).toISOString()), to };
+}
+
+/** ISO → datetime-local input value (local wall time). */
+function pgToLocalInput(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function pgFmtTs(iso: string | null): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+}
+
+/** Do table bounds [tStart, tEnd] overlap the picked window [wStart, wEnd]? Null window edge = open. */
+function pgRangeOverlap(tStart: string | null, tEnd: string | null, wStart: string | null, wEnd: string | null): boolean {
+  if (!tStart || !tEnd) return false;
+  const ts = Date.parse(tStart);
+  const te = Date.parse(tEnd);
+  if (Number.isNaN(ts) || Number.isNaN(te)) return true; // unparseable — don't flag
+  if (wStart) {
+    const ws = Date.parse(wStart);
+    if (!Number.isNaN(ws) && te < ws) return false;
+  }
+  if (wEnd) {
+    const we = Date.parse(wEnd);
+    if (!Number.isNaN(we) && ts > we) return false;
+  }
+  return true;
+}
+
 /** SQL Playground tab — inline in Cards, not a separate route. */
-function PlaygroundTab({ lines, lineId, setLineId, sql, setSql, result, error, running, history, showHistory, cols, showSave, saveDraft, onRun, onHistoryToggle, onRerun, onSaveCard, setShowSave, setSaveDraft }: {
+function PlaygroundTab({ lines, lineId, setLineId, sql, setSql, result, error, running, history, showHistory, cols, ranges, rangesLoading, from, to, setFrom, setTo, onPreset, activePreset, showSave, saveDraft, onRun, onHistoryToggle, onRerun, onSaveCard, setShowSave, setSaveDraft }: {
   lines: Line[];
   lineId: string;
   setLineId: (v: string) => void;
@@ -2692,6 +2785,14 @@ function PlaygroundTab({ lines, lineId, setLineId, sql, setSql, result, error, r
   history: QueryHistoryEntry[];
   showHistory: boolean;
   cols: LineColumn[];
+  ranges: LineRanges | null;
+  rangesLoading: boolean;
+  from: string;
+  to: string;
+  setFrom: (v: string) => void;
+  setTo: (v: string) => void;
+  onPreset: (hours: number | null) => void;
+  activePreset: string | null;
   showSave: boolean;
   saveDraft: { name: string; tables: string; granularity: string; unit: string; extractHint: string };
   onRun: () => void;
@@ -2704,9 +2805,85 @@ function PlaygroundTab({ lines, lineId, setLineId, sql, setSql, result, error, r
   const [tblPick, setTblPick] = useState("");
   const sqlRef = useRef<HTMLTextAreaElement>(null);
   const pgLine = lines.find((l) => l.id === lineId);
+  // Chat/editor split — layout shell only: thread is local, AI wiring lands next.
+  const [chatOpen, setChatOpen] = useState(true);
+  const [chatInput, setChatInput] = useState("");
+  const [chatMsgs, setChatMsgs] = useState<{ role: "user" | "ai"; text: string }[]>([
+    { role: "ai", text: "Ask me for SQL in plain words — e.g. “hourly average of temp, last 7 days”. I’ll draft it into the editor on the right; you review and Run." },
+  ]);
+  useEffect(() => {
+    setChatMsgs([
+      { role: "ai", text: "Ask me for SQL in plain words — e.g. “hourly average of temp, last 7 days”. I’ll draft it into the editor on the right; you review and Run." },
+    ]);
+    setChatInput("");
+  }, [lineId]);
+  function sendChat() {
+    const t = chatInput.trim();
+    if (!t) return;
+    setChatMsgs((m) => [...m, { role: "user", text: t }]);
+    setChatInput("");
+  }
+  // Per-table Details: one open at a time, lazy-loaded + cached, reset on line change.
+  const [dtOpen, setDtOpen] = useState<string | null>(null);
+  const [dtCache, setDtCache] = useState<Record<string, TableColumnsDetails>>({});
+  const [dtLoading, setDtLoading] = useState<string | null>(null);
+  const [dtError, setDtError] = useState<Record<string, string>>({});
+  useEffect(() => {
+    setDtOpen(null); setDtCache({}); setDtLoading(null); setDtError({});
+  }, [lineId]);
+
+  async function toggleDt(tableRef: string) {
+    if (dtOpen === tableRef) { setDtOpen(null); return; }
+    setDtOpen(tableRef);
+    if (dtCache[tableRef] || dtLoading === tableRef) return;
+    const parts = tableRef.split(".");
+    const schema = parts.length > 1 ? parts[0] : "public";
+    const table = parts.length > 1 ? parts.slice(1).join(".") : parts[0];
+    setDtLoading(tableRef);
+    try {
+      const d = await api.tableColumns(lineId, schema, table);
+      setDtCache((c) => ({ ...c, [tableRef]: d }));
+      setDtError((e) => { const n = { ...e }; delete n[tableRef]; return n; });
+    } catch (e) {
+      setDtError((er) => ({ ...er, [tableRef]: (e as Error).message }));
+    } finally {
+      setDtLoading((l) => (l === tableRef ? null : l));
+    }
+  }
+  // Recorded bounds as datetime-local strings — the picker cannot leave this window.
+  const boundMin = ranges?.overall.start ? pgToLocalInput(ranges.overall.start) : "";
+  const boundMax = ranges?.overall.end ? pgToLocalInput(ranges.overall.end) : "";
+  const bounded = !!boundMin && !!boundMax;
+  // Recorded span, for preset coverage ("only 11 days recorded").
+  const spanMs = (() => {
+    if (!ranges?.overall.start || !ranges?.overall.end) return null;
+    const s = Date.parse(ranges.overall.start);
+    const e = Date.parse(ranges.overall.end);
+    return Number.isNaN(s) || Number.isNaN(e) || e < s ? null : e - s;
+  })();
+  const spanLabel = spanMs == null ? "no data" : spanMs < 2 * 86400_000
+    ? `${Math.max(1, Math.round(spanMs / 3600_000))} hours`
+    : `${Math.floor(spanMs / 86400_000)} days`;
+  const presetCovered = (hours: number | null) =>
+    spanMs != null && (hours == null || spanMs >= hours * 3600_000);
+  // Clamp to recorded bounds; order guard: the edited edge drags the other along.
+  function clampFrom(v: string) {
+    let nv = v;
+    if (boundMin && nv && nv < boundMin) nv = boundMin;
+    if (boundMax && nv && nv > boundMax) nv = boundMax;
+    if (nv && to && nv > to) setTo(nv);
+    setFrom(nv);
+  }
+  function clampTo(v: string) {
+    let nv = v;
+    if (boundMin && nv && nv < boundMin) nv = boundMin;
+    if (boundMax && nv && nv > boundMax) nv = boundMax;
+    if (nv && from && nv < from) setFrom(nv);
+    setTo(nv);
+  }
   return (
     <div>
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-wrap items-end gap-3">
         <label className="block text-sm">
           Line
           <select value={lineId} onChange={(e) => setLineId(e.target.value)} className="ml-2 w-64 rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-ink-700">
@@ -2714,6 +2891,37 @@ function PlaygroundTab({ lines, lineId, setLineId, sql, setSql, result, error, r
             {lines.map((l) => <option key={l.id} value={l.id}>{l.id} — {l.name}</option>)}
           </select>
         </label>
+        <label className="block text-sm">
+          From
+          <input type="datetime-local" value={from} min={boundMin || undefined} max={boundMax || undefined} disabled={!bounded} onChange={(e) => clampFrom(e.target.value)} title={bounded ? `Recorded data starts ${pgFmtTs(ranges?.overall.start ?? null)}` : "No time data on this line"} className="tnum ml-2 rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm disabled:opacity-40 dark:border-ink-700" />
+        </label>
+        <label className="block text-sm">
+          To
+          <input type="datetime-local" value={to} min={boundMin || undefined} max={boundMax || undefined} disabled={!bounded} onChange={(e) => clampTo(e.target.value)} title={bounded ? `Recorded data ends ${pgFmtTs(ranges?.overall.end ?? null)}` : "No time data on this line"} className="tnum ml-2 rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm disabled:opacity-40 dark:border-ink-700" />
+        </label>
+        <div className="flex items-center gap-1 pb-1">
+          {PG_PRESETS.map((p) => {
+            const active = activePreset === p.label;
+            const covered = presetCovered(p.hours);
+            return (
+              <button
+                key={p.label}
+                onClick={() => onPreset(p.hours)}
+                disabled={!covered}
+                className={active
+                  ? "rounded border border-state-ok bg-state-ok px-1.5 py-0.5 text-xs font-semibold text-white"
+                  : "rounded border border-slate-200 px-1.5 py-0.5 text-xs text-slate-500 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-ink-700 dark:text-ink-400 dark:hover:bg-ink-800 glass-pill glass-pill--neutral"}
+                title={covered
+                  ? (p.hours == null ? "Full recorded range" : `Last ${p.label}`)
+                  : `Only ${spanLabel} recorded — ${p.label} unavailable`}
+              >
+                {p.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div className="mt-3 flex flex-wrap items-end gap-3">
         {pgLine && pgLine.memberTables.length > 0 && (
           <label className="block text-sm">
             Tables <span className="tnum text-xs text-slate-400">({pgLine.memberTables.length} attached)</span>
@@ -2740,18 +2948,148 @@ function PlaygroundTab({ lines, lineId, setLineId, sql, setSql, result, error, r
           </div>
         )}
       </div>
-      <div className="mt-3">
-        <textarea ref={sqlRef} rows={6} value={sql} onChange={(e) => setSql(e.target.value)} placeholder="SELECT * FROM readings_temp LIMIT 50" className="w-full rounded-lg border border-slate-300 bg-transparent p-3 font-mono text-sm dark:border-ink-700" onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onRun(); }} />
-        <div className="mt-1 flex items-center gap-3 text-xs text-slate-400 dark:text-ink-500">
-          <span>Ctrl+Enter to run</span><span>·</span><span>SELECT/WITH/SHOW/EXPLAIN only</span><span>·</span><span>no multi-statement</span>
+      {(rangesLoading || ranges) && (
+        <div className="mt-3 rounded-xl border border-slate-200 p-3 dark:border-ink-800">
+          <div className="text-xs font-semibold text-slate-500 dark:text-ink-400">
+            Data readiness {rangesLoading ? "— loading…" : ranges?.overall.start || ranges?.overall.end ? (
+              <span className="tnum font-normal">· {pgFmtTs(ranges.overall.start)} → {pgFmtTs(ranges.overall.end)}</span>
+            ) : "— no time data"}
+          </div>
+          {ranges && (
+            <div className="mt-2 flex flex-col gap-1.5">
+              {ranges.ranges.map((r) => {
+                const overlap = pgRangeOverlap(r.start, r.end, from ? new Date(from).toISOString() : null, to ? new Date(to).toISOString() : null);
+                const open = dtOpen === r.table;
+                const det = dtCache[r.table];
+                return (
+                  <div key={r.table}>
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <StatusChip tone={!r.start || !r.end ? "warn" : overlap ? "ok" : "mute"}>
+                        {!r.start || !r.end ? "no data" : overlap ? "in range" : "out of range"}
+                      </StatusChip>
+                      <span className="font-mono text-slate-600 dark:text-ink-300">{r.table}</span>
+                      <span className="tnum text-slate-400">
+                        {r.start && r.end ? `${pgFmtTs(r.start)} → ${pgFmtTs(r.end)}` : (r.error ?? "unknown")}
+                      </span>
+                      {r.rows != null && <span className="tnum text-slate-400">{r.rows} rows</span>}
+                      <button
+                        onClick={() => void toggleDt(r.table)}
+                        className="ml-auto inline-flex items-center gap-1 rounded border border-slate-200 px-1.5 py-0.5 text-xs text-slate-500 hover:bg-slate-100 dark:border-ink-700 dark:text-ink-400 dark:hover:bg-ink-800 glass-pill glass-pill--neutral"
+                        title="Show stored column explanations, samples and table facts"
+                      >
+                        <Info size={12} /> details
+                      </button>
+                    </div>
+                    {open && (
+                      <div className="mt-1.5 rounded-lg border border-slate-200 p-3 dark:border-ink-700">
+                        {dtLoading === r.table && <div className="text-xs text-slate-400">loading table info…</div>}
+                        {dtError[r.table] && <div className="text-xs text-state-bad">{dtError[r.table]}</div>}
+                        {det && (
+                          <div>
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 dark:text-ink-400">
+                              <span>time column: <span className="font-mono">{r.timeColumn ?? "—"}</span></span>
+                              <span className="tnum">{r.start && r.end ? `${pgFmtTs(r.start)} → ${pgFmtTs(r.end)}` : "no bounds"}</span>
+                              <span className="tnum">{det.rowCount != null ? `${det.rowCount} rows total` : "row count unknown"}</span>
+                              {det.primaryKey.length > 0 && <span>pk: <span className="font-mono">{det.primaryKey.join(", ")}</span></span>}
+                              <span>explained: <span className="tnum">{det.analyzed.filled}/{det.analyzed.total}</span></span>
+                            </div>
+                            <table className="mt-2 w-full text-left text-xs">
+                              <thead>
+                                <tr className="border-b border-slate-200 text-slate-400 dark:border-ink-700">
+                                  <th className="py-1 pr-2 font-semibold">column</th>
+                                  <th className="py-1 pr-2 font-semibold">type</th>
+                                  <th className="py-1 pr-2 font-semibold">meaning</th>
+                                  <th className="py-1 font-semibold">samples</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {det.columns.map((c) => (
+                                  <tr key={c.name} className="border-t border-slate-100 dark:border-ink-800">
+                                    <td className="py-1 pr-2 font-mono text-slate-600 dark:text-ink-300">{c.name}</td>
+                                    <td className="py-1 pr-2 font-mono text-slate-400">{c.datatype || c.type}</td>
+                                    <td className="py-1 pr-2 text-slate-500 dark:text-ink-400">{c.meaning?.trim() ? c.meaning : <span className="text-slate-400">—</span>}</td>
+                                    <td className="tnum py-1 font-mono text-slate-400">{(c.sampleValues ?? []).slice(0, 3).join(", ")}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                            {det.sample.rows.length > 0 && (
+                              <div className="mt-2 overflow-auto">
+                                <div className="text-xs font-semibold text-slate-500 dark:text-ink-400">sample rows ({det.sample.rows.length})</div>
+                                <table className="mt-1 w-full text-left font-mono text-xs">
+                                  <thead>
+                                    <tr className="border-b border-slate-200 dark:border-ink-700">
+                                      {det.sample.columns.map((c) => <th key={c} className="py-1 pr-2 font-semibold text-slate-400">{c}</th>)}
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {det.sample.rows.slice(0, 5).map((row, i) => (
+                                      <tr key={i} className="border-t border-slate-100 dark:border-ink-800">
+                                        {det.sample.columns.map((c) => <td key={c} className="py-1 pr-2 text-slate-500 dark:text-ink-400">{String(row[c] ?? "")}</td>)}
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+      <div className="mt-3 flex items-center gap-2">
+        <button
+          onClick={() => setChatOpen((v) => !v)}
+          className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-slate-700 dark:text-ink-400 dark:hover:text-ink-200"
+          title={chatOpen ? "Hide the assistant — editor goes full width" : "Show the assistant"}
+        >
+          <Brain size={14} className="text-accent-500" />
+          <span className="font-semibold">SQL assistant</span>
+          <ChevronDown size={12} className={`transition-transform duration-150 ${chatOpen ? "" : "-rotate-90"}`} />
+        </button>
+        <StatusChip tone="mute">layout preview — AI wiring next</StatusChip>
+      </div>
+      <div className={chatOpen ? "mt-2 grid grid-cols-1 gap-3 xl:grid-cols-2" : "mt-2"}>
+        {chatOpen && (
+          <div className="flex flex-col rounded-xl border border-slate-200 dark:border-ink-800">
+            <div className="flex h-64 flex-col gap-2 overflow-auto p-3">
+              {chatMsgs.map((m, i) => (
+                <div key={i} className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${m.role === "user" ? "ml-auto bg-accent-500/15 text-slate-700 dark:text-ink-100" : "bg-slate-100 text-slate-600 dark:bg-ink-800 dark:text-ink-300"}`}>
+                  {m.text}
+                </div>
+              ))}
+            </div>
+            <div className="flex items-center gap-2 border-t border-slate-200 p-2 dark:border-ink-800">
+              <input
+                value={chatInput}
+                onChange={(e) => setChatInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) sendChat(); }}
+                placeholder="Describe the data you want…"
+                className="w-full rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-ink-700"
+              />
+              <Btn size="sm" icon={Send} onClick={sendChat} disabled={!chatInput.trim()} className="shrink-0 glass-pill glass-pill--blue">Send</Btn>
+            </div>
+          </div>
+        )}
+        <div>
+          <textarea ref={sqlRef} rows={6} value={sql} onChange={(e) => setSql(e.target.value)} placeholder="SELECT * FROM readings_temp LIMIT 50" className="w-full rounded-lg border border-slate-300 bg-transparent p-3 font-mono text-sm dark:border-ink-700" onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onRun(); }} />
+          <div className="mt-1 flex items-center gap-3 text-xs text-slate-400 dark:text-ink-500">
+            <span>Ctrl+Enter to run</span><span>·</span><span>SELECT/WITH/SHOW/EXPLAIN only</span><span>·</span><span>no multi-statement</span><span>·</span><span className="font-mono">{"{{from}} / {{to}}"}</span><span>use the picker range</span>
+          </div>
+          <div className="mt-3 flex gap-2">
+            <Btn variant="primary" icon={Play} onClick={onRun} disabled={running || !lineId || !sql.trim()} loading={running} className="glass-pill glass-pill--blue">{running ? "running…" : "Run query"}</Btn>
+            {result && <Btn icon={Save} onClick={() => { setSaveDraft((d) => ({ ...d, name: "", tables: lines.find((l) => l.id === lineId)?.memberTables.join(", ") ?? "", granularity: "hourly", unit: "", extractHint: "" })); setShowSave(true); }} className="glass-pill glass-pill--neutral">Save as card</Btn>}
+            <Btn icon={HistoryIcon} onClick={onHistoryToggle} className="ml-auto glass-pill glass-pill--neutral">History ({history.length})</Btn>
+          </div>
         </div>
       </div>
       {error && <div className="mt-3"><AlertBanner tone="bad" title="Query failed" detail={error} /></div>}
-      <div className="mt-3 flex gap-2">
-        <Btn variant="primary" icon={Play} onClick={onRun} disabled={running || !lineId || !sql.trim()} loading={running} className="glass-pill glass-pill--blue">{running ? "running…" : "Run query"}</Btn>
-        {result && <Btn icon={Save} onClick={() => { setSaveDraft((d) => ({ ...d, name: "", tables: lines.find((l) => l.id === lineId)?.memberTables.join(", ") ?? "", granularity: "hourly", unit: "", extractHint: "" })); setShowSave(true); }} className="glass-pill glass-pill--neutral">Save as card</Btn>}
-        <Btn icon={HistoryIcon} onClick={onHistoryToggle} className="ml-auto glass-pill glass-pill--neutral">History ({history.length})</Btn>
-      </div>
       {result && (
         <div className="mt-4 overflow-auto rounded-xl border border-slate-200 dark:border-ink-800">
           <div className="border-b border-slate-200 px-4 py-2 text-sm dark:border-ink-800">

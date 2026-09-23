@@ -97,7 +97,7 @@ export const api = {
   columnMeta: (lineId: string) =>
     req<{ meta: { lineId: string; tableName: string; columnName: string; meaning: string; datatype: string }[] }>(`/api/ingest/lines/${lineId}/columns/meta`),
   tableColumns: (lineId: string, schema: string, table: string) =>
-    req<{ schema: string; table: string; rowCount: number | null; primaryKey: string[]; columns: { name: string; type: string; nullable: boolean; description?: string; meaning: string; datatype: string; sampleValues?: string[] }[]; sample: { columns: string[]; rows: Record<string, unknown>[] }; analyzed: { total: number; filled: number; analyzed: boolean } }>(`/api/ingest/lines/${lineId}/tables/${schema}/${table}/columns`),
+    req<TableColumnsDetails>(`/api/ingest/lines/${lineId}/tables/${schema}/${table}/columns`),
   analyzeTable: (lineId: string, schema: string, table: string) =>
     req<{ schema: string; table: string; rowCount: number | null; primaryKey: string[]; columns: { name: string; type: string; nullable: boolean; description?: string; meaning: string; datatype: string; sampleValues?: string[] }[]; sample: { columns: string[]; rows: Record<string, unknown>[] }; drafted: { name: string; meaning: string }[]; analyzed: { total: number; filled: number; analyzed: boolean } }>(`/api/ingest/lines/${lineId}/tables/${schema}/${table}/analyze`, { method: "POST" }),
   llmFillTable: (lineId: string, schema: string, table: string, columns?: string[]) =>
@@ -468,6 +468,39 @@ export interface LineColumn {
   type: string;
 }
 
+/** Per-table column explanations (stored at Lines registration) + samples. */
+export interface TableColumnsDetails {
+  schema: string;
+  table: string;
+  rowCount: number | null;
+  primaryKey: string[];
+  columns: {
+    name: string;
+    type: string;
+    nullable: boolean;
+    description?: string;
+    meaning: string;
+    datatype: string;
+    sampleValues?: string[];
+  }[];
+  sample: { columns: string[]; rows: Record<string, unknown>[] };
+  analyzed: { total: number; filled: number; analyzed: boolean };
+}
+
+export interface TableRange {
+  table: string;
+  timeColumn: string | null;
+  start: string | null;
+  end: string | null;
+  rows: number | null;
+  error?: string;
+}
+
+export interface LineRanges {
+  ranges: TableRange[];
+  overall: { start: string | null; end: string | null };
+}
+
 export const playgroundApi = {
   run: (lineId: string, sql: string, from?: string, to?: string) =>
     req<PlaygroundResult>("/api/ingest/playground/run", {
@@ -478,6 +511,8 @@ export const playgroundApi = {
     req<QueryHistoryEntry[]>(`/api/ingest/playground/history/${lineId}`),
   columns: (lineId: string) =>
     req<{ columns: LineColumn[] }>(`/api/ingest/playground/columns/${lineId}`),
+  ranges: (lineId: string) =>
+    req<LineRanges>(`/api/ingest/playground/ranges/${lineId}`),
 };
 
 /* ---- Graph specs (stored visualizations) ---- */

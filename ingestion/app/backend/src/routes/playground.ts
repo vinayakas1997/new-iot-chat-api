@@ -108,6 +108,81 @@ export async function playgroundRoutes(app: FastifyInstance) {
     }
   });
 
+  /**
+   * Per-table time readiness for a line: discovers each member table's time
+   * column (preferred names first, else first timestamp-ish type) and probes
+   * MIN/MAX/COUNT. Tables without a time column (or unreachable ones) are
+   * reported with null bounds so the UI can flag them. Read-only.
+   */
+  app.get("/api/ingest/playground/ranges/:lineId", async (req, reply) => {
+    const { lineId } = req.params as { lineId: string };
+    const line = getLine(lineId);
+    if (!line) return reply.code(404).send({ error: "line not found" });
+    const conn = getConnection(line.connectionId);
+    if (!conn) return reply.code(404).send({ error: "connection not found" });
+
+    const QUOTE = conn.type === "mysql" ? "`" : '"';
+    const qid = (s: string) => `${QUOTE}${s.replaceAll(QUOTE, QUOTE + QUOTE)}${QUOTE}`;
+    const NAME_HITS = ["ts", "timestamp", "event_time", "created_at", "createdat", "recorded_at", "time", "date", "ts_utc"];
+    const TYPE_HIT = /timestamp|datetime/i;
+    const TYPE_MAYBE = /(^|[^a-z])date([^a-z]|$)|(^|[^a-z])time([^a-z]|$)/i;
+
+    const driver = driverFor(conn);
+    const ranges: {
+      table: string; timeColumn: string | null;
+      start: string | null; end: string | null;
+      rows: number | null; error?: string;
+    }[] = [];
+    for (const ref of line.memberTables) {
+      const parts = ref.split(".");
+      const schema = parts.length > 1 ? parts[0] : "public";
+      const table = parts.length > 1 ? parts[1] : parts[0];
+      let cols: { name: string; type: string }[] = [];
+      try {
+        const info = await driver.describeTable(conn, schema, table);
+        cols = info.columns;
+      } catch (e) {
+        ranges.push({ table: ref, timeColumn: null, start: null, end: null, rows: null, error: (e as Error).message });
+        continue;
+      }
+      const byName = cols.find((c) => NAME_HITS.includes(c.name.toLowerCase()));
+      const byType = cols.find((c) => TYPE_HIT.test(c.type))
+        ?? cols.find((c) => TYPE_MAYBE.test(c.type));
+      const tc = byName ?? byType;
+      if (!tc) {
+        ranges.push({ table: ref, timeColumn: null, start: null, end: null, rows: null, error: "no time column" });
+        continue;
+      }
+      try {
+        const probe = `SELECT MIN(${qid(tc.name)}) AS start, MAX(${qid(tc.name)}) AS end, COUNT(*) AS rows FROM ${qid(schema)}.${qid(table)}`;
+        assertReadonly(probe);
+        const r = await driver.queryReadonly<{ start: unknown; end: unknown; rows: unknown }>(conn, probe);
+        const row = r[0] ?? {};
+        const asIso = (v: unknown) =>
+          v == null ? null : v instanceof Date ? v.toISOString() : String(v);
+        ranges.push({
+          table: ref, timeColumn: tc.name,
+          start: asIso(row.start), end: asIso(row.end),
+          rows: row.rows == null ? null : Number(row.rows),
+        });
+      } catch (e) {
+        ranges.push({ table: ref, timeColumn: tc.name, start: null, end: null, rows: null, error: (e as Error).message });
+      }
+    }
+    const starts = ranges.map((r) => r.start).filter((s): s is string => !!s);
+    const ends = ranges.map((r) => r.end).filter((s): s is string => !!s);
+    const pick = (arr: string[], fn: (...n: number[]) => number) => {
+      if (arr.length === 0) return null;
+      const ts = arr.map((s) => Date.parse(s)).filter((n) => !Number.isNaN(n));
+      if (ts.length === 0) return arr[0];
+      return new Date(fn(...ts)).toISOString();
+    };
+    return {
+      ranges,
+      overall: { start: pick(starts, Math.min), end: pick(ends, Math.max) },
+    };
+  });
+
   /** Query history for a line (most recent first). */
   app.get("/api/ingest/playground/history/:lineId", async (req, reply) => {
     const { lineId } = req.params as { lineId: string };
