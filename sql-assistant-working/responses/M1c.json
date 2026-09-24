@@ -1,0 +1,16 @@
+{
+ "trial": "M1c",
+ "systemFile": "ask_system_v2.txt",
+ "buildArgs": [
+  "--line",
+  "line-machines",
+  "--scenario",
+  "scenarios/M1_steps.json",
+  "--rounds",
+  "/tmp/m1_rounds.json",
+  "--question",
+  "what is the latest temperature of each of those machines?"
+ ],
+ "userText": "Line `line-machines`, window 2026-09-11T07:06:09.534Z \u2192 2026-09-22T00:50:00.000Z (preset: full).\n\nTABLES (exhaustive \u2014 query only these):\n- public.machine_status \u2014 time column `ts`, 240 rows, recorded 2026-09-11T07:06:09.535Z \u2192 2026-09-22T00:50:00.000Z\n    ts (timestamp with time zone) \u2014 Timestamp of the status record.\n    machine_id (text) \u2014 Machine identifier, e.g. MX-01.\n    state (text) \u2014 Running state: RUN, IDLE or DOWN.\n- public.machine_temp \u2014 time column `ts`, 1150 rows, recorded 2026-09-11T07:06:09.534Z \u2192 2026-09-22T00:50:00.000Z\n    ts (timestamp with time zone) \u2014 Timestamp of the temperature reading.\n    machine_id (text) \u2014 Machine identifier, matches machine_status.\n    temp_c (double precision) \u2014 Bearing temperature in degrees Celsius.\n\nCONVERSATION SO FAR (round summaries):\n  Round 1: asked 'what machines exist?' \u2192 ran `SELECT DISTINCT machine_id FROM public.machine_status` \u2192 2 rows, ok \u2014 sample: MX-01, MX-02\n\nTHIS TURN:\n  Editor SQL now: (empty)\n  User asks: 'what is the latest temperature of each of those machines?'\n",
+ "reply": "{\n  \"kind\": \"run_sql\",\n  \"sql\": \"SELECT DISTINCT ON (machine_id) machine_id, temp_c, ts FROM public.machine_temp ORDER BY machine_id, ts DESC\",\n  \"steps\": [\"found table public.machine_temp\", \"columns: machine_id, temp_c, ts\", \"key: machine_id in both \u2192 entity join not needed, latest per machine\", \"writing query\", \"running\"],\n  \"reply\": \"Retrieved the latest temperature reading for each machine using the machine_temp table.\"\n}"
+}

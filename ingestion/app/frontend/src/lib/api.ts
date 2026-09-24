@@ -449,6 +449,32 @@ export interface PlaygroundResult {
   capped: boolean;
   durationMs: number;
   sql: string;
+  /** LLM-ready sample contract (P4) — the UI ignores these until /playground/ask lands. */
+  sample?: {
+    columns: { name: string; sampleType: string }[];
+    rows: Record<string, unknown>[];
+    truncatedSample: boolean;
+  };
+  window?: { from: string; to: string };
+  tablesTouched?: string[];
+}
+
+export type PlaygroundErrorKind =
+  | "syntax" | "unknown_table" | "unknown_column" | "boundary"
+  | "timeout" | "connection" | "readonly_violation" | "unknown";
+
+/** Structured run failure — req's plain Error drops the body, so run() throws this instead. */
+export class PlaygroundRunError extends Error {
+  kind: PlaygroundErrorKind;
+  hint?: string;
+  position?: string | null;
+  constructor(message: string, kind: PlaygroundErrorKind, hint?: string, position?: string | null) {
+    super(message);
+    this.name = "PlaygroundRunError";
+    this.kind = kind;
+    this.hint = hint;
+    this.position = position;
+  }
 }
 
 export interface QueryHistoryEntry {
@@ -501,12 +527,67 @@ export interface LineRanges {
   overall: { start: string | null; end: string | null };
 }
 
+export interface AskRoundSummary {
+  question: string;
+  sql: string;
+  outcome: string;
+}
+
+export interface AskRequest {
+  lineId: string;
+  message: string;
+  rounds?: AskRoundSummary[];
+  pendingQuestion?: string | null;
+  currentSql?: string;
+  window?: { from: string; to: string } | null;
+  contextSample?: unknown;
+  contextError?: { kind: string; message: string; hint?: string | null; sql: string } | null;
+}
+
+export type AskResponse =
+  | {
+      type: "round"; ok: boolean; question: string; sql: string; editorSql: string;
+      steps: string[]; attempts: number; reply: string; handoff?: boolean; chained?: boolean;
+      rowCount?: number;
+      sample?: { columns: { name: string; sampleType: string }[]; rows: Record<string, unknown>[]; truncatedSample: boolean };
+      tablesTouched?: string[]; window?: { from: string; to: string };
+      errorKind?: PlaygroundErrorKind; errorHint?: string; errorPosition?: string | null;
+    }
+  | { type: "clarify"; question: string; reply: string; steps: string[] }
+  | { type: "explain"; reply: string; steps: string[] }
+  | { type: "dropped"; reason: string; reply: string; steps: string[]; attempts: number; sql?: string }
+  | { type: "error"; reason: string };
+
 export const playgroundApi = {
-  run: (lineId: string, sql: string, from?: string, to?: string) =>
-    req<PlaygroundResult>("/api/ingest/playground/run", {
+  ask: async (body: AskRequest): Promise<AskResponse> => {
+    const r = await fetch("/api/ingest/playground/ask", {
       method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = (await r.json().catch(() => ({}))) as AskResponse & { error?: string };
+    if (!r.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${r.status}`);
+    return data;
+  },
+  run: async (lineId: string, sql: string, from?: string, to?: string): Promise<PlaygroundResult> => {
+    const r = await fetch("/api/ingest/playground/run", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({ lineId, sql, from, to }),
-    }),
+    });
+    const body = (await r.json().catch(() => ({}))) as PlaygroundResult & {
+      error?: string; errorKind?: PlaygroundErrorKind; errorHint?: string; errorPosition?: string | null;
+    };
+    if (!r.ok) {
+      throw new PlaygroundRunError(
+        body.error ?? `HTTP ${r.status}`,
+        body.errorKind ?? "unknown",
+        body.errorHint,
+        body.errorPosition ?? null,
+      );
+    }
+    return body;
+  },
   history: (lineId: string) =>
     req<QueryHistoryEntry[]>(`/api/ingest/playground/history/${lineId}`),
   columns: (lineId: string) =>

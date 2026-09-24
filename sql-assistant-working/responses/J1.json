@@ -1,0 +1,14 @@
+{
+ "trial": "J1",
+ "systemFile": "ask_system_v2.txt",
+ "buildArgs": [
+  "--line",
+  "line-12",
+  "--scenario",
+  "scenarios/J1_timekey.json",
+  "--question",
+  "hourly temperature alongside hourly production counts"
+ ],
+ "userText": "Line `line-12`, window 2026-09-11T07:06:09.534Z \u2192 2026-09-22T00:50:00.000Z (preset: full).\n\nTABLES (exhaustive \u2014 query only these):\n- public.prod_count \u2014 time column `ts`, 11 rows, recorded 2026-09-11T07:06:09.535Z \u2192 2026-09-15T00:08:33.996Z\n    ts (timestamp with time zone) \u2014 Timestamp of the production count record.\n    pcs (integer) \u2014 Pieces produced in that hour.\n- public.readings_temp \u2014 time column `ts`, 387 rows, recorded 2026-09-11T07:06:09.534Z \u2192 2026-09-22T00:50:00.000Z\n    ts (timestamp with time zone) \u2014 Records the timestamp of the reading with time zone information.\n    temp_c (double precision) \u2014 Measures the temperature in degrees Celsius.\n\nCONVERSATION SO FAR (round summaries):\n  (none \u2014 first question)\n\nTHIS TURN:\n  Editor SQL now: (empty)\n  User asks: 'hourly temperature alongside hourly production counts'\n",
+ "reply": "{\n  \"kind\": \"run_sql\",\n  \"sql\": \"WITH prod_agg AS (SELECT DATE_TRUNC('hour', ts) AS bucket, SUM(pcs) AS total_pcs FROM public.prod_count GROUP BY DATE_TRUNC('hour', ts)), temp_agg AS (SELECT DATE_TRUNC('hour', ts) AS bucket, AVG(temp_c) AS avg_temp FROM public.readings_temp GROUP BY DATE_TRUNC('hour', ts)) SELECT p.bucket, p.total_pcs, t.avg_temp FROM prod_agg p JOIN temp_agg t ON p.bucket = t.bucket WHERE p.bucket >= '{{from}}' AND p.bucket <= '{{to}}'\",\n  \"steps\": [\"found table public.prod_count and public.readings_temp\", \"columns: prod_count(ts, pcs), readings_temp(ts, temp_c)\", \"key: time bucket via DATE_TRUNC for both tables\", \"writing query with CTEs for hourly aggregation and join on bucket\", \"running\"],\n  \"reply\": \"Aggregates hourly production counts and average temperatures into a single table joined by hour bucket within the specified window.\"\n}"
+}

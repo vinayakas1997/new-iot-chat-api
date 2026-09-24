@@ -1,0 +1,12 @@
+{
+ "trial": "T1b",
+ "systemFile": "ask_system_v1.txt",
+ "buildArgs": [
+  "--line",
+  "line-smoke",
+  "--question",
+  "hourly average of temp, last 7 days"
+ ],
+ "userText": "Line `line-smoke`, window 2026-09-11T07:06:09.534Z \u2192 2026-09-22T00:50:00.000Z (preset: full).\n\nTABLES (exhaustive \u2014 query only these):\n- public.readings_temp \u2014 time column `ts`, 387 rows, recorded 2026-09-11T07:06:09.534Z \u2192 2026-09-22T00:50:00.000Z\n    temp_c (double precision) \u2014 Measures the temperature in degrees Celsius.\n    ts (timestamp with time zone) \u2014 Records the timestamp of the reading with time zone information.\n\nCONVERSATION SO FAR (round summaries):\n  (none \u2014 first question)\n\nTHIS TURN:\n  Editor SQL now: (empty)\n  User asks: 'hourly average of temp, last 7 days'\n",
+ "reply": "{\n  \"kind\": \"run_sql\",\n  \"sql\": \"SELECT DATE_TRUNC('hour', ts) AS hour, AVG(temp_c) AS avg_temp_c FROM public.readings_temp WHERE ts >= '{{from}}' AND ts <= '{{to}}' GROUP BY DATE_TRUNC('hour', ts) ORDER BY hour\",\n  \"steps\": [\"found table public.readings_temp\", \"columns temp_c, ts\", \"writing query\", \"running\"],\n  \"reply\": \"Query calculates the hourly average temperature for the specified window. The result will show the average temp_c grouped by hour.\"\n}"
+}

@@ -1,0 +1,14 @@
+{
+ "trial": "S1",
+ "systemFile": "ask_system_v2.txt",
+ "buildArgs": [
+  "--line",
+  "line-smoke",
+  "--scenario",
+  "scenarios/S1_baseline.json",
+  "--question",
+  "hourly average of temp"
+ ],
+ "userText": "Line `line-smoke`, window 2026-09-11T07:06:09.534Z \u2192 2026-09-22T00:50:00.000Z (preset: full).\n\nTABLES (exhaustive \u2014 query only these):\n- public.readings_temp \u2014 time column `ts`, 387 rows, recorded 2026-09-11T07:06:09.534Z \u2192 2026-09-22T00:50:00.000Z\n    ts (timestamp with time zone) \u2014 Records the timestamp of the reading with time zone information.\n    temp_c (double precision) \u2014 Measures the temperature in degrees Celsius.\n\nCONVERSATION SO FAR (round summaries):\n  (none \u2014 first question)\n\nTHIS TURN:\n  Editor SQL now: (empty)\n  User asks: 'hourly average of temp'\n",
+ "reply": "{\n  \"kind\": \"run_sql\",\n  \"sql\": \"WITH hourly_avg AS (SELECT DATE_TRUNC('hour', ts) AS bucket, AVG(temp_c) AS avg_temp FROM public.readings_temp GROUP BY DATE_TRUNC('hour', ts)) SELECT bucket, avg_temp FROM hourly_avg\",\n  \"steps\": [\"found table public.readings_temp\", \"columns: ts, temp_c\", \"key: time bucket only\", \"writing query\", \"running\"]\n}"
+}

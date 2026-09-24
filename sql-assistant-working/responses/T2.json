@@ -1,0 +1,22 @@
+{
+ "trial": "T2",
+ "systemFile": "ask_system_v1.txt",
+ "buildArgs": [
+  "--line",
+  "line-smoke",
+  "--question",
+  "hourly average of temp, last 7 days",
+  "--failed-sql",
+  "SELECT date_trunc('hour', ts) AS hour, AVG(tmp_c) FROM public.readings_temp WHERE ts >= '{{from}}' AND ts < '{{to}}' GROUP BY 1 ORDER BY 1",
+  "--error-kind",
+  "unknown_column",
+  "--error-message",
+  "column \"tmp_c\" does not exist",
+  "--error-hint",
+  "Did you mean \"temp_c\"? Check exact column names in the Tables row / table Details panel.",
+  "--attempt",
+  "2"
+ ],
+ "userText": "Line `line-smoke`, window 2026-09-11T07:06:09.534Z \u2192 2026-09-22T00:50:00.000Z (preset: full).\n\nTABLES (exhaustive \u2014 query only these):\n- public.readings_temp \u2014 time column `ts`, 387 rows, recorded 2026-09-11T07:06:09.534Z \u2192 2026-09-22T00:50:00.000Z\n    temp_c (double precision) \u2014 Measures the temperature in degrees Celsius.\n    ts (timestamp with time zone) \u2014 Records the timestamp of the reading with time zone information.\n\nCONVERSATION SO FAR (round summaries):\n  (none \u2014 first question)\n\nTHIS TURN:\n  Editor SQL now: (empty)\n  User asks: 'hourly average of temp, last 7 days'\n\nRETRY \u2014 attempt 2/3. Previous SQL (verbatim):\n  SELECT date_trunc('hour', ts) AS hour, AVG(tmp_c) FROM public.readings_temp WHERE ts >= '{{from}}' AND ts < '{{to}}' GROUP BY 1 ORDER BY 1\nIt failed with [unknown_column]: column \"tmp_c\" does not exist\nHint: Did you mean \"temp_c\"? Check exact column names in the Tables row / table Details panel.\nFix ONLY the broken part; do not redesign the query.\n",
+ "reply": "{\n  \"kind\": \"run_sql\",\n  \"sql\": \"SELECT date_trunc('hour', ts) AS hour, AVG(temp_c) FROM public.readings_temp WHERE ts >= '{{from}}' AND ts < '{{to}}' GROUP BY 1 ORDER BY 1\",\n  \"steps\": [\"found table public.readings_temp\", \"columns temp_c, ts\", \"fixed typo tmp_c -> temp_c\", \"writing query\", \"running\"],\n  \"reply\": \"Fixed the column name from tmp_c to temp_c and re-ran the query to calculate the hourly average temperature for the specified window.\"\n}"
+}

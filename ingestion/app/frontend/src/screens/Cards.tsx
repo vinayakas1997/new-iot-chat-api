@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  ArrowRight, Brain, ChartLine, ChevronDown, ClipboardCheck, Copy, Database, Eye, FlaskConical, History as HistoryIcon,
+  ArrowRight, Brain, ChartLine, ChevronDown, ClipboardCheck, Copy, Database, Eye, FlaskConical,
   Info,   LayoutTemplate, ListChecks, Pause, Pencil, Play, Plus, RefreshCw, Rocket, Save, Search, Send, SlidersHorizontal, Sparkles, Table2, Trash2, X,
 } from "lucide-react";
 import { Btn, Segmented, Spinner } from "../components/ui";
@@ -12,7 +12,7 @@ import { ChartPreviewModal, type AiRunInfo } from "../components/ChartPreviewMod
 import { LinePreview } from "../components/LinePreview";
 import { windowForResolution, type Resolution } from "../components/Chart";
 import { isTradingEligible, TradingChart } from "../components/TradingChart";
-import { cardApi, api, bankApi, chartApi, graphApi, playgroundApi, llmReasonText, ALL_STREAMS, SKIP_DAYS, SKIP_DAY_LABEL, defaultSkipSchedule, hasCustomSkip, skipSummary, type BankOverviewEntry, type CandidateQuirk, type Card, type CardTemplate, type CardSample, type ChartSuggestion, type HintPoint, type Line, type ReapplyResult, type TestResult, type GraphSpec, type ChartType, type PlaygroundResult, type QueryHistoryEntry,   type LineColumn, type LineRanges, type SkipSchedule, type StreamResolution, type TableColumnsDetails, type ThresholdCondition } from "../lib/api";
+import { cardApi, api, bankApi, chartApi, graphApi, playgroundApi, llmReasonText, ALL_STREAMS, SKIP_DAYS, SKIP_DAY_LABEL, defaultSkipSchedule, hasCustomSkip, skipSummary, PlaygroundRunError, type BankOverviewEntry, type CandidateQuirk, type Card, type CardTemplate, type CardSample, type ChartSuggestion, type HintPoint, type Line, type ReapplyResult, type TestResult, type GraphSpec, type ChartType, type PlaygroundResult, type QueryHistoryEntry,   type AskResponse, type AskRoundSummary, type LineColumn, type LineRanges, type PlaygroundErrorKind, type SkipSchedule, type StreamResolution, type TableColumnsDetails, type ThresholdCondition } from "../lib/api";
 import { AlertBanner, StatusChip } from "../components/chips";
 import { FormattedText } from "../components/FormattedText";
 import { PushToHindsight } from "../components/PushToHindsight";
@@ -182,6 +182,8 @@ export function Cards() {
   const [cards, setCards] = useState<Card[]>([]);
   const [templates, setTemplates] = useState<CardTemplate[]>([]);
   const [lines, setLines] = useState<Line[]>([]);
+  // All lines incl. deregistered — status lookup only. Pickers keep using `lines` (active-only).
+  const [allLines, setAllLines] = useState<Line[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testOut, setTestOut] = useState<Record<string, TestResult>>({});
@@ -421,9 +423,13 @@ export function Cards() {
   const [pgSql, setPgSql] = useState("");
   const [pgResult, setPgResult] = useState<PlaygroundResult | null>(null);
   const [pgError, setPgError] = useState<string | null>(null);
+  const [pgErrorKind, setPgErrorKind] = useState<PlaygroundErrorKind | null>(null);
+  const [pgErrorHint, setPgErrorHint] = useState<string | null>(null);
+  const [pgErrorSql, setPgErrorSql] = useState<string | null>(null);
+  const [pgLastSample, setPgLastSample] = useState<unknown>(null);
+  const [pgLastError, setPgLastError] = useState<{ kind: string; message: string; hint?: string | null; sql: string } | null>(null);
   const [pgRunning, setPgRunning] = useState(false);
   const [pgHistory, setPgHistory] = useState<QueryHistoryEntry[]>([]);
-  const [pgShowHistory, setPgShowHistory] = useState(false);
   const [pgCols, setPgCols] = useState<LineColumn[]>([]);
   const [pgRanges, setPgRanges] = useState<LineRanges | null>(null);
   const [pgRangesLoading, setPgRangesLoading] = useState(false);
@@ -437,6 +443,7 @@ export function Cards() {
       const [c, t, l] = await Promise.all([cardApi.listCards(), cardApi.listTemplates(), api.listLines()]);
       setCards(c);
       setTemplates(t);
+      setAllLines(l);
       setLines(l.filter((x) => x.active));
       try {
         const a = await fetch("/api/ingest/llm/active").then((r) => r.json() as Promise<{ active: { activeModel: string } | null }>);
@@ -499,7 +506,9 @@ export function Cards() {
 
   const liveCount = cards.filter((c) => c.status === "live").length;
 
-  const lineNameOf = (id: string) => lines.find((l) => l.id === id)?.name ?? id;
+  const lineNameOf = (id: string) => allLines.find((l) => l.id === id)?.name ?? lines.find((l) => l.id === id)?.name ?? id;
+  // Lines deregistered → their copies read frozen (ticks paused). Templates untouched (global).
+  const frozenLineIds = new Set(allLines.filter((x) => !x.active).map((x) => x.id));
 
   const filteredCards = cards.filter((c) => {
     if (cardLine && c.lineId !== cardLine) return false;
@@ -666,7 +675,7 @@ export function Cards() {
         <div className="flex items-center gap-2">
           <span className="font-semibold">{c.name}</span>
           <span className="tnum text-xs text-slate-400">v{c.version}</span>
-          <span className="ml-auto"><StatusChip tone={c.status === "live" ? "ok" : "mute"}>{c.status.toUpperCase()}</StatusChip></span>
+          <span className="ml-auto">{frozenLineIds.has(c.lineId) ? <StatusChip tone={c.status === "live" ? "bad" : "mute"}><span title="Line deregistered — ticks paused, resumes on re-register">{c.status.toUpperCase()} · FROZEN</span></StatusChip> : <StatusChip tone={c.status === "live" ? "ok" : "mute"}>{c.status.toUpperCase()}</StatusChip>}</span>
         </div>
         <div className="mt-1 text-xs text-slate-400">
           {c.granularity}{streamShort(c.resolutions)}{hasCustomSkip(c.skipSchedule) ? " · skips set" : ""}{c.unit ? ` · ${c.unit}` : ""}{c.threshold != null ? ` · warn > ${c.threshold}` : ""} · tables: <FormattedText text={c.tables.join(", ") || "—"} highlightTables />
@@ -912,7 +921,7 @@ export function Cards() {
                 {visibleTpls.map((t) => {
             const copies = cards.filter((c) => c.templateId === t.id);
             const allIds = copies.map((c) => c.id);
-            const checked = checkedByTpl[t.id] ?? allIds;
+            const checked = checkedByTpl[t.id] ?? [];
             const isOpen = openId === t.id;
             const staleCount = copies.filter((c) => c.templateVersion != null && c.templateVersion < t.version).length;
             const sugCount = (t.chartSuggestions ?? []).length;
@@ -986,15 +995,9 @@ export function Cards() {
                 return (
                   <div className="mt-3">
                     <div className="mb-2 flex flex-wrap items-center gap-2">
-                      <label className="inline-flex items-center gap-1.5 text-xs text-slate-500" title={checked.length === allIds.length ? "Uncheck all — Check/Apply will skip everything" : "Check all copies"}>
-                        <input
-                          type="checkbox"
-                          checked={allIds.length > 0 && checked.length === allIds.length}
-                          onChange={() => setCheckedByTpl((m) => ({ ...m, [t.id]: checked.length === allIds.length ? [] : allIds }))}
-                          className="h-4 w-4 accent-teal-500"
-                        />
-                        {checked.length === allIds.length ? "all" : `${checked.length}/${allIds.length}`}
-                      </label>
+                      <span className="tnum text-xs text-slate-400" title="Tick rows one by one to check them">
+                        {checked.length}/{allIds.length} checked
+                      </span>
                       <div className="relative">
                         <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
                         <input
@@ -1059,15 +1062,16 @@ export function Cards() {
                               const r = resByCard.get(c.id);
                               const failed = failedOf(c);
                               const fixing = fixCard?.tplId === t.id && fixCard?.cardId === c.id;
+                              const frozen = frozenLineIds.has(c.lineId);
                               return (
                                 <Fragment key={c.id}>
-                                  <tr id={`copy-row-${c.id}`} className={`border-b border-slate-100 align-top transition-colors dark:border-ink-800 ${flashCopy === c.id ? "bg-accent-500/10 ring-1 ring-inset ring-accent-500/50" : failed ? "bg-state-bad/[0.06]" : c.status === "live" ? "bg-state-ok/[0.05]" : ""}`}>
+                                  <tr id={`copy-row-${c.id}`} title={frozen ? "Line deregistered — ticks paused, resumes on re-register" : undefined} className={`border-b border-slate-100 align-top transition-colors dark:border-ink-800 ${frozen ? "bg-state-bad/[0.12]" : flashCopy === c.id ? "bg-accent-500/10 ring-1 ring-inset ring-accent-500/50" : failed ? "bg-state-bad/[0.06]" : c.status === "live" ? "bg-state-ok/[0.05]" : ""}`}>
                                     <td className="px-2 py-2.5">
                                       <input
                                         type="checkbox"
                                         checked={checked.includes(c.id)}
                                         onChange={() => setCheckedByTpl((m) => {
-                                          const cur = m[t.id] ?? allIds;
+                                          const cur = m[t.id] ?? [];
                                           return { ...m, [t.id]: cur.includes(c.id) ? cur.filter((x) => x !== c.id) : [...cur, c.id] };
                                         })}
                                         title={checked.includes(c.id) ? "Uncheck — skip in Check/Apply" : "Check — include in Check/Apply"}
@@ -1133,7 +1137,11 @@ export function Cards() {
                                     </td>
                                     <td className="px-2 py-2.5">
                                       <div className="flex flex-wrap items-center gap-1.5">
-                                        <StatusChip tone={c.status === "live" ? "ok" : "mute"}>{c.status}</StatusChip>
+                                        {frozenLineIds.has(c.lineId) ? (
+                                          <StatusChip tone={c.status === "live" ? "bad" : "mute"}><span title="Line deregistered — ticks paused, resumes on re-register">{c.status} · frozen</span></StatusChip>
+                                        ) : (
+                                          <StatusChip tone={c.status === "live" ? "ok" : "mute"}>{c.status}</StatusChip>
+                                        )}
                                         {r
                                           ? r.status === "green"
                                             ? <span className="tnum text-xs text-state-ok">✓ {r.rowCount} rows</span>
@@ -1301,9 +1309,11 @@ export function Cards() {
           setSql={setPgSql}
           result={pgResult}
           error={pgError}
+          errorKind={pgErrorKind}
+          errorHint={pgErrorHint}
+          errorSql={pgErrorSql}
           running={pgRunning}
           history={pgHistory}
-          showHistory={pgShowHistory}
           cols={pgCols}
           ranges={pgRanges}
           rangesLoading={pgRangesLoading}
@@ -1313,11 +1323,15 @@ export function Cards() {
           setTo={setPgTo}
           onPreset={applyPgPreset}
           activePreset={pgActivePreset}
+          contextSample={pgLastSample}
+          contextError={pgLastError}
+          onAiRun={() => { playgroundApi.history(pgLineId).then(setPgHistory).catch(() => {}); }}
           showSave={pgShowSave}
           saveDraft={pgSaveDraft}
           onRun={async () => {
             if (!pgLineId || !pgSql.trim()) return;
-            setPgRunning(true); setPgError(null); setPgResult(null);
+            setPgRunning(true); setPgError(null); setPgErrorKind(null); setPgErrorHint(null); setPgResult(null);
+            setPgErrorSql(pgSql);
             try {
               const r = await playgroundApi.run(
                 pgLineId,
@@ -1326,13 +1340,23 @@ export function Cards() {
                 pgTo ? new Date(pgTo).toISOString() : undefined,
               );
               setPgResult(r);
+              setPgLastSample(r.sample ?? null);
+              setPgLastError(null);
               const h = await playgroundApi.history(pgLineId);
               setPgHistory(h);
-            } catch (e) { setPgError((e as Error).message); }
+            } catch (e) {
+              setPgError((e as Error).message);
+              const kind = e instanceof PlaygroundRunError ? e.kind : "unknown";
+              const hint = e instanceof PlaygroundRunError ? (e.hint ?? null) : null;
+              setPgErrorKind(kind);
+              setPgErrorHint(hint);
+              setPgLastSample(null);
+              setPgLastError({ kind, message: (e as Error).message, hint, sql: pgSql });
+            }
             finally { setPgRunning(false); }
           }}
-          onHistoryToggle={() => setPgShowHistory(!pgShowHistory)}
           onRerun={(sql) => setPgSql(sql)}
+          onClearResult={() => setPgResult(null)}
           onSaveCard={async (name, tables, gran, unit, hint) => {
             await cardApi.createCard({ lineId: pgLineId, name, tables: tables.split(",").map((s) => s.trim()).filter(Boolean), sql: pgSql, granularity: gran, unit, extractHint: hint });
             setPgShowSave(false); setPgSql(""); setPgResult(null);
@@ -1553,6 +1577,26 @@ export function Cards() {
                 className="glass-pill glass-pill--amber"
               >
                 LLM thinking
+              </Btn>
+              <Btn
+                size="sm"
+                icon={ArrowRight}
+                type="button"
+                onClick={() => {
+                  const target = lines.find((l) => l.id === tplPickLine) ?? lines[0];
+                  if (!target) return;
+                  setPgLineId(target.id);
+                  setPgFrom(""); setPgTo(""); setPgRanges(null);
+                  if (tplDraft.sqlTemplate.trim()) setPgSql(tplDraft.sqlTemplate);
+                  setShowTplForm(false);
+                  setEditTpl(null);
+                  setTab("playground");
+                }}
+                disabled={!(lines.find((l) => l.id === tplPickLine) ?? lines[0])}
+                title="Open in Playground with this line and the draft SQL — test it, chat it, bring it back"
+                className="glass-pill glass-pill--neutral"
+              >
+                Playground
               </Btn>
             </div>
             {thinkingOpen && (
@@ -2773,7 +2817,28 @@ function pgRangeOverlap(tStart: string | null, tEnd: string | null, wStart: stri
 }
 
 /** SQL Playground tab — inline in Cards, not a separate route. */
-function PlaygroundTab({ lines, lineId, setLineId, sql, setSql, result, error, running, history, showHistory, cols, ranges, rangesLoading, from, to, setFrom, setTo, onPreset, activePreset, showSave, saveDraft, onRun, onHistoryToggle, onRerun, onSaveCard, setShowSave, setSaveDraft }: {
+interface ChatRound {
+  id: number;
+  question: string;
+  status: "thinking" | "awaiting" | "done" | "transport-failed";
+  steps: string[];
+  sql: string;
+  sample: { columns: { name: string; sampleType: string }[]; rows: Record<string, unknown>[]; truncatedSample: boolean } | null;
+  rowCount: number | null;
+  ok: boolean | null;
+  errorKind: string | null;
+  errorHint: string | null;
+  reply: string;
+  clarifications: { q: string; a: string }[];
+  pendingQuestion: string | null;
+  attempts: number;
+  handoff: boolean;
+  chained: boolean;
+  dropped: string | null;
+  open: boolean;
+}
+
+function PlaygroundTab({ lines, lineId, setLineId, sql, setSql, result, error, errorKind, errorHint, errorSql, running, history, cols, ranges, rangesLoading, from, to, setFrom, setTo, onPreset, activePreset, contextSample, contextError, onAiRun, showSave, saveDraft, onRun, onRerun, onClearResult, onSaveCard, setShowSave, setSaveDraft }: {
   lines: Line[];
   lineId: string;
   setLineId: (v: string) => void;
@@ -2781,9 +2846,11 @@ function PlaygroundTab({ lines, lineId, setLineId, sql, setSql, result, error, r
   setSql: (v: string) => void;
   result: PlaygroundResult | null;
   error: string | null;
+  errorKind: PlaygroundErrorKind | null;
+  errorHint: string | null;
+  errorSql: string | null;
   running: boolean;
   history: QueryHistoryEntry[];
-  showHistory: boolean;
   cols: LineColumn[];
   ranges: LineRanges | null;
   rangesLoading: boolean;
@@ -2793,35 +2860,173 @@ function PlaygroundTab({ lines, lineId, setLineId, sql, setSql, result, error, r
   setTo: (v: string) => void;
   onPreset: (hours: number | null) => void;
   activePreset: string | null;
+  contextSample: unknown;
+  contextError: { kind: string; message: string; hint?: string | null; sql: string } | null;
+  onAiRun: () => void;
   showSave: boolean;
   saveDraft: { name: string; tables: string; granularity: string; unit: string; extractHint: string };
   onRun: () => void;
-  onHistoryToggle: () => void;
   onRerun: (sql: string) => void;
+  onClearResult: () => void;
   onSaveCard: (name: string, tables: string, gran: string, unit: string, hint: string) => Promise<void>;
   setShowSave: (v: boolean) => void;
   setSaveDraft: (f: (d: typeof saveDraft) => typeof saveDraft) => void;
 }) {
   const [tblPick, setTblPick] = useState("");
+  const [showErrSql, setShowErrSql] = useState(false);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  async function copyText(key: string, text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedKey(key);
+    } catch {
+      setCopiedKey(`fail:${key}`);
+    }
+    window.setTimeout(() => setCopiedKey((k) => (k === key || k === `fail:${key}` ? null : k)), 2000);
+  }
+  // Results pagination — client-side only (backend already caps at 100 rows).
+  const [pgPage, setPgPage] = useState(1);
+  const [pgPageSize, setPgPageSize] = useState(50);
+  useEffect(() => { setPgPage(1); }, [result]);
   const sqlRef = useRef<HTMLTextAreaElement>(null);
   const pgLine = lines.find((l) => l.id === lineId);
-  // Chat/editor split — layout shell only: thread is local, AI wiring lands next.
+  // P3: picked window overlaps no recorded table bounds → expect 0 rows (warn, never block).
+  const windowEmpty = (() => {
+    if (!ranges || !from || !to) return false;
+    let wFrom: string | null = null;
+    let wTo: string | null = null;
+    try {
+      wFrom = new Date(from).toISOString();
+      wTo = new Date(to).toISOString();
+    } catch { return false; }
+    return ranges.ranges.length > 0 && !ranges.ranges.some((t) => pgRangeOverlap(t.start, t.end, wFrom, wTo));
+  })();
+  // Chat/editor split — rounds thread. Scratchpad: session-only, fresh per line.
   const [chatOpen, setChatOpen] = useState(true);
   const [chatInput, setChatInput] = useState("");
-  const [chatMsgs, setChatMsgs] = useState<{ role: "user" | "ai"; text: string }[]>([
-    { role: "ai", text: "Ask me for SQL in plain words — e.g. “hourly average of temp, last 7 days”. I’ll draft it into the editor on the right; you review and Run." },
-  ]);
+  const [rounds, setRounds] = useState<ChatRound[]>([]);
+  const [asking, setAsking] = useState(false);
+  const [askStatus, setAskStatus] = useState<"unknown" | "ready" | "noprovider">("unknown");
+  const roundId = useRef(0);
+  // Fresh scratch: new chat. Shared by Clear and line-switch.
+  function newChat() {
+    setRounds([]);
+    setChatInput("");
+    setAsking(false);
+  }
   useEffect(() => {
-    setChatMsgs([
-      { role: "ai", text: "Ask me for SQL in plain words — e.g. “hourly average of temp, last 7 days”. I’ll draft it into the editor on the right; you review and Run." },
-    ]);
-    setChatInput("");
+    newChat();
   }, [lineId]);
-  function sendChat() {
+
+  function summarize(rs: ChatRound[]): AskRoundSummary[] {
+    return rs.filter((r) => r.status === "done").slice(-5).map((r) => ({
+      question: r.question,
+      sql: r.sql,
+      outcome: r.clarifications.length > 0 && !r.sql
+        ? `clarified (${r.clarifications.map((c) => `${c.q} → ${c.a}`).join("; ")})`
+        : r.ok ? `${r.rowCount} rows, ok` : `failed [${r.errorKind}]: ${r.errorHint ?? ""}`,
+    }));
+  }
+
+  async function sendChat(retryRoundId?: number) {
     const t = chatInput.trim();
-    if (!t) return;
-    setChatMsgs((m) => [...m, { role: "user", text: t }]);
-    setChatInput("");
+    if ((!t && retryRoundId == null) || asking || !lineId) return;
+    setAsking(true);
+    let rs = rounds;
+    let targetId: number;
+    let message: string;
+    let pending: string | null = null;
+    if (retryRoundId != null) {
+      const retry = rs.find((r) => r.id === retryRoundId);
+      if (!retry) { setAsking(false); return; }
+      targetId = retry.id;
+      message = retry.question;
+      rs = rs.map((r) => r.id === targetId ? { ...r, status: "thinking" as const, steps: [] } : r);
+      setRounds(rs);
+    } else {
+      const open = rs.find((r) => r.status === "awaiting");
+      if (open) {
+        // Answering a pending clarification — same round continues.
+        targetId = open.id;
+        message = t;
+        pending = open.pendingQuestion;
+        rs = rs.map((r) => r.id === targetId
+          ? { ...r, status: "thinking" as const, clarifications: [...r.clarifications, { q: r.pendingQuestion ?? "", a: t }], pendingQuestion: null }
+          : r);
+      } else {
+        targetId = ++roundId.current;
+        message = t;
+        rs = [...rs.map((r) => ({ ...r, open: false })), {
+          id: targetId, question: t, status: "thinking" as const, steps: [], sql: "",
+          sample: null, rowCount: null, ok: null, errorKind: null, errorHint: null,
+          reply: "", clarifications: [], pendingQuestion: null, attempts: 0,
+          handoff: false, chained: false, dropped: null, open: true,
+        }];
+      }
+      setRounds(rs);
+      setChatInput("");
+    }
+    let win: { from: string; to: string } | null = null;
+    try {
+      const wf = from ? new Date(from).toISOString() : null;
+      const wt = to ? new Date(to).toISOString() : null;
+      if (wf && wt) win = { from: wf, to: wt };
+    } catch { win = null; }
+    let resp: AskResponse;
+    try {
+      resp = await playgroundApi.ask({
+        lineId, message,
+        rounds: summarize(rs.filter((r) => r.id !== targetId)),
+        pendingQuestion: pending,
+        currentSql: sql, window: win,
+        contextSample: contextSample ?? null,
+        contextError: contextError ?? null,
+      });
+    } catch (e) {
+      setRounds((prev) => prev.map((r) => r.id === targetId
+        ? { ...r, status: "transport-failed" as const, reply: `Assistant unreachable — ${(e as Error).message}. Editor and Run still work; retry when ready.` }
+        : r));
+      setAsking(false);
+      return;
+    }
+    if (resp.type === "error") {
+      if (resp.reason === "no-provider") setAskStatus("noprovider");
+      setRounds((prev) => prev.map((r) => r.id === targetId
+        ? { ...r, status: "done" as const, reply: resp.reason === "no-provider" ? "No LLM is configured — ask your admin to set one up. Editor and Run still work." : "The assistant returned an unreadable reply — try rephrasing." }
+        : r));
+      setAsking(false);
+      return;
+    }
+    setAskStatus("ready");
+    if (resp.type === "clarify") {
+      setRounds((prev) => prev.map((r) => r.id === targetId
+        ? { ...r, status: "awaiting" as const, steps: resp.steps, reply: resp.reply, pendingQuestion: resp.question }
+        : r));
+    } else if (resp.type === "explain") {
+      setRounds((prev) => prev.map((r) => r.id === targetId
+        ? { ...r, status: "done" as const, steps: resp.steps, reply: resp.reply }
+        : r));
+    } else if (resp.type === "dropped") {
+      setRounds((prev) => prev.map((r) => r.id === targetId
+        ? { ...r, status: "done" as const, steps: resp.steps, reply: resp.reply, dropped: resp.reason, sql: resp.sql ?? "", attempts: resp.attempts }
+        : r));
+      if (resp.sql) onRerun(resp.sql);
+    } else {
+      // round — completed execution (ok or handed-off failure).
+      setRounds((prev) => prev.map((r) => r.id === targetId
+        ? {
+            ...r, status: "done" as const, steps: resp.steps, reply: resp.reply,
+            sql: resp.sql, rowCount: resp.rowCount ?? null, ok: resp.ok,
+            sample: resp.sample ?? null,
+            errorKind: (resp.errorKind as string) ?? null,
+            errorHint: resp.errorHint ?? null,
+            attempts: resp.attempts, handoff: !!resp.handoff, chained: !!resp.chained,
+          }
+        : r));
+      if (resp.editorSql) onRerun(resp.editorSql);
+      onAiRun();
+    }
+    setAsking(false);
   }
   // Per-table Details: one open at a time, lazy-loaded + cached, reset on line change.
   const [dtOpen, setDtOpen] = useState<string | null>(null);
@@ -2830,7 +3035,11 @@ function PlaygroundTab({ lines, lineId, setLineId, sql, setSql, result, error, r
   const [dtError, setDtError] = useState<Record<string, string>>({});
   useEffect(() => {
     setDtOpen(null); setDtCache({}); setDtLoading(null); setDtError({});
+    setReadyManual(null);
   }, [lineId]);
+  // Readiness collapse: auto by table count (>3 tables → collapsed), manual toggle wins.
+  const [readyManual, setReadyManual] = useState<boolean | null>(null);
+  const readyOpen = readyManual ?? ((ranges?.ranges.length ?? 0) <= 3);
 
   async function toggleDt(tableRef: string) {
     if (dtOpen === tableRef) { setDtOpen(null); return; }
@@ -2950,12 +3159,24 @@ function PlaygroundTab({ lines, lineId, setLineId, sql, setSql, result, error, r
       </div>
       {(rangesLoading || ranges) && (
         <div className="mt-3 rounded-xl border border-slate-200 p-3 dark:border-ink-800">
-          <div className="text-xs font-semibold text-slate-500 dark:text-ink-400">
-            Data readiness {rangesLoading ? "— loading…" : ranges?.overall.start || ranges?.overall.end ? (
-              <span className="tnum font-normal">· {pgFmtTs(ranges.overall.start)} → {pgFmtTs(ranges.overall.end)}</span>
-            ) : "— no time data"}
-          </div>
-          {ranges && (
+          <button
+            onClick={() => setReadyManual((v) => !(v ?? ((ranges?.ranges.length ?? 0) <= 3)))}
+            className="flex w-full items-center gap-1.5 text-left text-xs font-semibold text-slate-500 hover:text-slate-700 dark:text-ink-400 dark:hover:text-ink-200"
+            title={readyOpen ? "Collapse — saves space" : "Expand — per-table bounds and details"}
+          >
+            <ChevronDown size={12} className={`transition-transform duration-150 ${readyOpen ? "" : "-rotate-90"}`} />
+            <span>
+              Data readiness {rangesLoading ? "— loading…" : ranges?.overall.start || ranges?.overall.end ? (
+                <span className="tnum font-normal">· {pgFmtTs(ranges.overall.start)} → {pgFmtTs(ranges.overall.end)} · {ranges.ranges.length} table{ranges.ranges.length === 1 ? "" : "s"}{(() => {
+                  const wFrom = from ? new Date(from).toISOString() : null;
+                  const wTo = to ? new Date(to).toISOString() : null;
+                  const out = ranges.ranges.filter((t) => t.start && t.end && !pgRangeOverlap(t.start, t.end, wFrom, wTo)).length;
+                  return out > 0 ? ` · ${out} out of range` : "";
+                })()}</span>
+              ) : "— no time data"}
+            </span>
+          </button>
+          {readyOpen && ranges && (
             <div className="mt-2 flex flex-col gap-1.5">
               {ranges.ranges.map((r) => {
                 const overlap = pgRangeOverlap(r.start, r.end, from ? new Date(from).toISOString() : null, to ? new Date(to).toISOString() : null);
@@ -3053,72 +3274,221 @@ function PlaygroundTab({ lines, lineId, setLineId, sql, setSql, result, error, r
           <span className="font-semibold">SQL assistant</span>
           <ChevronDown size={12} className={`transition-transform duration-150 ${chatOpen ? "" : "-rotate-90"}`} />
         </button>
-        <StatusChip tone="mute">layout preview — AI wiring next</StatusChip>
+        {askStatus === "ready" && <StatusChip tone="ok">assistant ready</StatusChip>}
+        {askStatus === "noprovider" && <StatusChip tone="warn">no LLM configured</StatusChip>}
+        {askStatus === "unknown" && <StatusChip tone="mute">assistant warming up</StatusChip>}
+        <button
+          onClick={newChat}
+          disabled={rounds.length === 0 && !chatInput}
+          className="inline-flex items-center gap-1 rounded border border-slate-200 px-1.5 py-0.5 text-xs text-slate-500 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40 dark:border-ink-700 dark:text-ink-400 dark:hover:bg-ink-800 glass-pill glass-pill--neutral"
+          title="Start a fresh scratch — clears this thread"
+        >
+          <Trash2 size={12} /> clear
+        </button>
       </div>
-      <div className={chatOpen ? "mt-2 grid grid-cols-1 gap-3 xl:grid-cols-2" : "mt-2"}>
+      <div className={chatOpen ? "mt-2 grid grid-cols-1 items-start gap-3 xl:grid-cols-3" : "mt-2"}>
         {chatOpen && (
-          <div className="flex flex-col rounded-xl border border-slate-200 dark:border-ink-800">
-            <div className="flex h-64 flex-col gap-2 overflow-auto p-3">
-              {chatMsgs.map((m, i) => (
-                <div key={i} className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${m.role === "user" ? "ml-auto bg-accent-500/15 text-slate-700 dark:text-ink-100" : "bg-slate-100 text-slate-600 dark:bg-ink-800 dark:text-ink-300"}`}>
-                  {m.text}
+          <div className="flex max-h-[85vh] flex-col rounded-xl border border-slate-200 xl:col-span-2 dark:border-ink-800">
+            {history.length > 0 && (
+              <div className="flex gap-1.5 overflow-x-auto border-b border-slate-200 p-2 dark:border-ink-800">
+                {history.slice(0, 5).map((h) => (
+                  <button
+                    key={h.id}
+                    onClick={() => onRerun(h.sql)}
+                    title={h.ok ? h.sql : `FAILED: ${h.error ?? "unknown error"}\n\n${h.sql}`}
+                    className="flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 px-2 py-1 text-xs hover:bg-slate-100 dark:border-ink-700 dark:hover:bg-ink-800"
+                  >
+                    <StatusChip tone={h.ok ? "ok" : "bad"}>{h.ok ? "ok" : "fail"}</StatusChip>
+                    <span className="tnum text-slate-400">{h.rowCount != null ? `${h.rowCount}` : "—"}</span>
+                    <span className="max-w-40 truncate font-mono text-slate-500 dark:text-ink-400">{h.sql}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="flex min-h-[12rem] flex-1 flex-col gap-2 overflow-auto p-3">
+              {!lineId && (
+                <div className="rounded-lg border border-state-warn/40 bg-state-warn/10 px-3 py-2 text-sm text-state-warn">
+                  Choose a line above for the chat to proceed.
                 </div>
-              ))}
+              )}
+              {rounds.length === 0 && lineId && (
+                <div className="rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-600 dark:bg-ink-800 dark:text-ink-300">
+                  Ask me for SQL in plain words — e.g. “hourly average of temp, last 7 days”. I run it myself and show the table here; the SQL lands in the editor for you to keep.
+                </div>
+              )}
+              {rounds.map((r) => {
+                const tone = r.status === "thinking" ? "mute" : r.status === "awaiting" ? "accent" : r.status === "transport-failed" ? "bad" : r.dropped ? "warn" : r.ok ? "ok" : "bad";
+                const label = r.status === "thinking" ? "running…" : r.status === "awaiting" ? "needs you" : r.status === "transport-failed" ? "unreachable" : r.dropped ? "dropped" : r.sql ? (r.ok ? `${r.rowCount} rows` : "failed") : "answered";
+                return (
+                  <div key={r.id} className="rounded-lg border border-slate-200 dark:border-ink-700">
+                    <button
+                      onClick={() => setRounds((prev) => prev.map((x) => x.id === r.id ? { ...x, open: !x.open } : x))}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm"
+                    >
+                      <ChevronDown size={12} className={`shrink-0 text-slate-400 transition-transform duration-150 ${r.open ? "" : "-rotate-90"}`} />
+                      <StatusChip tone={tone as "ok" | "warn" | "bad" | "mute" | "accent"}>{label}</StatusChip>
+                      <span className="truncate font-medium text-slate-600 dark:text-ink-200">{r.question}</span>
+                      {r.attempts > 1 && <span className="tnum ml-auto shrink-0 text-xs text-slate-400">{r.attempts}/3{r.chained ? " · chained" : ""}</span>}
+                    </button>
+                    {r.open && (
+                      <div className="flex flex-col gap-2 border-t border-slate-200 px-3 py-2 dark:border-ink-700">
+                        {r.steps.length > 0 && (
+                          <div className="font-mono text-xs text-slate-400 dark:text-ink-500">{r.steps.join(" → ")}</div>
+                        )}
+                        {r.clarifications.map((c, i) => (
+                          <div key={i} className="text-xs">
+                            <div className="text-accent-500">assistant: {c.q}</div>
+                            <div className="text-slate-500 dark:text-ink-400">you: {c.a}</div>
+                          </div>
+                        ))}
+                        {r.pendingQuestion && r.status === "awaiting" && (
+                          <div className="text-sm text-accent-500">{r.pendingQuestion}</div>
+                        )}
+                        {r.sql && (
+                          <div>
+                            <pre className="overflow-auto rounded-lg bg-black/5 p-2 font-mono text-xs text-slate-600 dark:bg-white/5 dark:text-ink-300">{r.sql}</pre>
+                            <div className="mt-1 flex items-center gap-2">
+                              <button onClick={() => void copyText(`round-${r.id}`, r.sql)} className="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-slate-700 dark:text-ink-400 dark:hover:text-ink-200" title={copiedKey === `fail:round-${r.id}` ? "Clipboard blocked — select the SQL manually" : copiedKey === `round-${r.id}` ? "Copied!" : "Copy SQL"}>
+                                {copiedKey === `round-${r.id}` ? <ClipboardCheck size={12} className="text-state-ok" /> : <Copy size={12} />}
+                                {copiedKey === `round-${r.id}` ? "copied" : "copy"}
+                              </button>
+                              <button onClick={() => onRerun(r.sql)} className="text-xs text-accent-500 hover:underline" title="Load this SQL into the editor">open in editor</button>
+                            </div>
+                          </div>
+                        )}
+                        {r.sample && r.sample.rows.length > 0 && (
+                          <div className="overflow-auto">
+                            <table className="w-full text-left font-mono text-xs">
+                              <thead><tr className="border-b border-slate-200 dark:border-ink-700">{r.sample.columns.map((c) => <th key={c.name} className="py-1 pr-2 font-semibold text-slate-400">{c.name}</th>)}</tr></thead>
+                              <tbody>{r.sample.rows.map((row, i) => (
+                                <tr key={i} className="border-t border-slate-100 dark:border-ink-800">{r.sample!.columns.map((c) => <td key={c.name} className="py-1 pr-2 text-slate-500 dark:text-ink-400">{String(row[c.name] ?? "")}</td>)}</tr>
+                              ))}</tbody>
+                            </table>
+                            <div className="tnum mt-1 text-xs text-slate-400">{r.rowCount} rows total{r.sample.truncatedSample ? " — open in editor + Run for the full 100" : ""}</div>
+                          </div>
+                        )}
+                        {r.status === "done" && !r.ok && r.sql && (
+                          <div className="text-xs">
+                            <StatusChip tone="mute">{(r.errorKind ?? "failed").replace(/_/g, " ")}</StatusChip>
+                            {r.handoff && <span className="ml-2 text-state-warn">3 tries used — over to you.</span>}
+                            {r.errorHint && <div className="mt-1 text-slate-500 dark:text-ink-400">{r.errorHint}</div>}
+                          </div>
+                        )}
+                        {r.dropped && <div className="text-xs text-state-warn">{r.dropped}</div>}
+                        {r.reply && <div className="text-sm text-slate-600 dark:text-ink-300">{r.reply}</div>}
+                        {r.status === "transport-failed" && (
+                          <div>
+                            <div className="text-sm text-state-bad">{r.reply}</div>
+                            <button onClick={() => void sendChat(r.id)} className="mt-1 text-xs text-accent-500 hover:underline">retry</button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
             <div className="flex items-center gap-2 border-t border-slate-200 p-2 dark:border-ink-800">
               <input
                 value={chatInput}
                 onChange={(e) => setChatInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) sendChat(); }}
-                placeholder="Describe the data you want…"
-                className="w-full rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm dark:border-ink-700"
+                onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) void sendChat(); }}
+                disabled={asking || !lineId}
+                placeholder={!lineId ? "Select a line first…" : rounds.some((r) => r.status === "awaiting") ? "Answer the assistant's question…" : "Describe the data you want…"}
+                className="w-full rounded-lg border border-slate-300 bg-transparent px-3 py-2 text-sm disabled:opacity-50 dark:border-ink-700"
               />
-              <Btn size="sm" icon={Send} onClick={sendChat} disabled={!chatInput.trim()} className="shrink-0 glass-pill glass-pill--blue">Send</Btn>
+              <Btn size="sm" icon={Send} onClick={() => void sendChat()} disabled={asking || !lineId || !chatInput.trim()} loading={asking} className="shrink-0 glass-pill glass-pill--blue">{asking ? "asking…" : "Send"}</Btn>
             </div>
           </div>
         )}
-        <div>
+        <div className="xl:col-span-1">
           <textarea ref={sqlRef} rows={6} value={sql} onChange={(e) => setSql(e.target.value)} placeholder="SELECT * FROM readings_temp LIMIT 50" className="w-full rounded-lg border border-slate-300 bg-transparent p-3 font-mono text-sm dark:border-ink-700" onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onRun(); }} />
           <div className="mt-1 flex items-center gap-3 text-xs text-slate-400 dark:text-ink-500">
             <span>Ctrl+Enter to run</span><span>·</span><span>SELECT/WITH/SHOW/EXPLAIN only</span><span>·</span><span>no multi-statement</span><span>·</span><span className="font-mono">{"{{from}} / {{to}}"}</span><span>use the picker range</span>
           </div>
+          {windowEmpty && (
+            <div className="mt-2 rounded-lg border border-state-warn/40 bg-state-warn/10 px-3 py-2 text-xs text-state-warn">
+              Picked window is outside all recorded table data — expect 0 rows. Widen the range or pick full.
+            </div>
+          )}
           <div className="mt-3 flex gap-2">
             <Btn variant="primary" icon={Play} onClick={onRun} disabled={running || !lineId || !sql.trim()} loading={running} className="glass-pill glass-pill--blue">{running ? "running…" : "Run query"}</Btn>
             {result && <Btn icon={Save} onClick={() => { setSaveDraft((d) => ({ ...d, name: "", tables: lines.find((l) => l.id === lineId)?.memberTables.join(", ") ?? "", granularity: "hourly", unit: "", extractHint: "" })); setShowSave(true); }} className="glass-pill glass-pill--neutral">Save as card</Btn>}
-            <Btn icon={HistoryIcon} onClick={onHistoryToggle} className="ml-auto glass-pill glass-pill--neutral">History ({history.length})</Btn>
           </div>
         </div>
       </div>
-      {error && <div className="mt-3"><AlertBanner tone="bad" title="Query failed" detail={error} /></div>}
-      {result && (
-        <div className="mt-4 overflow-auto rounded-xl border border-slate-200 dark:border-ink-800">
-          <div className="border-b border-slate-200 px-4 py-2 text-sm dark:border-ink-800">
-            <span className="tnum font-semibold">{result.rowCount}</span> rows
-            {result.capped && <span className="ml-2 text-state-warn">capped to 100</span>}
-            <span className="ml-2 text-slate-400">{result.durationMs}ms</span>
+      {error && (
+        <div className="mt-3 rounded-xl border border-state-bad/40 bg-state-bad/10 p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusChip tone="bad">failed</StatusChip>
+            {errorKind && <StatusChip tone="mute">{errorKind.replace(/_/g, " ")}</StatusChip>}
+            <span className="text-sm font-semibold text-state-bad">Query failed</span>
           </div>
-          <table className="w-full text-left font-mono text-xs">
-            <thead><tr className="border-b border-slate-200 dark:border-ink-800">{result.columns.map((c) => <th key={c} className="px-3 py-2 font-semibold">{c}</th>)}</tr></thead>
-            <tbody>{result.rows.map((r, i) => <tr key={i} className="border-t border-slate-100 dark:border-ink-800">{result.columns.map((c) => <td key={c} className="px-3 py-1.5">{String(r[c] ?? "")}</td>)}</tr>)}</tbody>
-          </table>
-        </div>
-      )}
-      {result && result.rows.length === 0 && <div className="mt-4 rounded-xl border border-dashed border-slate-300 p-8 text-center dark:border-ink-700"><div className="text-sm text-slate-500">Query returned 0 rows</div></div>}
-      {showHistory && (
-        <div className="mt-4 rounded-xl border border-slate-200 p-4 dark:border-ink-800">
-          <div className="text-sm font-semibold">Recent queries</div>
-          {history.length === 0 && <div className="mt-2 text-sm text-slate-400">No history yet</div>}
-          {history.map((h) => (
-            <div key={h.id} className="mt-2 flex cursor-pointer items-center gap-2 rounded-lg border border-slate-100 p-2 text-xs hover:bg-slate-50 dark:border-ink-800 dark:hover:bg-ink-800/50" onClick={() => onRerun(h.sql)}>
-              <StatusChip tone={h.ok ? "ok" : "bad"}>{h.ok ? "ok" : "fail"}</StatusChip>
-              <span className="tnum text-slate-400">{h.rowCount != null ? `${h.rowCount} rows` : "—"}</span>
-              <span className="tnum text-slate-400">{h.durationMs != null ? `${h.durationMs}ms` : "—"}</span>
-              <span className="truncate font-mono text-slate-500">{h.sql.slice(0, 80)}</span>
-              <span className="ml-auto text-slate-400">{new Date(h.createdAt).toLocaleTimeString()}</span>
+          <div className="mt-1 font-mono text-xs text-slate-600 dark:text-ink-300">{error}</div>
+          {errorHint && <div className="mt-1 text-xs text-slate-500 dark:text-ink-400">{errorHint}</div>}
+          {errorSql && (
+            <div className="mt-1">
+              <button onClick={() => setShowErrSql((v) => !v)} className="text-xs text-accent-500 hover:underline">
+                {showErrSql ? "hide attempted SQL" : "show attempted SQL"}
+              </button>
+              {showErrSql && (
+                <div>
+                  <pre className="mt-1 overflow-auto rounded-lg bg-black/5 p-2 font-mono text-xs text-slate-600 dark:bg-white/5 dark:text-ink-300">{errorSql}</pre>
+                  <button onClick={() => void copyText("errsql", errorSql)} className="mt-1 inline-flex items-center gap-1 text-xs text-slate-500 hover:text-slate-700 dark:text-ink-400 dark:hover:text-ink-200" title={copiedKey === "fail:errsql" ? "Clipboard blocked — select the SQL manually" : copiedKey === "errsql" ? "Copied!" : "Copy SQL"}>
+                    {copiedKey === "errsql" ? <ClipboardCheck size={12} className="text-state-ok" /> : <Copy size={12} />}
+                    {copiedKey === "errsql" ? "copied" : "copy"}
+                  </button>
+                </div>
+              )}
             </div>
-          ))}
+          )}
         </div>
       )}
+      {result && (() => {
+        const total = result.rows.length;
+        const pages = Math.max(1, Math.ceil(total / pgPageSize));
+        const page = Math.min(pgPage, pages);
+        const slice = result.rows.slice((page - 1) * pgPageSize, page * pgPageSize);
+        return (
+          <div className="mt-4 overflow-auto rounded-xl border border-slate-200 dark:border-ink-800">
+            <div className="flex items-center border-b border-slate-200 px-4 py-2 text-sm dark:border-ink-800">
+              <span className="tnum font-semibold">{result.rowCount}</span> <span className="ml-1">rows</span>
+              {result.capped && <span className="ml-2 text-state-warn">capped to 100</span>}
+              <span className="ml-2 text-slate-400">{result.durationMs}ms</span>
+              <label className="ml-3 flex items-center gap-1 text-xs text-slate-400">
+                per page
+                <select
+                  value={pgPageSize}
+                  onChange={(e) => { setPgPageSize(Number(e.target.value)); setPgPage(1); }}
+                  className="rounded border border-slate-300 bg-transparent px-1 py-0.5 text-xs dark:border-ink-700"
+                >
+                  {[25, 50, 100].map((n) => <option key={n} value={n}>{n}</option>)}
+                </select>
+              </label>
+              <button
+                onClick={onClearResult}
+                className="ml-auto inline-flex items-center rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-ink-800 dark:hover:text-ink-200"
+                title="Dismiss results"
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <table className="w-full text-left font-mono text-xs">
+              <thead><tr className="border-b border-slate-200 dark:border-ink-800">{result.columns.map((c) => <th key={c} className="px-3 py-2 font-semibold">{c}</th>)}</tr></thead>
+              <tbody>{slice.map((r, i) => <tr key={(page - 1) * pgPageSize + i} className="border-t border-slate-100 dark:border-ink-800">{result.columns.map((c) => <td key={c} className="px-3 py-1.5">{String(r[c] ?? "")}</td>)}</tr>)}</tbody>
+            </table>
+            {pages > 1 && (
+              <div className="tnum flex items-center justify-end gap-2 border-t border-slate-200 px-4 py-2 text-xs text-slate-500 dark:border-ink-800 dark:text-ink-400">
+                <span>showing {(page - 1) * pgPageSize + 1}–{(page - 1) * pgPageSize + slice.length} of {total}</span>
+                <button onClick={() => setPgPage((p) => Math.max(1, p - 1))} disabled={page <= 1} className="rounded border border-slate-200 px-2 py-0.5 disabled:cursor-not-allowed disabled:opacity-40 dark:border-ink-700">← Prev</button>
+                <span>Page {page} of {pages}</span>
+                <button onClick={() => setPgPage((p) => Math.min(pages, p + 1))} disabled={page >= pages} className="rounded border border-slate-200 px-2 py-0.5 disabled:cursor-not-allowed disabled:opacity-40 dark:border-ink-700">Next →</button>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+      {result && result.rows.length === 0 && <div className="mt-4 rounded-xl border border-dashed border-slate-300 p-8 text-center dark:border-ink-700"><div className="text-sm text-slate-500">Query returned 0 rows</div>{windowEmpty && <div className="mt-1 text-xs text-state-warn">Picked window is outside all recorded table data — widen the range or pick full.</div>}</div>}
       {showSave && (
         <Modal title="Save as card (dormant)" onClose={() => setShowSave(false)}>
           <Field label="Card name"><input value={saveDraft.name} onChange={(e) => setSaveDraft((d) => ({ ...d, name: e.target.value }))} className={inp} /></Field>

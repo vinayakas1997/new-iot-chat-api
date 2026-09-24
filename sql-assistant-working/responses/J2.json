@@ -1,0 +1,14 @@
+{
+ "trial": "J2",
+ "systemFile": "ask_system_v2.txt",
+ "buildArgs": [
+  "--line",
+  "line-machines",
+  "--scenario",
+  "scenarios/J2_entitykey.json",
+  "--question",
+  "for machine MX-01 show its temperature readings alongside its running state"
+ ],
+ "userText": "Line `line-machines`, window 2026-09-11T07:06:09.534Z \u2192 2026-09-22T00:50:00.000Z (preset: full).\n\nTABLES (exhaustive \u2014 query only these):\n- public.machine_status \u2014 time column `ts`, 240 rows, recorded 2026-09-11T07:06:09.535Z \u2192 2026-09-22T00:50:00.000Z\n    ts (timestamp with time zone) \u2014 Timestamp of the status record.\n    machine_id (text) \u2014 Machine identifier, e.g. MX-01.\n    state (text) \u2014 Running state: RUN, IDLE or DOWN.\n- public.machine_temp \u2014 time column `ts`, 1150 rows, recorded 2026-09-11T07:06:09.534Z \u2192 2026-09-22T00:50:00.000Z\n    ts (timestamp with time zone) \u2014 Timestamp of the temperature reading.\n    machine_id (text) \u2014 Machine identifier, matches machine_status.\n    temp_c (double precision) \u2014 Bearing temperature in degrees Celsius.\n\nCONVERSATION SO FAR (round summaries):\n  (none \u2014 first question)\n\nTHIS TURN:\n  Editor SQL now: (empty)\n  User asks: 'for machine MX-01 show its temperature readings alongside its running state'\n",
+ "reply": "{\n  \"kind\": \"run_sql\",\n  \"sql\": \"WITH status AS (SELECT machine_id, state, DATE_TRUNC('hour', ts) AS bucket FROM public.machine_status WHERE machine_id = 'MX-01'), temps AS (SELECT machine_id, temp_c, DATE_TRUNC('hour', ts) AS bucket FROM public.machine_temp WHERE machine_id = 'MX-01') SELECT s.bucket, s.state, t.temp_c FROM status s JOIN temps t ON s.bucket = t.bucket ORDER BY s.bucket\",\n  \"steps\": [\"found table machine_status, machine_temp\", \"columns: machine_id, state, ts in status; machine_id, temp_c, ts in temp\", \"key: machine_id in both \u2192 time-bucket join\", \"writing query\", \"running\"],\n  \"reply\": \"Aggregates both tables to hourly buckets for MX-01 and joins them to show state alongside temperature readings per hour.\"\n}"
+}

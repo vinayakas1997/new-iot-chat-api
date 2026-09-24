@@ -1,0 +1,14 @@
+{
+ "trial": "C1",
+ "systemFile": "ask_system_v2.txt",
+ "buildArgs": [
+  "--line",
+  "line-oven",
+  "--scenario",
+  "scenarios/C1_threshold.json",
+  "--question",
+  "average temperature, last 7 days"
+ ],
+ "userText": "Line `line-oven`, window 2026-09-11T07:06:09.534Z \u2192 2026-09-22T00:50:00.000Z (preset: full).\n\nTABLES (exhaustive \u2014 query only these):\n- public.oven \u2014 time column `ts`, 500 rows, recorded 2026-09-11T07:06:09.534Z \u2192 2026-09-22T00:50:00.000Z\n    ts (timestamp with time zone) \u2014 Timestamp of the reading.\n    temp_c (double precision) \u2014 Chamber air temperature in degrees Celsius.\n    board_c (double precision) \u2014 Control board temperature in degrees Celsius.\n    heater_kw (double precision) \u2014 Heater power draw in kilowatts.\n\nCONVERSATION SO FAR (round summaries):\n  (none \u2014 first question)\n\nTHIS TURN:\n  Editor SQL now: (empty)\n  User asks: 'average temperature, last 7 days'\n",
+ "reply": "{\n  \"kind\": \"run_sql\",\n  \"sql\": \"SELECT AVG(temp_c) AS avg_temp_c, AVG(board_c) AS avg_board_c FROM public.oven WHERE ts >= '{{from}}' AND ts <= '{{to}}'\",\n  \"steps\": [\n    \"found table public.oven\",\n    \"columns: ts, temp_c, board_c, heater_kw\",\n    \"writing query\",\n    \"running\"\n  ],\n  \"reply\": \"Query calculates the average chamber and board temperatures over the specified 7-day window.\"\n}"
+}

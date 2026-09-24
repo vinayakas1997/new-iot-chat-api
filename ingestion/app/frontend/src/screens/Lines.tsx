@@ -5,7 +5,6 @@ import { api, bankApi, cardApi, globalTableApi, type BankOverviewEntry, type Con
 import { TableAnalyzeDialog } from "../components/TableAnalyzeDialog";
 import { AlertBanner, StatusChip } from "../components/chips";
 import { PushToHindsight } from "../components/PushToHindsight";
-import { LinePreview } from "../components/LinePreview";
 import { FormattedText } from "../components/FormattedText";
 import { Btn, EmptyState } from "../components/ui";
 
@@ -26,8 +25,8 @@ export function Lines() {
   const [unassigned, setUnassigned] = useState<Record<string, string[]>>({});
   const [banks, setBanks] = useState<Record<string, BankOverviewEntry>>({});
   const [greenByLine, setGreenByLine] = useState<Record<string, number>>({});
+  const [liveByLine, setLiveByLine] = useState<Record<string, number>>({});
   const [pushLine, setPushLine] = useState<Line | null>(null);
-  const [previewLine, setPreviewLine] = useState<Line | null>(null);
   const [analyzeTable, setAnalyzeTable] = useState<TableRef | null>(null);
   const [detailTable, setDetailTable] = useState<TableRef | null>(null);
   const [columnMeta, setColumnMeta] = useState<Record<string, { total: number; filled: number; analyzed: boolean }>>({});
@@ -46,10 +45,13 @@ export function Lines() {
       setConns(c.filter((x) => x.enabled));
       cardApi.listCards().then((cards) => {
         const g: Record<string, number> = {};
+        const lv: Record<string, number> = {};
         for (const card of cards) {
           if (card.lastTest?.ok) g[card.lineId] = (g[card.lineId] ?? 0) + 1;
+          if (card.status === "live") lv[card.lineId] = (lv[card.lineId] ?? 0) + 1;
         }
         setGreenByLine(g);
+        setLiveByLine(lv);
       }).catch(() => {});
       bankApi.overview().then((o) => {
         const m: Record<string, BankOverviewEntry> = {};
@@ -254,14 +256,22 @@ export function Lines() {
                 <td className="py-2.5 pr-4 text-slate-500 dark:text-ink-400">{l.connectionLabel}</td>
                 <td className="tnum py-2.5 pr-4 text-slate-500 dark:text-ink-400">{l.memberTables.length}</td>
                 <td className="py-2.5 pr-4">
-                  {l.active ? <StatusChip tone="ok">ingesting</StatusChip> : <StatusChip tone="mute">deregistered</StatusChip>}
+                  {l.active ? <StatusChip tone="ok">ingesting</StatusChip> : (
+                    <span className="inline-flex items-center gap-1.5">
+                      <StatusChip tone="mute">deregistered</StatusChip>
+                      {(liveByLine[l.id] ?? 0) > 0 && (
+                        <span className="tnum text-xs text-state-bad" title="Live cards on this line are frozen — ticks paused, resumes on re-register">
+                          · {liveByLine[l.id]} live frozen
+                        </span>
+                      )}
+                    </span>
+                  )}
                 </td>
                 <td className="tnum py-2.5 pr-4 text-slate-500 dark:text-ink-400">
                   {l.lastTick ? new Date(l.lastTick).toLocaleString() : "—"}
                 </td>
                 <td className="py-2.5" onClick={(e) => e.stopPropagation()}>
                   <span className="mr-2 inline-flex"><Btn variant="ghost" icon={Pencil} onClick={() => openForm(l)}>edit</Btn></span>
-                  <span className="mr-2 inline-flex"><Btn variant="ghost" icon={Eye} onClick={() => setPreviewLine(l)} title="Preview a feature's charts on this line's data — same template, this line's numbers">preview</Btn></span>
                   {(() => {
                     const b = banks[l.id];
                     const green = greenByLine[l.id] ?? 0;
@@ -346,13 +356,6 @@ export function Lines() {
           lineName={pushLine.name}
           onClose={() => setPushLine(null)}
           onPushed={() => void refresh()}
-        />
-      )}
-
-      {previewLine && (
-        <LinePreview
-          line={previewLine}
-          onClose={() => setPreviewLine(null)}
         />
       )}
 
