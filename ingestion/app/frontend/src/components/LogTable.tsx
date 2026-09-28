@@ -80,6 +80,7 @@ export function LogTable({ rows, filter, onFilter, stream, onOpen }: {
               <span className="tnum shrink-0 text-slate-400">{new Date(r.run.at).toLocaleTimeString()}</span>
               <span className="truncate font-medium">{r.run.cardName}</span>
               <StatusChip tone={r.kind === "run" && r.run.kind === "test" ? "accent" : "mute"}>{r.run.kind}</StatusChip>
+              {r.run.isBackfill && <StatusChip tone="accent">pre-fill</StatusChip>}
               <StatusChip tone={r.run.ok ? "ok" : "bad"}>{r.run.ok ? "ok" : "failed"}</StatusChip>
               <span className="tnum shrink-0 text-xs text-slate-400">{r.run.rowsPulled} rows</span>
             </button>

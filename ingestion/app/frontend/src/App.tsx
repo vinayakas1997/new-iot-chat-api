@@ -7,6 +7,7 @@ import { History } from "./screens/History";
 import { Overview } from "./screens/Overview";
 import { AiLogs } from "./screens/AiLogs";
 import { Lines } from "./screens/Lines";
+import { Prefill } from "./screens/Prefill";
 import { Home, Placeholder } from "./screens/misc";
 
 const router = createBrowserRouter([
@@ -21,6 +22,7 @@ const router = createBrowserRouter([
       { path: "cards", element: <Cards /> },
       { path: "history", element: <History /> },
       { path: "overview", element: <Overview /> },
+      { path: "prefill", element: <Prefill /> },
       { path: "hindsight", element: <Hindsight /> },
       { path: "ai-logs", element: <AiLogs /> },
     ],

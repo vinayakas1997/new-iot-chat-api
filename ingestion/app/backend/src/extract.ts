@@ -1,6 +1,10 @@
 import {
   activeLlmProvider,
+  getCard,
+  getReading,
+  getRetainState,
   getSetting,
+  setRetainState,
   sqlHash,
   type Card,
   type LineRecord,
@@ -30,7 +34,14 @@ export interface TickWindow {
 export interface ExtractResult {
   stored: number;
   error: string | null;
+  /** Item 8 substrate gate: identical result set skipped (no LLM, no retain). */
+  unchanged?: boolean;
+  /** Any draft flagged breach — lets callers decide follow-up reads. */
+  hadBreach?: boolean;
 }
+
+/** Item 8: every Nth unchanged window still retains one liveness fact. */
+const HEARTBEAT_EVERY = 12;
 
 function hsBase(): string | null {
   const url = getSetting("hindsight_url");
@@ -135,9 +146,13 @@ function deterministicFallback(
 }
 
 /**
- * Extraction slice v1: one LLM call per card result set -> retain facts in the
- * line's bank. Never throws — callers treat this as best-effort enrichment of
- * an already-successful tick.
+ * Extraction slice v1 + Item 8 substrate gate: one LLM call per card result
+ * set -> retain facts in the line's bank. Never throws — callers treat this
+ * as best-effort enrichment of an already-successful tick.
+ *
+ * Gate: byte-identical consecutive result sets skip LLM + retain (footprinted
+ * "unchanged" by the caller via `unchanged: true`); every HEARTBEAT_EVERY-th
+ * unchanged window retains one deterministic liveness fact instead.
  */
 export async function extractAndRetain(
   log: Logger,
@@ -145,9 +160,26 @@ export async function extractAndRetain(
   line: LineRecord,
   rows: Record<string, unknown>[],
   w: TickWindow,
-  resolution = "base"
+  resolution = "base",
+  dataMode: "live" | "prefill" = "live"
 ): Promise<ExtractResult> {
-  if (rows.length === 0) return { stored: 0, error: null };
+  if (rows.length === 0) return { stored: 0, error: null, hadBreach: false };
+  const hash = sqlHash(JSON.stringify(rows));
+  const state = getRetainState(card.id, resolution);
+  if (state.lastHash === hash) {
+    const streak = state.unchangedStreak + 1;
+    setRetainState(card.id, resolution, hash, streak);
+    if (streak % HEARTBEAT_EVERY !== 0) {
+      return { stored: 0, error: null, unchanged: true, hadBreach: false };
+    }
+    // Heartbeat: prove liveness deterministically (no LLM spend) and keep
+    // the streak counting so the next heartbeat lands on schedule.
+    const measure = measureColumn(rows) ?? "value";
+    const beat = deterministicFallback(card, w, rows, measure).slice(0, 1);
+    const r = await retainItems(log, line, card, w, resolution, beat, rows.length, dataMode, true);
+    return { stored: r.stored, error: r.error, hadBreach: beat.some((d) => d.breach) };
+  }
+
   const active = activeLlmProvider();
   if (!active) return { stored: 0, error: "no active LLM" };
   const base = hsBase();
@@ -161,16 +193,109 @@ export async function extractAndRetain(
     drafts = deterministicFallback(card, w, rows, measure);
   }
 
+  const r = await retainItems(log, line, card, w, resolution, drafts, rows.length, dataMode, false);
+  if (!r.error) setRetainState(card.id, resolution, hash, 0);
+  return { stored: r.stored, error: r.error, hadBreach: drafts.some((d) => d.breach) };
+}
+
+/** Item 8 primary feed: question lifecycle memories (birth + resolution). */
+export async function retainQuestionMemory(
+  log: Logger,
+  args: {
+    lineId: string;
+    cardId: string;
+    readingId: number;
+    ticketId: number;
+    kind: "question" | "question-resolved";
+    title: string;
+    evidence: string;
+    reason?: string;
+    dataMode?: "live" | "prefill";
+  }
+): Promise<void> {
+  try {
+    const base = hsBase();
+    if (!base) return;
+    const card = getCard(args.cardId);
+    const reading = getReading(args.readingId);
+    let resolution = "";
+    try {
+      const j = JSON.parse(reading?.readingJson ?? "{}") as { resolution?: unknown };
+      if (typeof j.resolution === "string") resolution = j.resolution;
+    } catch {
+      /* keep empty */
+    }
+    const content =
+      args.kind === "question"
+        ? `Open question: ${args.title} Evidence: ${args.evidence}`
+        : `Question resolved: ${args.title}${args.reason ? ` ${args.reason}` : ""}`;
+    const item = {
+      content,
+      timestamp: reading?.at ?? new Date().toISOString(),
+      ...(card?.context ? { context: card.context } : {}),
+      tags: [
+        `line:${args.lineId}`,
+        `card:${card?.id ?? args.cardId}`,
+        `cardName:${card?.name ?? args.cardId}`,
+        `cardVersion:${card?.version ?? "?"}`,
+        `kind:${args.kind}`,
+        `ticket:${args.ticketId}`,
+        `reading:${args.readingId}`,
+        `dataMode:${args.dataMode ?? "live"}`,
+        ...(resolution ? [`resolution:${resolution}`] : []),
+      ],
+      metadata: {
+        line: args.lineId,
+        card: args.cardId,
+        ticket: String(args.ticketId),
+        reading: String(args.readingId),
+        kind: args.kind,
+      },
+    };
+    const bankId = `bank:line-${args.lineId}`;
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), HS_TIMEOUT_MS);
+    try {
+      await fetch(`${base}/v1/default/banks/${encodeURIComponent(bankId)}/memories`, {
+        method: "POST",
+        signal: ctl.signal,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ items: [item], async: HS_ASYNC }),
+      });
+    } finally {
+      clearTimeout(t);
+    }
+  } catch (e) {
+    // Best-effort: a question memory must never break the loop that filed it.
+    log.warn({ lineId: args.lineId, ticketId: args.ticketId, error: (e as Error).message }, "question memory skipped");
+  }
+}
+/** Shared retain POST: drafts -> bank memories (async op, count submitted). */
+async function retainItems(
+  log: Logger,
+  line: LineRecord,
+  card: Card,
+  w: TickWindow,
+  resolution: string,
+  drafts: DraftFact[],
+  sampleCount: number,
+  dataMode: "live" | "prefill",
+  heartbeat: boolean
+): Promise<ExtractResult> {
+  const base = hsBase();
+  if (!base) return { stored: 0, error: "hindsight_url not set" };
   const items = drafts.map((d) => ({
     content: d.content,
     timestamp: w.to,
     // Per-ingest disambiguation shown alongside the fact (Specifics panel).
     // Omitted when empty so older Hindsight versions see a clean item.
     ...(card.context ? { context: card.context } : {}),
-    // tags are string[] in the Hindsight schema; key:value keeps them filterable.
+    // Gap 3: card keyed by stable id (rename-proof continuity); human name
+    // rides alongside as cardName. Old facts carry card:<name> (legacy).
     tags: [
       `line:${line.id}`,
-      `card:${card.name}`,
+      `card:${card.id}`,
+      `cardName:${card.name}`,
       `cardVersion:${card.version}`,
       `connection:${line.connectionId}`,
       `measure:${d.measure}`,
@@ -178,6 +303,9 @@ export async function extractAndRetain(
       `granularity:${card.granularity}`,
       `resolution:${resolution}`,
       `breach:${d.breach}`,
+      // Era tag: history grounds, live alerts — recall separates by it.
+      `dataMode:${dataMode}`,
+      ...(heartbeat ? ["heartbeat:true"] : []),
     ],
     // metadata values must be strings in the Hindsight schema.
     metadata: {
@@ -185,8 +313,11 @@ export async function extractAndRetain(
       card: card.id,
       cardVersion: String(card.version),
       window: JSON.stringify(w),
-      samples: String(rows.length),
+      samples: String(sampleCount),
       sqlHash: sqlHash(card.sql),
+      // Item 8 cross-resolution lineage: this rollup compresses N base
+      // windows over from..to — recall drills down by time overlap.
+      derivedFrom: `${sampleCount}x${resolution} windows ${w.from}..${w.to}`,
     },
   }));
 

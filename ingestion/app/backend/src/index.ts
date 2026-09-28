@@ -15,10 +15,11 @@ import { columnTemplateRoutes } from "./routes/columnTemplates.js";
 import { llmRoutes } from "./routes/llm.js";
 import { llmCallRoutes } from "./routes/llmcalls.js";
 import { playgroundRoutes } from "./routes/playground.js";
+import { prefillRoutes } from "./routes/prefill.js";
 import { readingRoutes } from "./routes/readings.js";
 import { ticketRoutes } from "./routes/tickets.js";
 import { overviewRoutes } from "./routes/overview.js";
-import { runTick, startTicker } from "./ticker.js";
+import { runPrefillPass, runTick, startPrefillWalker, startTicker } from "./ticker.js";
 
 const PORT = Number(process.env.PORT ?? 3100);
 const STORE_PATH = process.env.STORE_PATH ?? "./data/setter.db";
@@ -44,15 +45,19 @@ async function main() {
   await app.register(llmRoutes);
   await app.register(llmCallRoutes);
   await app.register(playgroundRoutes);
+  await app.register(prefillRoutes);
   await app.register(readingRoutes);
   await app.register(ticketRoutes);
   await app.register(overviewRoutes);
 
   // Manual tick trigger (setter action + verification hook).
   app.post("/api/ingest/tick", async () => runTick(app.log));
+  // Manual prefill pass trigger (F8 verification hook).
+  app.post("/api/ingest/prefill-pass", async () => runPrefillPass(app.log));
 
   startPoller(app.log);
   if (process.env.TICK_ENABLED !== "false") startTicker(app.log);
+  if (process.env.PREFILL_ENABLED !== "false") startPrefillWalker(app.log);
 
   await app.listen({ port: PORT, host: "0.0.0.0" });
 }

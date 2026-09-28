@@ -53,22 +53,24 @@ export async function historyRoutes(app: FastifyInstance) {
   });
 
   // Day view: runs + failures + previous-day comparison.
+  // era=live excludes prefill footprints (F7 default); default all (F4 as today).
   app.get("/api/ingest/history/day", async (req, reply) => {
-    const { lineId, date } = req.query as { lineId?: string; date?: string };
+    const { lineId, date, era } = req.query as { lineId?: string; date?: string; era?: string };
     if (!lineId || !date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       return reply.code(400).send({ error: "lineId + date=YYYY-MM-DD required" });
     }
+    const liveOnly = era === "live";
     const b = dayBounds(date);
     const pb = dayBounds(prevDate(date));
-    const runs = runsForLine(lineId, b.from, b.to).map((r) => ({
+    const runs = runsForLine(lineId, b.from, b.to, { liveOnly }).map((r) => ({
       ...r,
       cardName: getCard(r.cardId)?.name ?? r.cardId,
     }));
-    const prev = summarize(runsForLine(lineId, pb.from, pb.to));
+    const prev = summarize(runsForLine(lineId, pb.from, pb.to, { liveOnly }));
     return {
       lineId,
       date,
-      summary: summarize(runsForLine(lineId, b.from, b.to)),
+      summary: summarize(runsForLine(lineId, b.from, b.to, { liveOnly })),
       prevDate: prevDate(date),
       prev,
       runs,

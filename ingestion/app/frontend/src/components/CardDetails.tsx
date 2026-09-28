@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Copy, Sparkles, X } from "lucide-react";
 import type { Card, CardTemplate, ChartSeriesMeta, GraphSpec, Line, TestResult } from "../lib/api";
-import { cardApi, chartApi, graphApi, hasCustomSkip } from "../lib/api";
+import { cardApi, chartApi, graphApi, hasCustomSkip, readingApi } from "../lib/api";
 import { StatusChip } from "./chips";
 import { FormattedText } from "./FormattedText";
 import { Chart } from "./Chart";
@@ -25,6 +25,39 @@ export function CardDetails({ card, template, line, graphs, bankReady, onClose, 
   const [recommending, setRecommending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [openTable, setOpenTable] = useState<string | null>(null);
+  // 6b: table-only read for chartMode-off cards (no image in or out).
+  const [reading, setReading] = useState(false);
+  const [readResult, setReadResult] = useState<string | null>(null);
+
+  async function readTable() {
+    setReading(true);
+    setError(null);
+    setReadResult(null);
+    try {
+      const s = await cardApi.cardSample(card.id);
+      const rows = s.rows.slice(0, 60);
+      const r = await readingApi.tableRead({
+        lineId: card.lineId,
+        cardId: card.id,
+        resolution: card.granularity,
+        windowFrom: s.from,
+        windowTo: s.to,
+        columns: s.columns,
+        rows,
+        threshold: card.threshold,
+      });
+      const loop = (r.loop ?? {}) as { filed?: unknown[]; merged?: unknown[]; closed?: unknown[]; dropped?: unknown[] };
+      const parts = [
+        `reading #${r.id} — ${r.summary ?? r.status}`,
+        `loop: +${(loop.filed ?? []).length} filed / ~${(loop.merged ?? []).length} merged / ✓${(loop.closed ?? []).length} closed / −${(loop.dropped ?? []).length} dropped`,
+      ];
+      setReadResult(parts.join(" · "));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setReading(false);
+    }
+  }
 
   // Display-only sample: fallback windows (never the strict 24h test-run),
   // so stale/sparse lines still preview. Window label keeps it honest.
@@ -189,6 +222,18 @@ export function CardDetails({ card, template, line, graphs, bankReady, onClose, 
                 : <span className="text-slate-400">never tested — cannot go live</span>}
             </div>
           </section>
+
+          {card.chartMode === "off" && (
+            <section>
+              <div className="mb-1 flex items-center gap-2">
+                <span className="text-xs uppercase tracking-widest text-slate-400">table read — no charts on this card</span>
+                <Btn variant="ghost" size="sm" onClick={() => void readTable()} loading={reading} disabled={reading} className="ml-auto glass-pill glass-pill--neutral" title="Sample this card's SQL and read the rows with the LLM — no chart rendered, none stored.">
+                  Read table
+                </Btn>
+              </div>
+              {readResult && <div className="tnum text-xs text-state-ok">{readResult} — see F7 Log.</div>}
+            </section>
+          )}
 
           <section>
             <div className="mb-1 flex items-center gap-2">

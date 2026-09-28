@@ -23,21 +23,24 @@ function nextAfter(last: string | null, periodMs: number): string | null {
 
 export async function overviewRoutes(app: FastifyInstance) {
   app.get("/api/ingest/overview/health", async (req, reply) => {
-    const { line } = req.query as { line?: string };
+    const { line, era } = req.query as { line?: string; era?: string };
     if (!line) return reply.code(400).send({ error: "line required" });
     const l = getLine(line);
     if (!l) return reply.code(404).send({ error: "line not found" });
+    // F7 live-only: era=live excludes prefill footprints from counts.
+    // Default all — other consumers (F4, F8) keep today's behavior.
+    const liveOnly = era === "live";
     const now = Date.now();
     const iso = (ms: number) => new Date(ms).toISOString();
     const summarize = (from: number, to: number) => {
-      const runs = runsForLine(line, iso(from), iso(to));
+      const runs = runsForLine(line, iso(from), iso(to), { liveOnly });
       const ok = runs.filter((r) => r.ok).length;
       return { runs: runs.length, ok, failed: runs.length - ok };
     };
     const cards = listCards(line);
     // "base" (the sampler) always streams even though cards list derived readers.
     const resolutions: string[] = [...new Set(["base", ...cards.flatMap((c) => c.resolutions ?? [])])];
-    const day = runsForLine(line, iso(now - 86_400_000), iso(now));
+    const day = runsForLine(line, iso(now - 86_400_000), iso(now), { liveOnly });
     const streams = resolutions.map((res) => {
       let last: string | null = null;
       for (const c of cards) {

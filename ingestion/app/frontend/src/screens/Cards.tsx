@@ -39,7 +39,7 @@ export function insertAtCursor(
   });
 }
 /** Ticks per day by granularity — one source query per tick per card copy. */
-export const TICKS_PER_DAY: Record<Card["granularity"], number> = { hourly: 24, shift: 3, daily: 1 };
+export const TICKS_PER_DAY: Record<Card["granularity"], number> = { hourly: 24, daily: 1 };
 export function tickCost(c: Pick<Card, "granularity">): number {
   return TICKS_PER_DAY[c.granularity];
 }
@@ -192,7 +192,7 @@ export function Cards() {
   const [appliedByTpl, setAppliedByTpl] = useState<Record<string, boolean>>({});
   const [showTplForm, setShowTplForm] = useState(false);
   const [editTpl, setEditTpl] = useState<CardTemplate | null>(null);
-  const [tplDraft, setTplDraft] = useState({ name: "", description: "", sqlTemplate: "", granularity: "hourly", resolutions: [...ALL_STREAMS] as StreamResolution[], skipSchedule: defaultSkipSchedule(), unit: "", extractHint: "", context: "", thresholds: [] as ThresholdCondition[] });
+  const [tplDraft, setTplDraft] = useState({ name: "", description: "", sqlTemplate: "", granularity: "hourly", resolutions: [...ALL_STREAMS] as StreamResolution[], skipSchedule: defaultSkipSchedule(), unit: "", extractHint: "", context: "", thresholds: [] as ThresholdCondition[], includeTables: [] as string[], analysisStart: "", chartMode: "auto" as "auto" | "off", prefillStreams: [] as string[] });
   // Form-level Suggest charts: draft-native (no save). Recommend runs on the
   // unsaved draft inputs; the preview samples the draft SQL on the picked
   // line. Save (new) carries reviewed suggestions into the created template.
@@ -417,6 +417,15 @@ export function Cards() {
   const [tplLineSearch, setTplLineSearch] = useState("");
   const [showLineSug, setShowLineSug] = useState(false);
   const tplSqlRef = useRef<HTMLTextAreaElement>(null);
+  // 4b: earliest recorded data on the picked line (grounds the start choice).
+  const [tplDataStart, setTplDataStart] = useState<string | null>(null);
+  useEffect(() => {
+    if (!tplPickLine) { setTplDataStart(null); return; }
+    playgroundApi.ranges(tplPickLine).then(
+      (r) => setTplDataStart(r.overall?.start?.slice(0, 10) ?? null),
+      () => setTplDataStart(null),
+    );
+  }, [tplPickLine]);
 
   // Playground state
   const [pgLineId, setPgLineId] = useState("");
@@ -633,7 +642,7 @@ export function Cards() {
   function openEditTemplate(t: CardTemplate) {
     const ref = t.referenceLineId ? lines.find((l) => l.id === t.referenceLineId) : undefined;
     setEditTpl(t);
-    setTplDraft({ name: t.name, description: t.description, sqlTemplate: t.sqlTemplate, granularity: t.granularity, resolutions: [...(t.resolutions ?? ALL_STREAMS)], skipSchedule: t.skipSchedule ?? defaultSkipSchedule(), unit: t.unit, extractHint: t.extractHint, context: t.context ?? "", thresholds: [...(t.thresholds ?? [])] });
+    setTplDraft({ name: t.name, description: t.description, sqlTemplate: t.sqlTemplate, granularity: t.granularity, resolutions: [...(t.resolutions ?? ALL_STREAMS)], skipSchedule: t.skipSchedule ?? defaultSkipSchedule(), unit: t.unit, extractHint: t.extractHint, context: t.context ?? "", thresholds: [...(t.thresholds ?? [])], includeTables: [...(t.includeTables ?? [])], analysisStart: t.analysisStart ?? "", chartMode: t.chartMode ?? "auto", prefillStreams: [...(t.prefillStreams ?? [])] });
     resetHintSession(t.extractHint ?? "");
     setFormSug([]);
     setFormCtx(null);
@@ -768,7 +777,7 @@ export function Cards() {
           </Link>
             {tab === "cards"
             ? <Btn variant="primary" icon={Plus} onClick={() => { setShowAdd(true); setAddLine(lines[0]?.id ?? ""); setAddQ(""); setAddMaps({}); setAddChecked([]); setAddDone(null); }} title="Register features onto a line: pick the line, see its tables, search templates, attach several at once as dormant copies. SQL and thresholds live in the template." className="glass-pill glass-pill--blue">New card</Btn>
-            : <Btn variant="primary" icon={Plus} onClick={() => { setEditTpl(null); setTplDraft({ name: "", description: "", sqlTemplate: "", granularity: "hourly", resolutions: [...ALL_STREAMS] as StreamResolution[], skipSchedule: defaultSkipSchedule(), unit: "", extractHint: "", context: "", thresholds: [] as ThresholdCondition[] }); resetHintSession(""); setFormSug([]); setFormCtx(null); setFormModalOpen(false); setFormSample(null); setFormSuggestError(null); setStampCard(true); setTplPickLine(""); setTplLineSearch(""); setShowTplForm(true); }} className="glass-pill glass-pill--blue">New template</Btn>}
+            : <Btn variant="primary" icon={Plus} onClick={() => { setEditTpl(null); setTplDraft({ name: "", description: "", sqlTemplate: "", granularity: "hourly", resolutions: [...ALL_STREAMS] as StreamResolution[], skipSchedule: defaultSkipSchedule(), unit: "", extractHint: "", context: "", thresholds: [] as ThresholdCondition[], includeTables: [] as string[], analysisStart: "", chartMode: "auto" as "auto" | "off", prefillStreams: [] as string[] }); resetHintSession(""); setFormSug([]); setFormCtx(null); setFormModalOpen(false); setFormSample(null); setFormSuggestError(null); setStampCard(true); setTplPickLine(""); setTplLineSearch(""); setShowTplForm(true); }} className="glass-pill glass-pill--blue">New template</Btn>}
         </div>
       </div>
 
@@ -1478,14 +1487,30 @@ export function Cards() {
                     const dot = m.indexOf(".");
                     const sch = dot > 0 ? m.slice(0, dot) : "public";
                     const tbl = dot > 0 ? m.slice(dot + 1) : m;
+                    // 6a: include tick — checked tables are inlined raw into
+                    // prompt building (empty scope = all). Unchecked = skipped.
+                    const scope = tplDraft.includeTables.length ? tplDraft.includeTables : pick.memberTables;
+                    const included = scope.includes(m);
+                    const toggleInclude = () => {
+                      const base = tplDraft.includeTables.length ? tplDraft.includeTables : pick.memberTables;
+                      const next = included ? base.filter((t) => t !== m) : [...base, m];
+                      setTplDraft({ ...tplDraft, includeTables: next.length === pick.memberTables.length ? [] : next });
+                    };
                     return (
                       <div key={m} className="flex items-center gap-1.5">
                         <span className="tnum w-6 shrink-0 text-right text-xs text-slate-400">{ti + 1}.</span>
+                        <input
+                          type="checkbox"
+                          checked={included}
+                          onChange={toggleInclude}
+                          title={included ? `In prompt scope — uncheck to exclude ${m}` : `Excluded from prompt scope — check to include ${m}`}
+                          className="h-4 w-4 shrink-0 accent-accent-500"
+                        />
                         <button
                           type="button"
                           onClick={() => insertAtCursor(tplSqlRef, tplDraft.sqlTemplate, (v) => setTplDraft({ ...tplDraft, sqlTemplate: v }), m)}
                           title={`Insert ${m} at cursor`}
-                          className="rounded-lg border border-accent-500/30 bg-accent-500/5 px-2.5 py-1 font-mono text-sm text-accent-500 transition-colors hover:bg-accent-500/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 dark:border-accent-500/30"
+                          className={`rounded-lg border px-2.5 py-1 font-mono text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 ${included ? "border-accent-500/30 bg-accent-500/5 text-accent-500 hover:bg-accent-500/10" : "border-slate-300 text-slate-400 line-through dark:border-ink-700"}`}
                         >
                           {m}
                         </button>
@@ -1540,6 +1565,7 @@ export function Cards() {
                     unit: tplDraft.unit,
                     referenceLineId: ref.id,
                     steer: steerText,
+                    includeTables: tplDraft.includeTables,
                   }).then((r) => {
                     setTplDraft((d) => ({ ...d, sqlTemplate: r.sql }));
                     setSqlThinking(r.thinking ?? []);
@@ -1705,6 +1731,100 @@ export function Cards() {
               );
             })()}
             <div className="mt-1 text-[11px] text-slate-400">table names light up inside the box — teal = on the picked line, amber = missing there. Swap per line at Instantiate → line.</div>
+            <Field label="4b. Analysis start — from when do we analyze these tables?">
+              {(() => {
+                const v = tplDraft.analysisStart;
+                const off = v === "off";
+                const customMode = !off && !(v === "" || v === "from-start");
+                const customDate = customMode;
+                const live = off;
+                return (
+                  <div>
+                    <div className="flex flex-wrap items-center gap-4">
+                      <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-600 dark:text-ink-200" title="Start from now, forward only — no history walk">
+                        <input
+                          type="radio"
+                          checked={live}
+                          onChange={() => setTplDraft({ ...tplDraft, analysisStart: "off" })}
+                          className="h-4 w-4 accent-accent-500"
+                        />
+                        Live — from now
+                      </label>
+                      <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-600 dark:text-ink-200" title="Include history — the pre-fill walker drains it in the background">
+                        <input
+                          type="radio"
+                          checked={!live}
+                          onChange={() => setTplDraft({ ...tplDraft, analysisStart: "" })}
+                          className="h-4 w-4 accent-accent-500"
+                        />
+                        Custom…
+                      </label>
+                    </div>
+                    {!live && (
+                      <div className="mt-2 flex flex-wrap items-center gap-4 pl-6">
+                        <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-600 dark:text-ink-200">
+                          <input
+                            type="radio"
+                            checked={!customDate}
+                            onChange={() => setTplDraft({ ...tplDraft, analysisStart: "" })}
+                            className="h-4 w-4 accent-accent-500"
+                          />
+                          From start{tplDataStart ? <span className="tnum text-xs text-slate-400"> (data from {tplDataStart})</span> : <span className="text-xs text-slate-400"> (earliest recorded data)</span>}
+                        </label>
+                        <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-600 dark:text-ink-200">
+                          <input
+                            type="radio"
+                            checked={customDate}
+                            onChange={() => setTplDraft({ ...tplDraft, analysisStart: tplDataStart ?? new Date().toISOString().slice(0, 10) })}
+                            className="h-4 w-4 accent-accent-500"
+                          />
+                          Custom date
+                        </label>
+                        {customDate && (
+                          <input
+                            type="date"
+                            value={tplDraft.analysisStart}
+                            min={tplDataStart ?? undefined}
+                            max={new Date().toISOString().slice(0, 10)}
+                            onChange={(e) => setTplDraft({ ...tplDraft, analysisStart: e.target.value })}
+                            title="Analysis begins here — clamped to recorded data"
+                            className={inp}
+                          />
+                        )}
+                      </div>
+                    )}
+                    <div className="mt-1 text-[11px] text-slate-400">
+                      {live ? "live only — no history walk" : customDate ? `analyzing since ${tplDraft.analysisStart || "— pick a date"}` : "everything recorded, from the start"} · copies inherit this as their re-ingest default
+                    </div>
+                  </div>
+                );
+              })()}
+            </Field>
+            <Field label="4c. Pre-fill streams — which ranges walk history? (live ticks always use field 5)">
+              <div className="flex flex-wrap gap-1.5">
+                {ALL_STREAMS.map((s) => {
+                  const scope = tplDraft.prefillStreams.length ? tplDraft.prefillStreams : ALL_STREAMS;
+                  const on = scope.includes(s);
+                  return (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => {
+                        const base = tplDraft.prefillStreams.length ? tplDraft.prefillStreams : [...ALL_STREAMS];
+                        const next = on ? base.filter((t) => t !== s) : [...base, s];
+                        if (next.length === 0) return;
+                        setTplDraft({ ...tplDraft, prefillStreams: next.length === ALL_STREAMS.length ? [] : next });
+                      }}
+                      title={on ? `${s} pre-fills — click to deselect` : `${s} skipped by pre-fill — click to include`}
+                      className={`tnum rounded-full px-2.5 py-1 text-xs transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 ${on ? "bg-accent-500/10 text-accent-500 ring-1 ring-accent-500/30" : "text-slate-400 line-through ring-1 ring-slate-300 dark:ring-ink-700"}`}
+                    >
+                      {s}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="mt-1 text-[11px] text-slate-400">deselected ranges never pre-fill (fewer LLM calls) — live ingestion unaffected</div>
+            </Field>
           </div>
           <div className="flex flex-wrap gap-3">
             <StreamResolutions label="5. Ingest streams" value={tplDraft.resolutions} onChange={(v) => setTplDraft({ ...tplDraft, resolutions: v })} hint="Finest checked queries the plant; coarser ones roll up. Copies inherit this." />
@@ -1718,7 +1838,21 @@ export function Cards() {
               columns={sqlTest && sqlTest.testedSql === tplDraft.sqlTemplate ? sqlTest.columns : []}
             />
           </Field>
-          <Field label="9. Charts creation">
+          <div className="flex flex-wrap gap-3">
+            <Field label="9. Charts">
+              <select
+                value={tplDraft.chartMode}
+                onChange={(e) => setTplDraft({ ...tplDraft, chartMode: e.target.value as "auto" | "off" })}
+                title="auto = charts as today · off = no charts at all, table-only readings"
+                className={inp}
+              >
+                <option value="auto">auto — with charts</option>
+                <option value="off">off — table-only, no charts</option>
+              </select>
+              <div className="mt-1 text-[11px] text-slate-400">{tplDraft.chartMode === "off" ? "readings cite rows, never images" : "snapshot readings as today"}</div>
+            </Field>
+          </div>
+          <Field label="11. Charts creation">
           <div className="flex flex-wrap items-center gap-2">
             <Btn
               size="sm"
@@ -1762,6 +1896,7 @@ export function Cards() {
                     granularity: granularityForStreams(tplDraft.resolutions),
                     referenceLineId: ref.id,
                     steer: steerText,
+                    includeTables: tplDraft.includeTables,
                   }).then((r) => {
                     setHintCandidates(r.candidateQuirks ?? []);
                     setQuirkVerdicts({});
@@ -1826,7 +1961,7 @@ export function Cards() {
             </div>
           )}
           <HintPointEditor label="10. Extraction hint (for the AI extractor) — points, edit or delete any" points={hintPoints} onChange={setHintPoints} />
-          <Field label="11. Retain context (shown alongside each stored fact — copies inherit this)"><input value={tplDraft.context} onChange={(e) => setTplDraft({ ...tplDraft, context: e.target.value })} placeholder="e.g. hourly temperature rollup" className={inp} /></Field>
+          <Field label="10. Retain context (shown alongside each stored fact — copies inherit this)"><input value={tplDraft.context} onChange={(e) => setTplDraft({ ...tplDraft, context: e.target.value })} placeholder="e.g. hourly temperature rollup" className={inp} /></Field>
           {editTpl && tplDraft.sqlTemplate !== editTpl.sqlTemplate && (
             <div className="rounded-lg border border-state-warn/40 px-3 py-2 text-xs text-slate-500">
               Saving this SQL bumps the template to <b>v{editTpl.version + 1}</b>. Copies keep their current SQL and show as <b>stale</b> until you Check / Apply.
@@ -2512,7 +2647,7 @@ function StreamResolutions({ value, onChange, hint, label }: {
 
 /** Legacy granularity column from the finest checked stream (recommend
  *  titles + tick-cost display still read it; ticks use the streams). */
-function granularityForStreams(v: StreamResolution[]): "hourly" | "shift" | "daily" {
+function granularityForStreams(v: StreamResolution[]): "hourly" | "daily" {
   const finest = ALL_STREAMS.find((r) => v.includes(r)) ?? "hourly";
   return finest === "daily" || finest === "weekly" || finest === "monthly" ? "daily" : "hourly";
 }
@@ -2687,6 +2822,10 @@ function SpecificsModal({ card, templateName, line, onClose, onSaved }: {
     context: card.context ?? "",
     unit: card.unit ?? "",
     threshold: card.threshold != null ? String(card.threshold) : "",
+    analysisStart: card.analysisStart ?? "",
+    chartMode: card.chartMode ?? "auto",
+    includeTables: [...(card.includeTables ?? [])],
+    prefillStreams: [...(card.prefillStreams ?? [])],
   });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -2709,6 +2848,10 @@ function SpecificsModal({ card, templateName, line, onClose, onSaved }: {
         context: draft.context,
         unit: draft.unit,
         threshold: draft.threshold === "" ? null : Number(draft.threshold),
+        analysisStart: draft.analysisStart,
+        chartMode: draft.chartMode,
+        includeTables: draft.includeTables,
+        prefillStreams: draft.prefillStreams,
       });
       onSaved();
     } catch (e) {
@@ -2739,6 +2882,75 @@ function SpecificsModal({ card, templateName, line, onClose, onSaved }: {
         {live
           ? <div className={ro}>{draft.context || "—"}</div>
           : <input value={draft.context} onChange={(e) => setDraft({ ...draft, context: e.target.value })} placeholder="e.g. hourly temperature rollup" className={inp} />}
+      </Field>
+      <div className="flex gap-3">
+        <Field label="Analysis start">
+          {live
+            ? <div className={ro}>{!draft.analysisStart || draft.analysisStart === "from-start" ? "from start" : draft.analysisStart === "off" ? "off — live only" : draft.analysisStart}</div>
+            : <div className="flex flex-wrap items-center gap-2">
+              <input type="date" value={draft.analysisStart && draft.analysisStart !== "from-start" && draft.analysisStart !== "off" ? draft.analysisStart : ""} onChange={(e) => setDraft({ ...draft, analysisStart: e.target.value })} title="Empty = from start (earliest data). Default for re-ingest." className={inp} />
+              <button type="button" onClick={() => setDraft({ ...draft, analysisStart: "" })} title="Back to from-start" className="text-xs text-accent-500 hover:underline focus:outline-none">from start</button>
+              <button type="button" onClick={() => setDraft({ ...draft, analysisStart: draft.analysisStart === "off" ? "" : "off" })} title="Live from now — no history walk" className={`text-xs hover:underline focus:outline-none ${draft.analysisStart === "off" ? "font-bold text-state-warn" : "text-accent-500"}`}>live</button>
+            </div>}
+        </Field>
+        <Field label="Charts">
+          {live
+            ? <div className={ro}>{draft.chartMode === "off" ? "off — table-only" : "auto"}</div>
+            : <select value={draft.chartMode} onChange={(e) => setDraft({ ...draft, chartMode: e.target.value as "auto" | "off" })} className={inp}>
+              <option value="auto">auto — with charts</option>
+              <option value="off">off — table-only</option>
+            </select>}
+        </Field>
+      </div>
+      <Field label="Tables in prompt scope (empty = all line tables)">
+        {live
+          ? <div className={ro}>{draft.includeTables.length ? draft.includeTables.join(", ") : "all"}</div>
+          : <div className="flex flex-wrap gap-1.5">
+            {(line?.memberTables ?? []).map((m) => {
+              const on = draft.includeTables.length === 0 || draft.includeTables.includes(m);
+              return (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => {
+                    const base = draft.includeTables.length ? draft.includeTables : (line?.memberTables ?? []);
+                    const next = on ? base.filter((t) => t !== m) : [...base, m];
+                    setDraft({ ...draft, includeTables: next.length === (line?.memberTables ?? []).length ? [] : next });
+                  }}
+                  title={on ? `In scope — click to exclude ${m}` : `Excluded — click to include ${m}`}
+                  className={`rounded-full px-2.5 py-1 font-mono text-[11px] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 ${on ? "bg-accent-500/10 text-accent-500 ring-1 ring-accent-500/30" : "text-slate-400 line-through ring-1 ring-slate-300 dark:ring-ink-700"}`}
+                >
+                  {m}
+                </button>
+              );
+            })}
+            {(line?.memberTables ?? []).length === 0 && <span className="text-xs text-slate-400">no tables on line</span>}
+          </div>}
+      </Field>
+      <Field label="Pre-fill streams (empty = all tick streams)">
+        {live
+          ? <div className={ro}>{draft.prefillStreams.length ? draft.prefillStreams.join(", ") : "all"}</div>
+          : <div className="flex flex-wrap gap-1.5">
+            {ALL_STREAMS.map((s) => {
+              const on = draft.prefillStreams.length === 0 || draft.prefillStreams.includes(s);
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => {
+                    const base = draft.prefillStreams.length ? draft.prefillStreams : [...ALL_STREAMS];
+                    const next = on ? base.filter((t) => t !== s) : [...base, s];
+                    if (next.length === 0) return;
+                    setDraft({ ...draft, prefillStreams: next.length === ALL_STREAMS.length ? [] : next });
+                  }}
+                  title={on ? `${s} pre-fills — click to deselect` : `${s} skipped — click to include`}
+                  className={`tnum rounded-full px-2.5 py-1 text-[11px] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500/60 ${on ? "bg-accent-500/10 text-accent-500 ring-1 ring-accent-500/30" : "text-slate-400 line-through ring-1 ring-slate-300 dark:ring-ink-700"}`}
+                >
+                  {s}
+                </button>
+              );
+            })}
+          </div>}
       </Field>
       <div className="flex gap-3">
         <Field label="Unit">
@@ -3494,7 +3706,7 @@ function PlaygroundTab({ lines, lineId, setLineId, sql, setSql, result, error, e
           <Field label="Card name"><input value={saveDraft.name} onChange={(e) => setSaveDraft((d) => ({ ...d, name: e.target.value }))} className={inp} /></Field>
           <Field label="Tables (comma-separated)"><input value={saveDraft.tables} onChange={(e) => setSaveDraft((d) => ({ ...d, tables: e.target.value }))} className={`${inp} font-mono`} /></Field>
           <div className="flex gap-3">
-            <Field label="Granularity"><select value={saveDraft.granularity} onChange={(e) => setSaveDraft((d) => ({ ...d, granularity: e.target.value }))} className={inp}><option value="hourly">hourly</option><option value="shift">shift</option><option value="daily">daily</option></select></Field>
+            <Field label="Granularity"><select value={saveDraft.granularity} onChange={(e) => setSaveDraft((d) => ({ ...d, granularity: e.target.value }))} className={inp}><option value="hourly">hourly</option><option value="daily">daily</option></select></Field>
             <Field label="Unit"><input value={saveDraft.unit} onChange={(e) => setSaveDraft((d) => ({ ...d, unit: e.target.value }))} placeholder="°C, pcs…" className={inp} /></Field>
           </div>
           <Field label="Extraction hint"><textarea rows={2} value={saveDraft.extractHint} onChange={(e) => setSaveDraft((d) => ({ ...d, extractHint: e.target.value }))} className={inp} /></Field>
@@ -3740,7 +3952,7 @@ function GraphDesigner({ card, template, onClose }: { card: Card; template: Card
   const [modalSample, setModalSample] = useState<CardSample | null>(null);
   const [modalSampledAt, setModalSampledAt] = useState<string | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
-  const [modalRes, setModalRes] = useState<Resolution>(card.granularity === "shift" ? "hourly" : card.granularity);
+  const [modalRes, setModalRes] = useState<Resolution>(card.granularity);
 
   useEffect(() => {
     Promise.all([

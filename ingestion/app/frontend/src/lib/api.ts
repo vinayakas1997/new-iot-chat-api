@@ -151,10 +151,26 @@ export interface BankPlan {
   mentalModel: { name: string; source_query: string };
 }
 
+/** One Hindsight recall hit (Item 3 Button 5). Fields per official Recall API. */
+export interface RecallHit {
+  id?: string;
+  text?: string;
+  type?: string;
+  context?: string | null;
+  occurred_start?: string | null;
+  mentioned_at?: string | null;
+  tags?: string[];
+}
+
 export const bankApi = {
   overview: () =>
     req<{ hindsight: { configured: boolean; base: string | null }; banks: BankOverviewEntry[] }>("/api/ingest/banks"),
   preview: (lineId: string) => req<BankPreview>(`/api/ingest/banks/preview/${lineId}`),
+  /** Item 3 Button 5: recall-by-tag — what this input stored in the vector DB. */
+  recallByTags: (bankId: string, query: string, tags: string[]) => {
+    const p = new URLSearchParams({ query, tags: tags.join(",") });
+    return req<{ results?: RecallHit[] } & Record<string, unknown>>(`/api/ingest/hindsight/recall/${encodeURIComponent(bankId)}?${p.toString()}`);
+  },
   suggest: (lineId: string, kind: "entities" | "missions" | "mental-model" | "directives") =>
     req<{ kind: string; text: string; parsed: unknown; model: string | null; latencyMs: number; attempts: number; reason: string | null }>("/api/ingest/banks/suggest", {
       method: "POST",
@@ -265,7 +281,7 @@ export interface CardTemplate {
   description: string;
   referenceLineId: string | null;
   sqlTemplate: string;
-  granularity: "hourly" | "shift" | "daily";
+  granularity: "hourly" | "daily";
   /** Production-day anchor HH:MM + shift length h (ticks + chart bucketing). */
   shiftStart: string;
   shiftHours: number;
@@ -278,6 +294,14 @@ export interface CardTemplate {
   context: string;
   thresholds: ThresholdCondition[];
   chartSuggestions: ChartSuggestion[];
+  /** 6a: tables in scope for prompt building (null/empty = all). */
+  includeTables: string[] | null;
+  /** 6c: analysis start (null/"" = from-start, or YYYY-MM-DD). */
+  analysisStart: string | null;
+  /** 6b: chart kill-switch. */
+  chartMode: "auto" | "off";
+  /** 4b scope: prefill stream allow-list (null/empty = all tick streams). */
+  prefillStreams: string[] | null;
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -291,7 +315,7 @@ export interface Card {
   name: string;
   tables: string[];
   sql: string;
-  granularity: "hourly" | "shift" | "daily";
+  granularity: "hourly" | "daily";
   /** Production-day anchor HH:MM + shift length h (ticks + chart bucketing). */
   shiftStart: string;
   shiftHours: number;
@@ -304,6 +328,14 @@ export interface Card {
   context: string;
   threshold: number | null;
   status: "live" | "dormant";
+  /** 6a: tables in scope for prompt building (null/empty = all). */
+  includeTables: string[] | null;
+  /** 6c: analysis start (null/"" = from-start, or YYYY-MM-DD). */
+  analysisStart: string | null;
+  /** 6b: chart kill-switch. */
+  chartMode: "auto" | "off";
+  /** 4b scope: prefill stream allow-list (null/empty = all tick streams). */
+  prefillStreams: string[] | null;
   version: number;
   lastTest: { at: string; ok: boolean; sqlHash: string | null; error: string | null } | null;
   createdAt: string;
@@ -384,6 +416,59 @@ export const cardApi = {
     req<CardSample>(`/api/ingest/cards/${id}/sample`, { method: "POST", body: JSON.stringify({ from, to }) }),
   activateCard: (id: string) => req<Card>(`/api/ingest/cards/${id}/activate`, { method: "POST" }),
   dormantCard: (id: string) => req<Card>(`/api/ingest/cards/${id}/dormant`, { method: "POST" }),
+  /** Coverage sentence per card: intent + origin + pre-fill progress + live edge. */
+  coverage: (lineId: string) =>
+    req<{ cardId: string; name: string; status: string; granularity: string; analysisStart: string | null; streams: { resolution: string; coverageFrom: string | null; backfillCursor: string | null; liveCursor: string | null }[] }[]>(
+      `/api/ingest/coverage/${encodeURIComponent(lineId)}`
+    ),
+};
+
+export interface PrefillStreamState {
+  resolution: string;
+  coverageFrom: string | null;
+  backfillCursor: string | null;
+  liveCursor: string | null;
+  paused: boolean;
+  inScope: boolean;
+  scopeNote: string | null;
+  chunksDone: number;
+  chunksRemaining: number;
+  msPerChunk: number;
+  etaSec: number;
+  lastError: string | null;
+  state: "walking" | "caught-up" | "paused" | "off" | "error";
+}
+
+export interface PrefillCardState {
+  cardId: string;
+  name: string;
+  status: string;
+  granularity: string;
+  analysisStart: string | null;
+  optedOff: boolean;
+  prefillStreams: string[] | null;
+  streams: PrefillStreamState[];
+}
+
+export interface PrefillStatus {
+  lineId: string;
+  walker: { enabled: boolean; intervalMs: number; chunkMult: number };
+  last24h: { live: { runs: number; ms: number; facts: number }; prefill: { runs: number; ms: number; facts: number } };
+  /** Step-1 reads used today vs cap (shared; manual presses bypass). */
+  readsToday: { used: number; cap: number };
+  cards: PrefillCardState[];
+}
+
+/** F8: prefill job control + progress. */
+export const prefillApi = {
+  status: (lineId: string) =>
+    req<PrefillStatus>(`/api/ingest/prefill/status/${encodeURIComponent(lineId)}`),
+  pause: (input: { lineId?: string; cardId?: string; resolution?: string }) =>
+    req<{ ok: boolean; paused: number }>(`/api/ingest/prefill/pause`, { method: "POST", body: JSON.stringify(input) }),
+  resume: (input: { lineId?: string; cardId?: string; resolution?: string }) =>
+    req<{ ok: boolean; resumed: number }>(`/api/ingest/prefill/resume`, { method: "POST", body: JSON.stringify(input) }),
+  pass: () =>
+    req<{ cards: number; chunks: number; facts: number; stoodDown: boolean }>(`/api/ingest/prefill-pass`, { method: "POST" }),
 };
 
 export interface DaySummary {
@@ -409,6 +494,8 @@ export interface RunRow {
   factsStored: number;
   durationMs: number | null;
   error: string | null;
+  /** Pre-fill backfill chunk vs live tick. */
+  isBackfill?: boolean;
 }
 
 export interface DayView {
@@ -435,8 +522,8 @@ export const historyApi = {
     req<{ lineId: string; month: string; days: Record<string, DaySummary> }>(
       `/api/ingest/history/month?lineId=${lineId}&month=${month}`
     ),
-  day: (lineId: string, date: string) =>
-    req<DayView>(`/api/ingest/history/day?lineId=${lineId}&date=${date}`),
+  day: (lineId: string, date: string, era: "live" | "all" = "all") =>
+    req<DayView>(`/api/ingest/history/day?lineId=${lineId}&date=${date}&era=${era}`),
   run: (id: number) => req<RunInterpretation>(`/api/ingest/history/run/${id}`),
 };
 
@@ -747,7 +834,7 @@ export const chartApi = {
     req<RecommendResponse>(`/api/ingest/templates/recommend-draft`, { method: "POST", body: JSON.stringify(input) }),
   sampleTemplate: (id: string, from?: string, to?: string) =>
     req<TestResult>(`/api/ingest/templates/${id}/sample`, { method: "POST", body: JSON.stringify({ from, to }) }),
-  suggestHints: (input: { name?: string; description?: string; sqlTemplate?: string; unit?: string; threshold?: number | null; granularity?: string; referenceLineId?: string | null; steer?: string }) =>
+  suggestHints: (input: { name?: string; description?: string; sqlTemplate?: string; unit?: string; threshold?: number | null; granularity?: string; referenceLineId?: string | null; steer?: string; includeTables?: string[] }) =>
     req<SuggestHintsResponse>(`/api/ingest/templates/suggest-hints`, { method: "POST", body: JSON.stringify(input) }),
   setSuggestions: (id: string, enabled: boolean[]) =>
     req<CardTemplate>(`/api/ingest/templates/${id}/suggestions`, { method: "PATCH", body: JSON.stringify({ enabled }) }),
@@ -757,7 +844,7 @@ export const chartApi = {
     req<{ proposals: MergeProposal[]; note?: string; skipped?: string[] }>(`/api/ingest/lines/${lineId}/optimize-charts`, { method: "POST", body: JSON.stringify({}) }),
   querySample: (lineId: string, sql: string, from?: string, to?: string) =>
     req<TestResult>(`/api/ingest/lines/${lineId}/query-sample`, { method: "POST", body: JSON.stringify({ sql, from, to }) }),
-  suggestSql: (input: { name?: string; description?: string; granularity?: string; resolutions?: string[]; unit?: string; referenceLineId?: string | null; steer?: string }) =>
+  suggestSql: (input: { name?: string; description?: string; granularity?: string; resolutions?: string[]; unit?: string; referenceLineId?: string | null; steer?: string; includeTables?: string[] }) =>
     req<{ sql: string; thinking: string[]; model: string | null; latencyMs: number; attempts: number }>(`/api/ingest/templates/suggest-sql`, { method: "POST", body: JSON.stringify(input) }),
 };
 
@@ -808,6 +895,8 @@ export interface ChartReadingRow {
   llmCallId: number | null;
   /** Thumb data-URL on list rows, full PNG on detail, null when absent. */
   image: string | null;
+  /** Gap 2: Gate-2/verdict decisions JSON, or null. */
+  loopJson: string | null;
 }
 
 export interface TicketRow {
@@ -825,16 +914,19 @@ export interface TicketRow {
 }
 
 export const overviewApi = {
-  health: (lineId: string) =>
-    req<LineHealth>(`/api/ingest/overview/health?line=${encodeURIComponent(lineId)}`),
+  health: (lineId: string, era: "live" | "all" = "all") =>
+    req<LineHealth>(`/api/ingest/overview/health?line=${encodeURIComponent(lineId)}&era=${era}`),
 };
 
 export const readingApi = {
-  list: (lineId: string, limit = 50, offset = 0) =>
+  list: (lineId: string, limit = 50, offset = 0, era: "live" | "all" = "all") =>
     req<{ rows: ChartReadingRow[]; total: number }>(
-      `/api/ingest/readings?line=${encodeURIComponent(lineId)}&limit=${limit}&offset=${offset}`
+      `/api/ingest/readings?line=${encodeURIComponent(lineId)}&limit=${limit}&offset=${offset}&era=${era}`
     ),
   get: (id: number) => req<ChartReadingRow>(`/api/ingest/readings/${id}`),
+  /** 6b table-only read for chartMode-off cards (no image in or out). */
+  tableRead: (input: { lineId: string; cardId: string; chartKey?: string; resolution?: string; windowFrom?: string; windowTo?: string; columns: string[]; rows: Record<string, unknown>[]; stats?: string; threshold?: number | null; breachDirection?: "above" | "below" }) =>
+    req<{ id: number; status: string; breach?: boolean; summary?: string; model?: string | null; llmCallId?: number | null; loop?: unknown; reason?: string }>(`/api/ingest/readings/table-read`, { method: "POST", body: JSON.stringify(input) }),
 };
 
 export const ticketApi = {

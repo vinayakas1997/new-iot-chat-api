@@ -10,7 +10,9 @@ import {
   deleteTemplate,
   dormCard,
   getCard,
+  getCoverage,
   getLine,
+  getResolutionRun,
   getTemplate,
   instantiateTemplate,
   listCards,
@@ -27,7 +29,7 @@ import { getConnection, listLineColumnMeta } from "../db/store.js";
 import { llmChatJson } from "../llm/client.js";
 import { fetchDetectionRows, scanQuirks, type QuirkScan } from "../quirks.js";
 
-const gran = z.enum(["hourly", "shift", "daily"]);
+const gran = z.enum(["hourly", "daily"]);
 // Production-day time settings: HH:MM shift anchor + shift length in hours.
 // Defaults reproduce the old midnight behavior exactly.
 const shiftStart = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "shiftStart must be HH:MM").default("00:00");
@@ -98,6 +100,14 @@ const tplSchema = z.object({
   context: z.string().max(2000).default(""),
   thresholds: z.array(thresholdSchema).max(2).default([]),
   chartSuggestions: z.array(suggestionSchema).default([]),
+  /** 6a: tables in scope for prompt building (empty = all). */
+  includeTables: z.array(z.string().min(1)).default([]),
+  /** 6c: "" / "from-start" = earliest data, YYYY-MM-DD, or "off" (no pre-fill). */
+  analysisStart: z.string().regex(/^$|^from-start$|^off$|^\d{4}-\d{2}-\d{2}$/).default(""),
+  /** 6b: chart kill-switch. */
+  chartMode: z.enum(["auto", "off"]).default("auto"),
+  /** 4b scope: prefill stream allow-list (empty = all tick streams). Unknown values rejected — garbage must 400, never silently skip the walk. */
+  prefillStreams: z.array(streamRes).default([]),
 });
 
 const cardSchema = z.object({
@@ -115,6 +125,14 @@ const cardSchema = z.object({
   context: z.string().max(2000).default(""),
   threshold: z.number().nullable().default(null),
   templateId: z.string().nullable().default(null),
+  /** 6a: tables in scope for prompt building (empty = all). */
+  includeTables: z.array(z.string().min(1)).default([]),
+  /** 6c: "" / "from-start" = earliest data, YYYY-MM-DD, or "off" (no pre-fill). */
+  analysisStart: z.string().regex(/^$|^from-start$|^off$|^\d{4}-\d{2}-\d{2}$/).default(""),
+  /** 6b: chart kill-switch. */
+  chartMode: z.enum(["auto", "off"]).default("auto"),
+  /** 4b scope: prefill stream allow-list (empty = all tick streams). Unknown values rejected — garbage must 400, never silently skip the walk. */
+  prefillStreams: z.array(streamRes).default([]),
 });
 
 /**
@@ -177,12 +195,15 @@ export async function cardRoutes(app: FastifyInstance) {
       granularity: z.string().max(20).default("hourly"),
       referenceLineId: z.string().min(1).nullable().default(null),
       steer: z.string().max(2000).default(""),
+      /** 6a: only these tables are inlined raw into the prompt (empty = all). */
+      includeTables: z.array(z.string().min(1)).default([]),
     }).safeParse(req.body ?? {});
     if (!p.success) return reply.code(400).send({ error: p.error.message });
     const b = p.data;
     const line = b.referenceLineId ? getLine(b.referenceLineId) : null;
     if (!line) return reply.code(409).send({ error: "pick a reference line first — hints ground on its tables and column meanings" });
-    const meanings = listLineColumnMeta(line.id);
+    const scope = new Set(b.includeTables.map((t) => t.toLowerCase()));
+    const meanings = listLineColumnMeta(line.id).filter((m) => scope.size === 0 || scope.has(m.tableName.toLowerCase()));
     const byTable = new Map<string, string[]>();
     for (const m of meanings) {
       const cols = byTable.get(m.tableName) ?? [];
@@ -260,12 +281,15 @@ export async function cardRoutes(app: FastifyInstance) {
       unit: z.string().max(20).default(""),
       referenceLineId: z.string().min(1).nullable().default(null),
       steer: z.string().max(2000).default(""),
+      /** 6a: only these tables are inlined raw into the prompt (empty = all). */
+      includeTables: z.array(z.string().min(1)).default([]),
     }).safeParse(req.body ?? {});
     if (!p.success) return reply.code(400).send({ error: p.error.message });
     const b = p.data;
     const line = b.referenceLineId ? getLine(b.referenceLineId) : null;
     if (!line) return reply.code(409).send({ error: "pick a reference line first — SQL grounds on its tables" });
-    const meanings = listLineColumnMeta(line.id);
+    const sqlScope = new Set(b.includeTables.map((t) => t.toLowerCase()));
+    const meanings = listLineColumnMeta(line.id).filter((m) => sqlScope.size === 0 || sqlScope.has(m.tableName.toLowerCase()));
     const byTable = new Map<string, string[]>();
     for (const m of meanings) {
       const cols = byTable.get(m.tableName) ?? [];
@@ -365,6 +389,38 @@ export async function cardRoutes(app: FastifyInstance) {
   app.get("/api/ingest/cards", async (req) => {
     const { lineId } = req.query as { lineId?: string };
     return listCards(lineId);
+  });
+  /**
+   * Coverage sentence per card: intent (analysisStart) + origin
+   * (coverage_from) + pre-fill progress (backfill_cursor) + live edge.
+   * F7 renders "analyzing since X · backfilled to Y · live at Z".
+   */
+  app.get("/api/ingest/coverage/:lineId", async (req, reply) => {
+    const { lineId } = req.params as { lineId: string };
+    const line = getLine(lineId);
+    if (!line) return reply.code(404).send({ error: "line not found" });
+    return listCards(lineId).map((c) => {
+      const streams = c.resolutions?.length ? c.resolutions : ["hourly"];
+      const order = ["5min", "hourly", "daily", "weekly", "monthly"];
+      const finest = [...streams].sort((a, b) => order.indexOf(a) - order.indexOf(b))[0] ?? "hourly";
+      return {
+        cardId: c.id,
+        name: c.name,
+        status: c.status,
+        granularity: c.granularity,
+        analysisStart: c.analysisStart ?? null,
+        streams: streams.map((s) => {
+          const runRes = s === finest ? "base" : s;
+          const covRow = getCoverage(c.id, runRes);
+          return {
+            resolution: s,
+            coverageFrom: covRow.coverageFrom,
+            backfillCursor: covRow.backfillCursor,
+            liveCursor: s === finest ? line.lastTick : getResolutionRun(c.id, s),
+          };
+        }),
+      };
+    });
   });
   app.post("/api/ingest/cards", async (req, reply) => {
     const p = cardSchema.safeParse(req.body);

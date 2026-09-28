@@ -1,6 +1,6 @@
 import { NavLink, Outlet } from "react-router-dom";
 import { useState } from "react";
-import { Brain, Database, History, Layers, LayoutTemplate, Radar, ScrollText } from "lucide-react";
+import { Brain, Database, History, Hourglass, Layers, LayoutTemplate, Radar, ScrollText } from "lucide-react";
 
 const NAV = [
   { to: "/setter/connections", n: "F1", label: "Connections", Icon: Database },
@@ -10,6 +10,7 @@ const NAV = [
   { to: "/setter/hindsight", n: "F5", label: "AI Services", Icon: Brain },
   { to: "/setter/ai-logs", n: "F6", label: "AI Logs", Icon: ScrollText },
   { to: "/setter/overview", n: "F7", label: "Overview", Icon: Radar },
+  { to: "/setter/prefill", n: "F8", label: "Prefill", Icon: Hourglass },
 ] as const;
 
 /** App shell: sidebar (pipeline order) + topbar. Never reloads on nav. */

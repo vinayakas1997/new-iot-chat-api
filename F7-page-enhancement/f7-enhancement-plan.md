@@ -185,6 +185,9 @@ Suggested build order: 6a → 6c → 6b.
   set at copy time, not a template default.
 - Build: template field `analysisStart: <date> | "from-start"` (default `from-start` = earliest
   data), inherited by cards as their `reingestFrom` default, overridable per card.
+- UI (revised): sits directly under the SQL block as **"4b. Analysis start"** (not buried in
+  field 9) — `◉ From start` (default, grounded with the line's data-from date) /
+  `○ Custom…` (reveals date input, min = data start, max = today). One control, one place.
 
 ## Item 7 — Close the question↔ticket loop both directions + orphan Playground (AGREED)
 
@@ -456,8 +459,76 @@ the operate-and-consume features, adopted per status. Use according as builds re
 7. **Mental models + tag-scoped directives.** Per-line reflect identity, breach-scoped hard
    rules — consumer-side seasoning for the recall app, not feeding work.
 
-## Post-process checks (LESS IMPORTANT until the full system is ready)
+## Build log (shipped + proven 2026-09-28, all typechecks clean, images rebuilt)
 
+- Starvation: cause = static source (data ends 09-22) + advancing cursor. Rewound
+  lastTick → run 541 retained 6 facts, recall verified. F2 empty-window footprint
+  (ticker warn + note, base + rollups). F3 source pill in F7.
+- Item 5: shift removed (CHECKs, types, zod, UI, migration). API rejects shift (400).
+- Items 1–2: template dropdown + granularity pills above the Log (stream filter,
+  finest→base mapping, inactive gating).
+- Item 3: drawer evidence hub (Timing, Parsed output, on-demand sample chart,
+  Hindsight inserts). Recall-by-tag proxy (`memories/recall`, all_strict) — 29 hits verified.
+- Items 4+7a/7b+9: loop.ts (verdicts close/escalate, Gate-2 file/merge/drop, alias-aware
+  similarity 0.5, allowMultiple, open-list refresh). Envelope feeds open tickets +
+  prior reads. Panel groups by granularity + elapsed + auto-close reasons. Proven live:
+  file×2, merge+accretion, drop, auto-close. AllowMultiple fixed a real design bug
+  (one-ticket-per-reading vs birth-per-cycle).
+- Item 6: include_tables/analysis_start/chart_mode columns + inheritance; suggest
+  gating; envelope scope; reingest default; table-read route + CardDetails trigger.
+  Proven: 409 gate, inheritance, table-read breach read (no image). Cascade lesson:
+  readings die with their card (ON DELETE CASCADE).
+- Item 8+11: question/question-resolved memories (recall-verified, cleaned);
+  substrate gate (unchanged:true proven) + heartbeat/12 + retain_state;
+  derivedFrom lineage; operations reconcile route (20 ops, 0 failed). Curate
+  invalidate cascades world→observation (proven during cleanup).
+- Proof rows cleaned throughout (tickets/readings/memories/state). Baseline restored.
+- Structural gaps closed: ① prefillStreams zod enum (garbage 400s, never silent);
+  ④ orphan Playground.tsx deleted; ② loop_json persisted + drawer Loop decisions
+  section (proven: reading #10 carries its report end to end, incl. list select);
+  ③ tags keyed by stable card id + cardName (recall proxy falls back across
+  id/name eras — 101 legacy hits via fallback); ⑤ prefill- chartKey reserved
+  on manual routes (400).
+- 4b redesigned (Live vs Custom→From-start/Custom-date + 4c stream scope):
+  Live stores "off" (no migration); Custom nests From-start (grounded) + date;
+  prefill_streams columns + inheritance + card override; walker filters to
+  scope∩ticks; F8 out-of-scope state. Proven: 5-min deselected → hourly walked
+  twice, zero base runs; scope restored to all after.
+- F7 live-only (live default + All toggle): runsForLine liveOnly + ?era=live|all
+  (default all) on health/day/readings; F7 sends live, toggle beside Log filters.
+  Proven: last1h 14 live vs 44 all; readings live 0 vs all 1 (prefill-daily
+  excluded); F4/F8 untouched (own defaults/endpoints).
+- Walker reads (same process, one wire): runStep1 + table envelope exported and
+  shared; ExtractResult.hadBreach; read rule = coarse always, fine on breach,
+  never on unchanged/empty; budget = countLlmCallsToday vs LLM_READS_PER_DAY
+  (100/line/day, manual bypasses); F8 reads counter (2/100 live).
+  Proven: daily re-walk → reading #6 (prefill-daily, rising/approaching,
+  real rows) + loop ran empty + prefill facts. Duplicate-fact cost disclosed
+  (consolidation merges). Under-asking flag #2: eventful window, zero questions
+  — prompt conservatism data for post-process spot-checks.
+- F8 Prefill (two processes, one bank): default-on backfill ("" → probe-resolve;
+  "off" opt-out validated in zod + 4b third radio + Specifics); split schedulers
+  (live 5min + walker 60s, in-flight flag, PREFILL_ENABLED, manual pass route);
+  paused column + pause/resume (global/card/resolution); coverage extension
+  (chunks done/remaining, msPerChunk, ETA at walker pace, state, last error);
+  F8 screen (walker pill, budget strip with 288/24/1 cadence + 24h live/prefill
+  split, per-card progress + ETAs + pause/resume, scheduler panel) + Shell nav.
+  Proven live: L24 split (live 53/7 facts, prefill 26/33), 5min walking 15/71
+  ETA 71min, pause→paused→resume, manual pass 1 chunk (unchanged-skip inside
+  walker), F8 route 200.
+- 6c UI revised: 4b under SQL block (From start grounded with data-from date /
+  Custom with min/max clamp); field 9 removed, numbering clean.
+- dataMode tag: `dataMode:live|prefill` on tick facts + question memories
+  (loop ages by reading time, 1h rule). Recall-verified: 14 prefill hits.
+- ingest_coverage table (coverage_from + backfill_cursor per card+resolution) +
+  backfill engine (same query→extract→retain path, dataMode prefill, 1 span×24
+  chunk per resolution per heartbeat, separate cursor, live untouched, skips
+  advance). runs.is_backfill footprint + LogTable pre-fill chip + coverage
+  endpoint + F7 coverage line ("analyzing since · backfilled to · live at").
+  Proven live: 4 backfill chunks (2+24+25+25 rows → 9 facts), cursors advancing,
+  daily/weekly already at live edge. Monthly correctly skipped (window predates start).
+
+## Post-process checks (LESS IMPORTANT until the full system is ready)
 Design debts: none open. Operational debts (after build, in order): validator accuracy
 spot-checks on live traffic; Hindsight async-vs-footprint reconciliation; model liveness +
 fallback drills; per-line template audits (thresholds/SQL/retain-context); bank growth +

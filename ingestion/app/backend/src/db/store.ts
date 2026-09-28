@@ -98,7 +98,7 @@ export function openStore(path: string): Database.Database {
       name TEXT NOT NULL,
       description TEXT NOT NULL DEFAULT '',
       sql_template TEXT NOT NULL DEFAULT '',
-      granularity TEXT NOT NULL DEFAULT 'hourly' CHECK (granularity IN ('hourly','shift','daily')),
+      granularity TEXT NOT NULL DEFAULT 'hourly' CHECK (granularity IN ('hourly','daily')),
       unit TEXT NOT NULL DEFAULT '',
       extract_hint TEXT NOT NULL DEFAULT '',
       context TEXT NOT NULL DEFAULT '',
@@ -114,7 +114,7 @@ export function openStore(path: string): Database.Database {
       name TEXT NOT NULL,
       tables_json TEXT NOT NULL DEFAULT '[]',
       sql_text TEXT NOT NULL DEFAULT '',
-      granularity TEXT NOT NULL DEFAULT 'hourly' CHECK (granularity IN ('hourly','shift','daily')),
+      granularity TEXT NOT NULL DEFAULT 'hourly' CHECK (granularity IN ('hourly','daily')),
       unit TEXT NOT NULL DEFAULT '',
       extract_hint TEXT NOT NULL DEFAULT '',
       context TEXT NOT NULL DEFAULT '',
@@ -235,6 +235,25 @@ export function openStore(path: string): Database.Database {
   if (!cardCols.some((c) => c.name === "context")) {
     db.exec("ALTER TABLE cards ADD COLUMN context TEXT NOT NULL DEFAULT ''");
   }
+  // Item 5: shift granularity removed — legacy 'shift' rows become hourly.
+  db.exec("UPDATE card_templates SET granularity='hourly' WHERE granularity='shift'");
+  db.exec("UPDATE cards SET granularity='hourly' WHERE granularity='shift'");
+  // Item 6: template switches inherited by cards.
+  // include_tables (JSON array, NULL = all): 6a table-include scope for prompt building.
+  // analysis_start (NULL/'from-start'/YYYY-MM-DD): 6c pre-fill start, default from-start.
+  // chart_mode ('auto'/'off'): 6b chart kill-switch → table-only readings.
+  for (const t of ["card_templates", "cards"]) {
+    const cols = (db.prepare(`PRAGMA table_info(${t})`).all() as { name: string }[]).map((c) => c.name);
+    if (!cols.includes("include_tables")) db.exec(`ALTER TABLE ${t} ADD COLUMN include_tables TEXT`);
+    if (!cols.includes("analysis_start")) db.exec(`ALTER TABLE ${t} ADD COLUMN analysis_start TEXT`);
+    if (!cols.includes("chart_mode")) db.exec(`ALTER TABLE ${t} ADD COLUMN chart_mode TEXT NOT NULL DEFAULT 'auto'`);
+    // 4b scope: prefill stream allow-list (JSON array, NULL = all tick streams).
+    if (!cols.includes("prefill_streams")) db.exec(`ALTER TABLE ${t} ADD COLUMN prefill_streams TEXT`);
+  }
+  // Gap 2: loop decisions persisted per reading (file/merge/drop/close).
+  if (!(db.prepare("PRAGMA table_info(chart_readings)").all() as { name: string }[]).some((c) => c.name === "loop_json")) {
+    db.exec("ALTER TABLE chart_readings ADD COLUMN loop_json TEXT");
+  }
   // Lightweight migration: production-day time settings. shift_start (HH:MM)
   // anchors shift ticks and daily bucketing; shift_hours sets the shift
   // length. Defaults reproduce the old midnight behavior exactly. Set on the
@@ -270,6 +289,35 @@ export function openStore(path: string): Database.Database {
       PRIMARY KEY (card_id, resolution)
     );
   `);
+  // Item 8 substrate gate: dedupe hash + unchanged streak per card+resolution.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS retain_state (
+      card_id TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+      resolution TEXT NOT NULL,
+      last_hash TEXT,
+      unchanged_streak INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT,
+      PRIMARY KEY (card_id, resolution)
+    );
+  `);
+  // Backfill coverage: where ingestion began + how far pre-fill walked.
+  // Intent (analysisStart) lives on the card; progress lives here.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS ingest_coverage (
+      card_id TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+      resolution TEXT NOT NULL,
+      coverage_from TEXT,
+      backfill_cursor TEXT,
+      updated_at TEXT,
+      PRIMARY KEY (card_id, resolution)
+    );
+  `);
+  if (!(db.prepare("PRAGMA table_info(runs)").all() as { name: string }[]).some((c) => c.name === "is_backfill")) {
+    db.exec("ALTER TABLE runs ADD COLUMN is_backfill INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!(db.prepare("PRAGMA table_info(ingest_coverage)").all() as { name: string }[]).some((c) => c.name === "paused")) {
+    db.exec("ALTER TABLE ingest_coverage ADD COLUMN paused INTEGER NOT NULL DEFAULT 0");
+  }
   // Run footprints carry their stream (base sampler vs derived reader).
   const runCols = db.prepare("PRAGMA table_info(runs)").all() as { name: string }[];
   if (!runCols.some((c) => c.name === "resolution")) {
@@ -322,6 +370,8 @@ export function openStore(path: string): Database.Database {
   // tickets. reading_json holds the full Step-1 JSON; image_png the snapshot,
   // image_thumb a small browser-scaled copy for fast lists. Tickets freeze
   // their ai_reason copy so they explain themselves after pruning.
+  // loop_json holds the Gate-2/verdict decisions (file/merge/drop/close) —
+  // the row-level record of why the bank looks the way it does.
   db.exec(`
     CREATE TABLE IF NOT EXISTS chart_readings (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -338,7 +388,8 @@ export function openStore(path: string): Database.Database {
       reason TEXT NOT NULL DEFAULT '',
       llm_call_id INTEGER,
       image_png BLOB,
-      image_thumb BLOB
+      image_thumb BLOB,
+      loop_json TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_readings_line ON chart_readings(line_id, at DESC);
     CREATE INDEX IF NOT EXISTS idx_readings_card ON chart_readings(card_id, at DESC);
@@ -360,7 +411,7 @@ export function openStore(path: string): Database.Database {
   return db;
 }
 
-function getDb(): Database.Database {
+export function getDb(): Database.Database {
   if (!db) throw new Error("store not opened");
   return db;
 }
@@ -786,7 +837,7 @@ export function getColumnTemplate(id: string): ColumnTemplate | null {
 
 /* ---------------- F3: context component cards ---------------- */
 
-export type Granularity = "hourly" | "shift" | "daily";
+export type Granularity = "hourly" | "daily";
 
 /** Ingest streams. Finest checked = base sampler (plant queries); coarser
  *  checked = scheduled readers (wider windows + rollup, no extra plant load
@@ -928,8 +979,25 @@ export interface ThresholdCondition {
 
 /** Parse + sanitize threshold rows: valid shape only, cap 2. Accepts the
  *  DB string form or an already-parsed array (e.g. zod route bodies). */
-export function parseThresholds(raw: unknown): ThresholdCondition[] {
+/** Item 6a: string-array-or-null columns (include_tables). NULL/'' = all. */
+export function parseStringArrayOrNull(raw: unknown): string[] | null {
   try {
+    if (raw == null || raw === "") return null;
+    const arr = typeof raw === "string" ? (JSON.parse(raw) as unknown) : raw;
+    if (!Array.isArray(arr)) return null;
+    const out = arr.filter((s): s is string => typeof s === "string" && s.trim().length > 0);
+    return out.length > 0 ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Item 6b: chart_mode guard — only 'off' opts out, everything else is auto. */
+export function parseChartMode(raw: unknown): "auto" | "off" {
+  return raw === "off" ? "off" : "auto";
+}
+
+export function parseThresholds(raw: unknown): ThresholdCondition[] {  try {
     const arr = typeof raw === "string" ? (JSON.parse(raw || "[]") as unknown) : raw;
     if (!Array.isArray(arr)) return [];
     return arr.filter(
@@ -983,6 +1051,14 @@ export interface CardTemplate {
   context: string;
   thresholds: ThresholdCondition[];
   chartSuggestions: ChartSuggestion[];
+  /** 6a: tables in scope for prompt building (null = all member tables). */
+  includeTables: string[] | null;
+  /** 6c: analysis start (null/'from-start' = earliest data, or YYYY-MM-DD). */
+  analysisStart: string | null;
+  /** 6b: 'auto' = charts as today, 'off' = table-only readings, no charts. */
+  chartMode: "auto" | "off";
+  /** 4b scope: prefill stream allow-list (null = all tick streams). */
+  prefillStreams: string[] | null;
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -1006,6 +1082,14 @@ export interface Card {
   context: string;
   threshold: number | null;
   status: CardStatus;
+  /** 6a: tables in scope for prompt building (null = all member tables). */
+  includeTables: string[] | null;
+  /** 6c: analysis start (null/'from-start' = earliest data, or YYYY-MM-DD). */
+  analysisStart: string | null;
+  /** 6b: 'auto' = charts as today, 'off' = table-only readings, no charts. */
+  chartMode: "auto" | "off";
+  /** 4b scope: prefill stream allow-list (null = all tick streams). */
+  prefillStreams: string[] | null;
   version: number;
   lastTest: { at: string; ok: boolean; sqlHash: string | null; error: string | null } | null;
   createdAt: string;
@@ -1035,6 +1119,10 @@ function tplRow(r: Record<string, unknown>): CardTemplate {
     context: (r.context as string) ?? "",
     thresholds: parseThresholds(r.thresholds),
     chartSuggestions: parseChartSuggestions(r.chart_suggestions),
+    includeTables: parseStringArrayOrNull(r.include_tables),
+    analysisStart: (r.analysis_start as string) ?? null,
+    chartMode: parseChartMode(r.chart_mode),
+    prefillStreams: parseStringArrayOrNull(r.prefill_streams),
     version: r.version as number,
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
@@ -1061,6 +1149,10 @@ function cardRow(r: Record<string, unknown>): Card {
     context: (r.context as string) ?? "",
     threshold: (r.threshold as number) ?? null,
     status: r.status as CardStatus,
+    includeTables: parseStringArrayOrNull(r.include_tables),
+    analysisStart: (r.analysis_start as string) ?? null,
+    chartMode: parseChartMode(r.chart_mode),
+    prefillStreams: parseStringArrayOrNull(r.prefill_streams),
     version: r.version as number,
     lastTest:
       r.last_test_at == null
@@ -1091,10 +1183,10 @@ export function createTemplate(t: Omit<CardTemplate, "id" | "version" | "created
   const now = new Date().toISOString();
   getDb()
     .prepare(
-       `INSERT INTO card_templates (id,name,description,reference_line_id,sql_template,granularity,shift_start,shift_hours,resolutions,skip_schedule,unit,extract_hint,context,thresholds,chart_suggestions,version,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)`
+       `INSERT INTO card_templates (id,name,description,reference_line_id,sql_template,granularity,shift_start,shift_hours,resolutions,skip_schedule,unit,extract_hint,context,thresholds,chart_suggestions,include_tables,analysis_start,chart_mode,prefill_streams,version,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)`
     )
-    .run(id, t.name, t.description, t.referenceLineId ?? null, t.sqlTemplate, t.granularity, t.shiftStart ?? "00:00", t.shiftHours ?? 8, JSON.stringify(t.resolutions ?? ALL_RESOLUTIONS), JSON.stringify(t.skipSchedule ?? defaultSkipSchedule()), t.unit, t.extractHint, t.context ?? "", JSON.stringify(t.thresholds ?? []), JSON.stringify(t.chartSuggestions ?? []), now, now);
+    .run(id, t.name, t.description, t.referenceLineId ?? null, t.sqlTemplate, t.granularity, t.shiftStart ?? "00:00", t.shiftHours ?? 8, JSON.stringify(t.resolutions ?? ALL_RESOLUTIONS), JSON.stringify(t.skipSchedule ?? defaultSkipSchedule()), t.unit, t.extractHint, t.context ?? "", JSON.stringify(t.thresholds ?? []), JSON.stringify(t.chartSuggestions ?? []), t.includeTables ? JSON.stringify(t.includeTables) : null, t.analysisStart ?? null, t.chartMode ?? "auto", t.prefillStreams ? JSON.stringify(t.prefillStreams) : null, now, now);
   return getTemplate(id)!;
 }
 
@@ -1109,7 +1201,7 @@ export function updateTemplate(id: string, patch: Partial<Omit<CardTemplate, "id
   const bump = patch.sqlTemplate !== undefined && patch.sqlTemplate !== cur.sqlTemplate;
   getDb()
     .prepare(
-      `UPDATE card_templates SET name=?,description=?,reference_line_id=?,sql_template=?,granularity=?,shift_start=?,shift_hours=?,resolutions=?,skip_schedule=?,unit=?,extract_hint=?,context=?,thresholds=?,chart_suggestions=?,
+      `UPDATE card_templates SET name=?,description=?,reference_line_id=?,sql_template=?,granularity=?,shift_start=?,shift_hours=?,resolutions=?,skip_schedule=?,unit=?,extract_hint=?,context=?,thresholds=?,chart_suggestions=?,include_tables=?,analysis_start=?,chart_mode=?,prefill_streams=?,
        version=version+?,updated_at=? WHERE id=?`
     )
     .run(
@@ -1127,6 +1219,10 @@ export function updateTemplate(id: string, patch: Partial<Omit<CardTemplate, "id
       patch.context ?? cur.context,
       patch.thresholds !== undefined ? JSON.stringify(patch.thresholds) : JSON.stringify(cur.thresholds),
       patch.chartSuggestions !== undefined ? JSON.stringify(patch.chartSuggestions) : JSON.stringify(cur.chartSuggestions),
+      patch.includeTables !== undefined ? (patch.includeTables ? JSON.stringify(patch.includeTables) : null) : (cur.includeTables ? JSON.stringify(cur.includeTables) : null),
+      patch.analysisStart !== undefined ? patch.analysisStart : cur.analysisStart,
+      patch.chartMode ?? cur.chartMode,
+      patch.prefillStreams !== undefined ? (patch.prefillStreams ? JSON.stringify(patch.prefillStreams) : null) : (cur.prefillStreams ? JSON.stringify(cur.prefillStreams) : null),
       bump ? 1 : 0,
       new Date().toISOString(),
       id
@@ -1153,6 +1249,11 @@ export interface CardInput {
   context?: string;
   threshold?: number | null;
   templateId?: string | null;
+  includeTables?: string[] | null;
+  analysisStart?: string | null;
+  chartMode?: "auto" | "off";
+  /** 4b scope: prefill stream allow-list (null = all tick streams). */
+  prefillStreams?: string[] | null;
 }
 
 function tablesSubsetOfLine(tables: string[], lineId: string): string[] {
@@ -1191,16 +1292,21 @@ export function createCard(input: CardInput): Card {
   const tpl = input.templateId ? getTemplate(input.templateId) : null;
   getDb()
     .prepare(
-       `INSERT INTO cards (id,template_id,template_version,line_id,name,tables_json,sql_text,granularity,shift_start,shift_hours,resolutions,skip_schedule,unit,extract_hint,context,threshold,status,version,created_at,updated_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'dormant',1,?,?)`
-    )
-    .run(
+       `INSERT INTO cards (id,template_id,template_version,line_id,name,tables_json,sql_text,granularity,shift_start,shift_hours,resolutions,skip_schedule,unit,extract_hint,context,threshold,include_tables,analysis_start,chart_mode,prefill_streams,status,version,created_at,updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'dormant',1,?,?)`
+     )
+     .run(
       id, tpl?.id ?? null, tpl?.version ?? null, input.lineId, input.name,
       JSON.stringify(input.tables), input.sql, input.granularity,
       input.shiftStart ?? tpl?.shiftStart ?? "00:00", input.shiftHours ?? tpl?.shiftHours ?? 8,
       JSON.stringify(input.resolutions ?? tpl?.resolutions ?? ALL_RESOLUTIONS),
       JSON.stringify(input.skipSchedule ?? tpl?.skipSchedule ?? defaultSkipSchedule()),
-      input.unit ?? "", input.extractHint ?? "", input.context ?? "", input.threshold ?? null, now, now
+      input.unit ?? "", input.extractHint ?? "", input.context ?? "", input.threshold ?? null,
+      input.includeTables !== undefined ? (input.includeTables ? JSON.stringify(input.includeTables) : null) : (tpl?.includeTables ? JSON.stringify(tpl.includeTables) : null),
+      input.analysisStart ?? tpl?.analysisStart ?? null,
+      input.chartMode ?? tpl?.chartMode ?? "auto",
+      input.prefillStreams !== undefined ? (input.prefillStreams ? JSON.stringify(input.prefillStreams) : null) : (tpl?.prefillStreams ? JSON.stringify(tpl.prefillStreams) : null),
+      now, now
     );
   logCardEvent(id, "created", `from ${tpl ? `template ${tpl.name} v${tpl.version}` : "scratch"}`);
   return getCard(id)!;
@@ -1265,14 +1371,19 @@ export type ChangeMode = "forward" | "reingest";
 
 export function updateCard(
   id: string,
-  patch: Partial<Pick<CardInput, "name" | "tables" | "sql" | "granularity" | "shiftStart" | "shiftHours" | "resolutions" | "skipSchedule" | "unit" | "extractHint" | "context" | "threshold">>,
+  patch: Partial<Pick<CardInput, "name" | "tables" | "sql" | "granularity" | "shiftStart" | "shiftHours" | "resolutions" | "skipSchedule" | "unit" | "extractHint" | "context" | "threshold" | "includeTables" | "analysisStart" | "chartMode" | "prefillStreams">>,
   opts?: { mode?: ChangeMode; reingestFrom?: string }
 ): Card | null {
   const cur = getCard(id);
   if (!cur) return null;
   if (cur.status === "live") throw new Error("card is LIVE — take it dormant before editing");
   // Validate BEFORE touching anything: a rejected change must leave no trace.
-  if ((opts?.mode ?? "forward") === "reingest" && (patch.sql ?? cur.sql) !== cur.sql && !opts?.reingestFrom) {
+  // 6c: reingestFrom defaults to the card's inherited analysisStart (dates only —
+  // "" / "from-start" / "off" are not dates and don't satisfy the requirement).
+  const startOpt = patch.analysisStart !== undefined ? patch.analysisStart : cur.analysisStart;
+  const startIsDate = !!startOpt && /^\d{4}-\d{2}-\d{2}$/.test(startOpt);
+  const reingestFrom = opts?.reingestFrom ?? (startIsDate ? startOpt : undefined);
+  if ((opts?.mode ?? "forward") === "reingest" && (patch.sql ?? cur.sql) !== cur.sql && !reingestFrom) {
     throw new Error("re-ingest needs a from-date");
   }
   const tables = patch.tables ?? cur.tables;  const outside = tablesSubsetOfLine(tables, cur.lineId);
@@ -1280,7 +1391,7 @@ export function updateCard(
   const sqlChanged = patch.sql !== undefined && patch.sql !== cur.sql;
   getDb()
     .prepare(
-      `UPDATE cards SET name=?,tables_json=?,sql_text=?,granularity=?,shift_start=?,shift_hours=?,resolutions=?,skip_schedule=?,unit=?,extract_hint=?,context=?,threshold=?,
+      `UPDATE cards SET name=?,tables_json=?,sql_text=?,granularity=?,shift_start=?,shift_hours=?,resolutions=?,skip_schedule=?,unit=?,extract_hint=?,context=?,threshold=?,include_tables=?,analysis_start=?,chart_mode=?,prefill_streams=?,
        version=version+?,updated_at=? WHERE id=?`
     )
     .run(
@@ -1288,11 +1399,15 @@ export function updateCard(
       patch.granularity ?? cur.granularity, patch.shiftStart ?? cur.shiftStart, patch.shiftHours ?? cur.shiftHours,
       JSON.stringify(patch.resolutions ?? cur.resolutions), JSON.stringify(patch.skipSchedule ?? cur.skipSchedule), patch.unit ?? cur.unit,
       patch.extractHint ?? cur.extractHint, patch.context ?? cur.context, patch.threshold ?? cur.threshold,
+      patch.includeTables !== undefined ? (patch.includeTables ? JSON.stringify(patch.includeTables) : null) : (cur.includeTables ? JSON.stringify(cur.includeTables) : null),
+      patch.analysisStart !== undefined ? patch.analysisStart : cur.analysisStart,
+      patch.chartMode ?? cur.chartMode,
+      patch.prefillStreams !== undefined ? (patch.prefillStreams ? JSON.stringify(patch.prefillStreams) : null) : (cur.prefillStreams ? JSON.stringify(cur.prefillStreams) : null),
       sqlChanged ? 1 : 0, new Date().toISOString(), id
     );
   if (sqlChanged) {
     const mode = opts?.mode ?? "forward";
-    logCardEvent(id, `mode-${mode}`, opts?.reingestFrom ? `from ${opts.reingestFrom} (historical rewrite pending engine backfill; ticks continue forward)` : "applies from now on");
+    logCardEvent(id, `mode-${mode}`, reingestFrom ? `from ${reingestFrom} (historical rewrite pending engine backfill; ticks continue forward)` : "applies from now on");
   }
   return getCard(id);
 }
@@ -1360,21 +1475,24 @@ export interface RunRecord {
   factsStored: number;
   durationMs: number | null;
   error: string | null;
+  /** Backfill chunk (pre-fill walk) vs live tick. Survives as footprint. */
+  isBackfill?: boolean;
 }
 
 export function recordRun(r: Omit<RunRecord, "id" | "resolution"> & { resolution?: string }): number {
   const res = getDb()
     .prepare(
-      `INSERT INTO runs (at,line_id,card_id,card_version,kind,resolution,ok,rows_pulled,units_built,facts_stored,duration_ms,error)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`
+      `INSERT INTO runs (at,line_id,card_id,card_version,kind,resolution,ok,rows_pulled,units_built,facts_stored,duration_ms,error,is_backfill)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`
     )
-    .run(r.at, r.lineId, r.cardId, r.cardVersion, r.kind, r.resolution ?? "base", r.ok ? 1 : 0, r.rowsPulled, r.unitsBuilt, r.factsStored, r.durationMs, r.error);
+    .run(r.at, r.lineId, r.cardId, r.cardVersion, r.kind, r.resolution ?? "base", r.ok ? 1 : 0, r.rowsPulled, r.unitsBuilt, r.factsStored, r.durationMs, r.error, r.isBackfill ? 1 : 0);
   return Number(res.lastInsertRowid);
 }
 
-export function runsForLine(lineId: string, from: string, to: string): RunRecord[] {
+export function runsForLine(lineId: string, from: string, to: string, opts?: { liveOnly?: boolean }): RunRecord[] {
+  const live = opts?.liveOnly ? " AND is_backfill=0" : "";
   return (getDb()
-    .prepare("SELECT * FROM runs WHERE line_id=? AND at>=? AND at<? ORDER BY at DESC LIMIT 500")
+    .prepare(`SELECT * FROM runs WHERE line_id=? AND at>=? AND at<?${live} ORDER BY at DESC LIMIT 500`)
     .all(lineId, from, to) as Record<string, unknown>[]).map((x) => ({
     id: x.id as number,
     at: x.at as string,
@@ -1389,7 +1507,49 @@ export function runsForLine(lineId: string, from: string, to: string): RunRecord
     factsStored: x.facts_stored as number,
     durationMs: (x.duration_ms as number) ?? null,
     error: (x.error as string) ?? null,
+    isBackfill: (x.is_backfill as number) === 1,
   }));
+}
+
+/** Backfill coverage: intent lives on the card, progress lives here. */
+export interface IngestCoverage {
+  cardId: string;
+  resolution: string;
+  coverageFrom: string | null;
+  backfillCursor: string | null;
+  paused: boolean;
+  updatedAt: string | null;
+}
+
+export function getCoverage(cardId: string, resolution: string): IngestCoverage {
+  const r = getDb()
+    .prepare("SELECT coverage_from,backfill_cursor,paused,updated_at FROM ingest_coverage WHERE card_id=? AND resolution=?")
+    .get(cardId, resolution) as { coverage_from: string | null; backfill_cursor: string | null; paused: number | null; updated_at: string | null } | undefined;
+  return {
+    cardId,
+    resolution,
+    coverageFrom: r?.coverage_from ?? null,
+    backfillCursor: r?.backfill_cursor ?? null,
+    paused: (r?.paused ?? 0) === 1,
+    updatedAt: r?.updated_at ?? null,
+  };
+}
+
+export function setCoverage(cardId: string, resolution: string, patch: { coverageFrom?: string | null; backfillCursor?: string | null; paused?: boolean }): void {
+  const cur = getCoverage(cardId, resolution);
+  getDb()
+    .prepare(
+      `INSERT INTO ingest_coverage (card_id,resolution,coverage_from,backfill_cursor,paused,updated_at) VALUES (?,?,?,?,?,?)
+       ON CONFLICT(card_id,resolution) DO UPDATE SET coverage_from=excluded.coverage_from,backfill_cursor=excluded.backfill_cursor,paused=excluded.paused,updated_at=excluded.updated_at`
+    )
+    .run(
+      cardId,
+      resolution,
+      patch.coverageFrom !== undefined ? patch.coverageFrom : cur.coverageFrom,
+      patch.backfillCursor !== undefined ? patch.backfillCursor : cur.backfillCursor,
+      patch.paused !== undefined ? (patch.paused ? 1 : 0) : (cur.paused ? 1 : 0),
+      new Date().toISOString()
+    );
 }
 
 export function getSetting(key: string): string | null {
@@ -1426,6 +1586,41 @@ export function setResolutionRun(cardId: string, resolution: string, at: string)
 export function lastFactWrite(): string | null {
   const r = getDb().prepare("SELECT MAX(at) AS at FROM runs WHERE facts_stored>0").get() as { at: string | null };
   return r.at;
+}
+
+/**
+ * Item 8 substrate gate: per-card+resolution dedupe state. Consecutive ticks
+ * pulling byte-identical result sets skip LLM + retain (footprinted
+ * "unchanged") with a periodic heartbeat fact proving liveness.
+ */
+export interface RetainState {
+  cardId: string;
+  resolution: string;
+  lastHash: string | null;
+  unchangedStreak: number;
+  updatedAt: string | null;
+}
+
+export function getRetainState(cardId: string, resolution: string): RetainState {
+  const r = getDb()
+    .prepare("SELECT last_hash,unchanged_streak,updated_at FROM retain_state WHERE card_id=? AND resolution=?")
+    .get(cardId, resolution) as { last_hash: string | null; unchanged_streak: number; updated_at: string | null } | undefined;
+  return {
+    cardId,
+    resolution,
+    lastHash: r?.last_hash ?? null,
+    unchangedStreak: r?.unchanged_streak ?? 0,
+    updatedAt: r?.updated_at ?? null,
+  };
+}
+
+export function setRetainState(cardId: string, resolution: string, lastHash: string | null, unchangedStreak: number): void {
+  getDb()
+    .prepare(
+      `INSERT INTO retain_state (card_id,resolution,last_hash,unchanged_streak,updated_at) VALUES (?,?,?,?,?)
+       ON CONFLICT(card_id,resolution) DO UPDATE SET last_hash=excluded.last_hash,unchanged_streak=excluded.unchanged_streak,updated_at=excluded.updated_at`
+    )
+    .run(cardId, resolution, lastHash, unchangedStreak, new Date().toISOString());
 }
 
 /* ---------------- F6: LLM providers ---------------- */
@@ -1852,6 +2047,14 @@ export function getLlmCall(id: number): LlmCallRecord | null {
   return x ? llmCallRow(x) : null;
 }
 
+/** Call-count guardrail: Step-1 reads used by a line since UTC midnight. */
+export function countLlmCallsToday(lineId: string, route: string): number {
+  const r = getDb()
+    .prepare("SELECT COUNT(*) AS n FROM llm_calls WHERE line_id=? AND route=? AND at >= date('now')")
+    .get(lineId, route) as { n: number };
+  return r.n;
+}
+
 export interface LlmCallStats {
   last24h: number;
   okRate: number | null;
@@ -1903,6 +2106,8 @@ export interface ChartReading {
   llmCallId: number | null;
   /** Base64 data-URL PNG; thumb on list rows, full image on detail only. */
   image: string | null;
+  /** Gap 2: Gate-2/verdict decisions (file/merge/drop/close) as JSON, or null. */
+  loopJson: string | null;
 }
 
 function readingRow(r: Record<string, unknown>, withImage: "thumb" | "full" | "none"): ChartReading {
@@ -1929,7 +2134,13 @@ function readingRow(r: Record<string, unknown>, withImage: "thumb" | "full" | "n
     reason: (r.reason as string) ?? "",
     llmCallId: (r.llm_call_id as number) ?? null,
     image: withImage === "full" ? pick(r.image_png) : withImage === "thumb" ? pick(r.image_thumb) : null,
+    loopJson: (r.loop_json as string) ?? null,
   };
+}
+
+/** Gap 2: persist the loop report after verdicts/births complete (needs the reading id first). */
+export function setReadingLoop(id: number, report: unknown): void {
+  getDb().prepare("UPDATE chart_readings SET loop_json=? WHERE id=?").run(JSON.stringify(report ?? null), id);
 }
 
 function pngBytes(dataUrl: string | null | undefined): Buffer | null {
@@ -1988,7 +2199,7 @@ export function createReading(e: {
   return Number(r.lastInsertRowid);
 }
 
-export function listReadings(f: { lineId?: string; cardId?: string; limit?: number; offset?: number } = {}): {
+export function listReadings(f: { lineId?: string; cardId?: string; limit?: number; offset?: number; liveOnly?: boolean } = {}): {
   rows: ChartReading[];
   total: number;
 } {
@@ -2002,6 +2213,10 @@ export function listReadings(f: { lineId?: string; cardId?: string; limit?: numb
     where.push("card_id = ?");
     args.push(f.cardId);
   }
+  // Walker-born readings carry chartKey prefill-% (only writer using it).
+  if (f.liveOnly) {
+    where.push("chart_key NOT LIKE 'prefill-%'");
+  }
   const whereSql = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
   const db = getDb();
   const total = (db.prepare(`SELECT COUNT(*) AS n FROM chart_readings ${whereSql}`).get(...args) as { n: number }).n;
@@ -2011,7 +2226,7 @@ export function listReadings(f: { lineId?: string; cardId?: string; limit?: numb
   const rows = (
     db
       .prepare(
-        `SELECT id,at,line_id,card_id,chart_key,status,breach,summary,reading_json,prompt,response_text,reason,llm_call_id,image_thumb
+        `SELECT id,at,line_id,card_id,chart_key,status,breach,summary,reading_json,prompt,response_text,reason,llm_call_id,image_thumb,loop_json
          FROM chart_readings ${whereSql} ORDER BY id DESC LIMIT ? OFFSET ?`
       )
       .all(...args, limit, offset) as Record<string, unknown>[]
@@ -2065,18 +2280,26 @@ export function openTicket(e: {
   readingId?: number | null;
   runId?: number | null;
   title?: string;
+  /** Item 7a: Gate-2-filed questions carry their own evidence as the reason. */
+  aiReason?: string;
+  /**
+   * Item 7a: loop-filed questions bypass the one-open-ticket-per-source rule —
+   * distinct unknowns from one reading deserve distinct tickets. Manual opens
+   * keep the rule (deliberate reopen, never duplicates).
+   */
+  allowMultiple?: boolean;
 }): { id: number; deduped: boolean } {
   const db = getDb();
-  if (e.readingId != null) {
+  if (!e.allowMultiple && e.readingId != null) {
     const dup = db.prepare("SELECT id FROM tickets WHERE reading_id=? AND status='open'").get(e.readingId) as { id: number } | undefined;
     if (dup) return { id: dup.id, deduped: true };
   }
-  if (e.runId != null) {
+  if (!e.allowMultiple && e.runId != null) {
     const dup = db.prepare("SELECT id FROM tickets WHERE run_id=? AND status='open'").get(e.runId) as { id: number } | undefined;
     if (dup) return { id: dup.id, deduped: true };
   }
   let title = e.title?.trim() ?? "";
-  let aiReason = "";
+  let aiReason = e.aiReason?.trim() ?? "";
   if (e.readingId != null) {
     const rd = getReading(e.readingId);
     if (rd) {
@@ -2113,6 +2336,15 @@ export function closeTicket(id: number, note: string): boolean {
   const r = getDb()
     .prepare("UPDATE tickets SET status='closed', closed_at=?, note=? WHERE id=? AND status='open'")
     .run(new Date().toISOString(), note ?? "", id);
+  return r.changes > 0;
+}
+
+/** Item 9 merge: accrete supporting evidence onto an open ticket's note. */
+export function appendTicketNote(id: number, text: string): boolean {
+  const t = getTicket(id);
+  if (!t || t.status !== "open") return false;
+  const note = t.note ? `${t.note}\n${text}` : text;
+  const r = getDb().prepare("UPDATE tickets SET note=? WHERE id=?").run(note, id);
   return r.changes > 0;
 }
 
