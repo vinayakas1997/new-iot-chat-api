@@ -1,0 +1,118 @@
+{
+ "BARE": {
+  "candidates": [
+   {
+    "chartType": "line",
+    "xColumn": "slot_ts",
+    "yColumns": [
+     "時間当",
+     "累計"
+    ],
+    "title": "Hourly Production Rate and Cumulative Output",
+    "rationale": "Uses 'slot_ts' as the temporal X axis to show the trend of '時間当' (hourly production rate) and '累計' (cumulative total) over time, directly addressing the Line-12 hourly production feature.",
+    "conditions": "Always recommended for viewing temporal trends in production metrics."
+   },
+   {
+    "chartType": "histogram",
+    "xColumn": "時間当",
+    "yColumns": [
+     "時間当"
+    ],
+    "title": "Distribution of Hourly Production Rates",
+    "rationale": "Analyzes the spread and outliers of '時間当' (hourly production rate), revealing variability in hourly output performance across the shift.",
+    "conditions": "When checking distribution of hourly production rates."
+   },
+   {
+    "chartType": "histogram",
+    "xColumn": "正味時間秒",
+    "yColumns": [
+     "正味時間秒"
+    ],
+    "title": "Distribution of Net Time Seconds",
+    "rationale": "Analyzes the spread of '正味時間秒' (net time seconds), revealing the distribution of actual working time duration per slot.",
+    "conditions": "When checking distribution of net time seconds."
+   }
+  ],
+  "score": {
+   "line": 30,
+   "area_cume": 0,
+   "table": 0,
+   "fd_split": 0,
+   "verbatim": 15,
+   "total": 45,
+   "detail": {
+    "n": 3,
+    "types": [
+     "line",
+     "histogram",
+     "histogram"
+    ],
+    "fd_covered": [],
+    "invented": []
+   }
+  },
+  "raw": "{\n  \"candidates\": [\n    {\n      \"chartType\": \"line\",\n      \"xColumn\": \"slot_ts\",\n      \"yColumns\": [\n        \"時間当\",\n        \"累計\"\n      ],\n      \"title\": \"Hourly Production Rate and Cumulative Output\",\n      \"rationale\": \"Uses 'slot_ts' as the temporal X axis to show the trend of '時間当' (hourly production rate) and '累計' (cumulative total) over time, directly addressing the Line-12 hourly production feature.\",\n      \"conditions\": \"Always recommended for viewing temporal trends in production metrics.\"\n    },\n    {\n      \"chartType\": \"histogram\",\n      \"xColumn\": \"時間当\",\n      \"yColumns\": [\n        \"時間当\"\n      ],\n      \"title\": \"Distribution of Hourly Production Rates\",\n      \"rationale\": \"Analyzes the spread and outliers of '時間当' (hourly production rate), revealing variability in hourly output performance across the shift.\",\n      \"conditions\": \"When checking distribution of hourly production rates.\"\n    },\n    {\n      \"chartType\": \"histogram\",\n      \"xColumn\": \"正味時間秒\",\n      \"yColumns\": [\n        \"正味時間秒\"\n      ],\n      \"title\": \"Distribution of Net Time Seconds\",\n      \"rationale\": \"Analyzes the spread of '正味時間秒' (net time seconds), revealing the distribution of actual working time duration per slot.\",\n      \"conditions\": \"When checking distribution of net time seconds.\"\n    }\n  ]\n}",
+  "prompt_chars": 3471
+ },
+ "FULL": {
+  "candidates": [
+   {
+    "chartType": "line",
+    "xColumn": "slot_ts",
+    "yColumns": [
+     "時間当",
+     "累計"
+    ],
+    "title": "Hourly Output and Cumulative Total",
+    "rationale": "Uses '時間当' (hourly good qty) and '累計' (running cumulative qty) to show the production trend over time and the accumulation of total output.",
+    "conditions": "Always show when analyzing hourly production trends."
+   },
+   {
+    "chartType": "line",
+    "xColumn": "slot_ts",
+    "yColumns": [
+     "FD03[7]",
+     "FD32[8]",
+     "FD31[9]"
+    ],
+    "title": "New Build Production by Model",
+    "rationale": "Uses 'FD03[7]', 'FD32[8]', and 'FD31[9]' to visualize the separate output of new builds (models 7, 8, 9) over time, adhering to the requirement to split new builds from rework.",
+    "conditions": "Always show when analyzing new build performance."
+   },
+   {
+    "chartType": "histogram",
+    "xColumn": "時間当",
+    "yColumns": [
+     "時間当"
+    ],
+    "title": "Distribution of Hourly Output",
+    "rationale": "Uses '時間当' to reveal the spread of hourly production rates, identifying modes and outliers in the hourly output performance.",
+    "conditions": "When checking distribution of hourly output."
+   }
+  ],
+  "score": {
+   "line": 30,
+   "area_cume": 0,
+   "table": 0,
+   "fd_split": 8,
+   "verbatim": 15,
+   "total": 53,
+   "detail": {
+    "n": 3,
+    "types": [
+     "line",
+     "line",
+     "histogram"
+    ],
+    "fd_covered": [
+     "FD03[7]",
+     "FD31[9]",
+     "FD32[8]"
+    ],
+    "invented": []
+   }
+  },
+  "raw": "{\n  \"candidates\": [\n    {\n      \"chartType\": \"line\",\n      \"xColumn\": \"slot_ts\",\n      \"yColumns\": [\n        \"時間当\",\n        \"累計\"\n      ],\n      \"title\": \"Hourly Output and Cumulative Total\",\n      \"rationale\": \"Uses '時間当' (hourly good qty) and '累計' (running cumulative qty) to show the production trend over time and the accumulation of total output.\",\n      \"conditions\": \"Always show when analyzing hourly production trends.\"\n    },\n    {\n      \"chartType\": \"line\",\n      \"xColumn\": \"slot_ts\",\n      \"yColumns\": [\n        \"FD03[7]\",\n        \"FD32[8]\",\n        \"FD31[9]\"\n      ],\n      \"title\": \"New Build Production by Model\",\n      \"rationale\": \"Uses 'FD03[7]', 'FD32[8]', and 'FD31[9]' to visualize the separate output of new builds (models 7, 8, 9) over time, adhering to the requirement to split new builds from rework.\",\n      \"conditions\": \"Always show when analyzing new build performance.\"\n    },\n    {\n      \"chartType\": \"histogram\",\n      \"xColumn\": \"時間当\",\n      \"yColumns\": [\n        \"時間当\"\n      ],\n      \"title\": \"Distribution of Hourly Output\",\n      \"rationale\": \"Uses '時間当' to reveal the spread of hourly production rates, identifying modes and outliers in the hourly output performance.\",\n      \"conditions\": \"When checking distribution of hourly output.\"\n    }\n  ]\n}",
+  "prompt_chars": 7313
+ }
+}

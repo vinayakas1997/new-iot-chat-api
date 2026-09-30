@@ -4,6 +4,7 @@ import { createReading, getCard, getReading, listReadings, listTickets, setReadi
 import { llmChatJson } from "../llm/client.js";
 import type { Logger } from "../logger.js";
 import { applyReadingLoop, type LoopQuestion, type LoopVerdict } from "../loop.js";
+import { capTableRows } from "../rollup.js";
 
 /**
  * Line 360° context loop, phase P1: chart snapshot → Step-1 LLM read →
@@ -293,11 +294,13 @@ export function buildTableEnvelope(b: TableReadInput): string | null {
   if (!card) return null;
   const thr = b.threshold ?? card.threshold;
   const { priorBlock, openBlock } = loopContext(b.lineId, b.cardId);
+  // #6 table guardrail: latest 50 rows max, truncation stated, never silent.
+  const capped = capTableRows(b.rows);
   return [
     `Read this data table for card "${b.cardId}" (${b.resolution}). NO IMAGE ATTACHED — cite row values, never axes or pixels. Timing comes from the time-column values.`,
-    `Window: ${b.windowFrom || "?"} .. ${b.windowTo || "?"} (${b.rows.length} rows shown). UTC.`,
+    `Window: ${b.windowFrom || "?"} .. ${b.windowTo || "?"} (${capped.rows.length} rows shown${capped.truncated ? `, latest ${capped.rows.length} of ${capped.total} — earlier rows omitted, do not assume completeness` : ""}). UTC.`,
     `Columns: ${b.columns.join(", ")}.`,
-    `Rows (JSON): ${JSON.stringify(b.rows)}`,
+    `Rows (JSON): ${JSON.stringify(capped.rows)}`,
     `Stats on shown rows: ${b.stats || "n/a"}.`,
     `Threshold: ${thr != null ? `${thr}, breach direction: ${b.breachDirection} (ground truth, obey exactly).` : "none stated."}`,
     card.extractHint ? `Extract hint: ${card.extractHint}` : "Extract hint: none.",

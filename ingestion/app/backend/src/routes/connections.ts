@@ -12,6 +12,7 @@ import {
   updateConnection,
 } from "../db/store.js";
 import { driverFor } from "../drivers/index.js";
+import { spreadSampleValues, tableQuirkLines } from "../quirks.js";
 
 const inputSchema = z.object({
   label: z.string().min(1).max(100),
@@ -193,7 +194,7 @@ export async function connectionRoutes(app: FastifyInstance) {
 
   app.post("/api/ingest/connections/:id/tables/:schema/:table/llm-fill", async (req, reply) => {
     const { id, schema, table } = req.params as { id: string; schema: string; table: string };
-    const body = (req.body ?? {}) as { columns?: string[] };
+    const body = (req.body ?? {}) as { columns?: string[]; steer?: string };
     const conn = getConnection(id);
     if (!conn) return reply.code(404).send({ error: "not found" });
     try {
@@ -201,15 +202,31 @@ export async function connectionRoutes(app: FastifyInstance) {
       const info = await driver.describeTable(conn, schema, table);
       const sample = await driver.sampleRows(conn, schema, table, 5).catch(() => ({ columns: [] as string[], rows: [] as Record<string, unknown>[] }));
       const targets = body.columns && body.columns.length > 0 ? body.columns : info.columns.map((c) => c.name);
+      // #5: early + late values so growth across time is visible (single-spot
+      // samples hide cumulative behavior). Falls back to head-only silently.
+      const spread = await spreadSampleValues(conn, schema, table, targets);
       const sampleText = targets.map((name) => {
         const col = info.columns.find((c) => c.name.toLowerCase() === name.toLowerCase());
+        if (spread?.has(name)) {
+          const { early, late } = spread.get(name)!;
+          const parts = [early.length > 0 ? `early ${early.join(", ")}` : "",
+            late.length > 0 ? `late ${late.join(", ")}` : ""].filter(Boolean);
+          return `${name} (${col?.type ?? "?"}): ${parts.join(" · ") || "—"}`;
+        }
         const vals = sample.rows.slice(0, 5).map((r) => String(r[name] ?? "")).filter(Boolean).slice(0, 3).join(", ");
         return `${name} (${col?.type ?? "?"}): ${vals || "—"}`;
       }).join("\n");
+      const steer = typeof body.steer === "string" ? body.steer.trim().slice(0, 2000) : "";
+      // #4: deterministic table quirks feed the labeling prompt (best-effort).
+      const tq = await tableQuirkLines(conn, schema, table);
       const { llmChatJson } = await import("../llm/client.js");
       const r = await llmChatJson({
         system: "You label database columns. Reply with JSON only, no prose, no fences.",
-        user: `Table: ${schema}.${table}\nFill meanings for these columns:\n${sampleText}\nReply JSON array: [{"name","meaning"}]. One sentence per column, include units if apparent.`,
+        user: [`Table: ${schema}.${table}\nFill meanings for these columns:\n${sampleText}`,
+          tq.lines.length > 0 ? `Measured table quirks (counted from ${tq.daysAvailable} days — obey confirmed patterns, never invent others):\n${tq.lines.join("\n")}` : "",
+          steer ? `Setter notes (ground truth from the plant — obey over inference): ${steer}` : "",
+          `Reply JSON array: [{"name","meaning"}]. One sentence per column, include units if apparent.`,
+        ].filter(Boolean).join("\n"),
         schema: z.array(z.object({ name: z.string(), meaning: z.string() })),
         context: { route: "connections-llm-fill-draft", connectionId: id, table: `${schema}.${table}` },
         log: app.log,

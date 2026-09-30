@@ -255,7 +255,7 @@ export async function buildFailure(
  * T1-T3/T1b; ask_system_v2.txt S1/J1-J3/C1/M1; scenarios/; live JOIN on line-12).
  * Edit here only with a version bump + re-graded trials (S1 single-table first).
  */
-export const ASK_SYSTEM_VERSION = "ask-v2";
+export const ASK_SYSTEM_VERSION = "ask-v3";
 export const ASK_SYSTEM = `You are the SQL assistant for one plant data line. You write read-only queries, run them, and report honestly. The user reviews your SQL in an editor beside this chat and runs it — or you run it and show the table.
 
 HARD RULES (in order):
@@ -272,6 +272,7 @@ HARD RULES (in order):
 11. MULTI-STEP PLANNING. Some questions need two successful queries (distinct values first, details for one value second). After each successful run you are shown its sample and asked: done or next step. Return "need_more" with the next SQL when a further query is required to answer, "done" with the final reply when the question is fully answered. Each execution counts against the same 3-budget (repairs and next-steps share it). Never invent the intermediate values — use the sample rows you were actually shown.
 12. SINGLE-TABLE PLAINNESS. One table → plain SELECT, no CTE, no subquery unless the logic genuinely needs one. Time-window words ("last 7 days", "yesterday") ALWAYS produce a WHERE on the time column with {{from}}/{{to}} — a missing time filter on a time-windowed question is a failed reading. Rules 9-11 never apply to single-table questions.
 13. LATEST-PER-ENTITY. "Latest X per <entity>" (each machine, each batch…) means one row PER entity value — never a bare global ORDER BY ts DESC LIMIT 1 (that returns one row total). Use DISTINCT ON (<entity>) … ORDER BY <entity>, ts DESC (postgres) or ROW_NUMBER() OVER (PARTITION BY <entity> ORDER BY ts DESC) filtered to rn = 1. "Each" always partitions.
+14. VERIFIABLE CLAIMS REQUIRE run_sql FIRST. kind "explain" is for meaning (what a column means, what a rule says) — never for asserting what the DATA contains. If the question asks what exists, how much, which buckets, or why something is missing, run a query (e.g. DISTINCT bucket list, COUNT) and ground every data claim in its output. An unverified data assertion is a failed reading. Return rows at the ASKED GRAIN (hourly question → one row per bucket); never collapse to best/total only — the user reads the shape from the table, and a collapsed aggregate hides it.
 
 OUTPUT CONTRACT — reply with JSON only, no prose, no fences:
 {
@@ -432,6 +433,9 @@ export async function playgroundRoutes(app: FastifyInstance) {
       contextError: z.object({
         kind: z.string(), message: z.string(), hint: z.string().nullable().optional(), sql: z.string(),
       }).nullable().optional(),
+      // Opt-in eval trace: echo per-attempt solver prompts + validator verdicts.
+      // Default off — normal responses are byte-identical in shape.
+      debugTrace: z.boolean().default(false),
     }).safeParse(req.body);
     if (!p.success) return reply.code(400).send({ error: p.error.message });
 
@@ -528,45 +532,95 @@ export async function playgroundRoutes(app: FastifyInstance) {
       if (badRef) return `Proposed SQL references "${badRef}", which is not a member table.`;
       return null;
     };
+    // Eval trace (debugTrace only): per-attempt solver prompt + validator verdict.
+    const traceOn = p.data.debugTrace === true;
+    const trace: Array<Record<string, unknown>> = [];
+    const cap = (s: string, n: number): string =>
+      (s.length > n ? s.slice(0, n) + `…[truncated ${s.length - n} chars]` : s);
+    const T = <O extends Record<string, unknown>>(o: O): O => (traceOn ? { ...o, trace } : o);
     for (let attempt = 1; attempt <= 3; attempt++) {
+      const userPrompt = base + retryBlock + chainBlock;
+      // Eval trace entry (only materialized when debugTrace is on).
+      const entry: Record<string, unknown> = { attempt, systemRef: "ASK_SYSTEM" };
+      if (traceOn) {
+        entry.promptChars = userPrompt.length;
+        if (attempt === 1) entry.promptFull = cap(userPrompt, 20000);
+        else entry.promptDelta = cap(retryBlock + chainBlock, 4000);
+        trace.push(entry);
+      }
       const r = await llmChatJson({
         system: ASK_SYSTEM,
-        user: base + retryBlock + chainBlock,
+        user: userPrompt,
         schema: askSchema,
         context: { route: "playground-ask", lineId: line.id },
         log: app.log,
       });
       if (r.reason === "no-provider" || !r.parsed) {
-        return { type: "error", reason: r.reason === "no-provider" ? "no-provider" : "unparseable" };
+        if (traceOn) {
+          entry.sqlProposed = "";
+          entry.validatorVerdict = { gate: "n/a", reason: "llm-unavailable" };
+          entry.outcome = "error";
+        }
+        return T({ type: "error", reason: r.reason === "no-provider" ? "no-provider" : "unparseable" });
       }
       const out = r.parsed;
       for (const s of out.steps) if (steps.length < 16) steps.push(s);
       if (out.kind === "clarify") {
-        return { type: "clarify", question: out.question, reply: out.reply, steps };
+        if (traceOn) {
+          entry.sqlProposed = "";
+          entry.validatorVerdict = { gate: "n/a", reason: "assistant-asked-clarify" };
+          entry.outcome = "clarify";
+        }
+        return T({ type: "clarify", question: out.question, reply: out.reply, steps });
       }
       if (out.kind === "explain") {
-        return { type: "explain", reply: out.reply, steps };
+        if (traceOn) {
+          entry.sqlProposed = "";
+          entry.validatorVerdict = { gate: "n/a", reason: "assistant-answered-without-sql" };
+          entry.outcome = "explain";
+        }
+        return T({ type: "explain", reply: out.reply, steps });
       }
       if (out.kind === "done") {
         // Closes a multi-step chain with the final answer (or a bare answer).
         if (lastOk) {
-          return {
+          if (traceOn) {
+            entry.sqlProposed = "";
+            entry.validatorVerdict = { gate: "n/a", reason: "chain-closed-on-prior-ok" };
+            entry.outcome = "done-chained";
+          }
+          return T({
             type: "round", ok: true, question: p.data.message, sql: lastOk.sql, editorSql: lastOk.sql,
             steps, attempts: attempt, reply: out.reply || "Done.",
             rowCount: lastOk.rowCount, sample: lastOk.sample,
             tablesTouched: lastOk.tablesTouched, window: lastOk.window, chained: true,
-          };
+          });
         }
-        return { type: "explain", reply: out.reply, steps };
+        if (traceOn) {
+          entry.sqlProposed = "";
+          entry.validatorVerdict = { gate: "n/a", reason: "assistant-answered-without-sql" };
+          entry.outcome = "done-bare";
+        }
+        return T({ type: "explain", reply: out.reply, steps });
       }
       // run_sql / need_more — validate (server gate), then execute.
       const sql = out.sql.trim();
       if (!sql) {
-        return { type: "dropped", reason: "The assistant proposed no SQL.", reply: out.reply, steps, attempts: attempt };
+        if (traceOn) {
+          entry.sqlProposed = "";
+          entry.validatorVerdict = { gate: "static", reason: "no-sql-proposed" };
+          entry.outcome = "dropped";
+        }
+        return T({ type: "dropped", reason: "The assistant proposed no SQL.", reply: out.reply, steps, attempts: attempt });
       }
       const invalid = validateSql(sql);
       if (invalid) {
-        return { type: "dropped", reason: invalid, reply: out.reply, steps, attempts: attempt, sql };
+        if (traceOn) {
+          entry.sqlProposed = sql;
+          entry.validatorVerdict = { gate: "static", reason: invalid };
+          entry.outcome = "dropped";
+        }
+        return T({ type: "dropped", reason: invalid, reply: out.reply, steps, attempts: attempt, sql });
       }
       // Substitute {{from}}/{{to}} for execution; editor keeps placeholders.
       const end = p.data.window?.to ?? new Date().toISOString();
@@ -579,43 +633,61 @@ export async function playgroundRoutes(app: FastifyInstance) {
         const durationMs = Date.now() - execStart;
         recordQueryHistory({ lineId: line.id, sql: execSql, rowCount: rows.length, durationMs, ok: true });
         const packed = buildSuccess(rows, execSql, start, end, tablesTouched, durationMs);
+        if (traceOn) {
+          entry.sqlProposed = sql;
+          entry.validatorVerdict = { gate: "pass" };
+          entry.rowCount = packed.rowCount;
+        }
         if (out.kind === "need_more" && attempt < 3) {
           // Chain: feed the sample back, ask done-or-next. Same 3-budget.
           lastOk = {
             sql, rowCount: packed.rowCount, sample: packed.sample,
             tablesTouched: packed.tablesTouched, window: packed.window,
           };
+          if (traceOn) entry.outcome = "chained-continue";
           steps.push(`ok (${packed.rowCount} rows) — chaining (attempt ${attempt + 1}/3)`);
           retryBlock = "";
           chainBlock = `\n\nCHAIN — attempt ${attempt + 1}/3. Previous SQL succeeded (${packed.rowCount} rows). Sample (first rows):\n  ${JSON.stringify(packed.sample.rows.slice(0, 5))}\nDecide: "done" with the final answer, or "need_more" with the NEXT sql. Use only values from this sample — never invent intermediate values.`;
           continue;
         }
-        return {
+        if (traceOn) entry.outcome = lastOk ? "rows-ok-chained" : "rows-ok";
+        return T({
           type: "round", ok: true, question: p.data.message, sql, editorSql: sql,
           steps, attempts: attempt, reply: out.reply,
           rowCount: packed.rowCount, sample: packed.sample,
           tablesTouched: packed.tablesTouched, window: packed.window,
           ...(lastOk ? { chained: true } : {}),
-        };
+        });
       } catch (e) {
         const durationMs = Date.now() - execStart;
         const f = await buildFailure(conn, line, tablesTouched, e);
         recordQueryHistory({ lineId: line.id, sql: execSql, durationMs, ok: false, error: f.error });
         steps.push(`failed [${f.errorKind}]: ${f.error}`);
         if (attempt >= 3) {
-          return {
+          if (traceOn) {
+            entry.sqlProposed = sql;
+            entry.validatorVerdict = { gate: "execute", errorKind: f.errorKind, errorHint: f.errorHint ?? null };
+            entry.outcome = "handoff";
+          }
+          return T({
             type: "round", ok: false, question: p.data.message, sql, editorSql: sql,
             steps, attempts: attempt, handoff: true,
             reply: `3 tries used — over to you; the last query is in the editor with the error below. ${out.reply}`.trim(),
             errorKind: f.errorKind, errorHint: f.errorHint, errorPosition: f.errorPosition,
-          };
+          });
+        }
+        if (traceOn) {
+          entry.sqlProposed = sql;
+          entry.validatorVerdict = { gate: "execute", errorKind: f.errorKind, errorHint: f.errorHint ?? null };
+          entry.outcome = "failed-retry";
         }
         steps.push(`fixed: retrying (attempt ${attempt + 1}/3)`);
         chainBlock = "";
         retryBlock = `\n\nRETRY — attempt ${attempt + 1}/3. Previous SQL (verbatim):\n  ${sql}\nIt failed with [${f.errorKind}]: ${f.error}${f.errorHint ? `\nHint: ${f.errorHint}` : ""}\nFix ONLY the broken part; do not redesign the query.`;
       }
     }
-    return { type: "error", reason: "loop-exhausted" };
+    if (traceOn) trace.push({ attempt: "exhausted", systemRef: "ASK_SYSTEM", outcome: "loop-exhausted" });
+    return T({ type: "error", reason: "loop-exhausted" });
   });
 
   /** Query history for a line (most recent first). */

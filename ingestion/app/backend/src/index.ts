@@ -18,6 +18,7 @@ import { playgroundRoutes } from "./routes/playground.js";
 import { prefillRoutes } from "./routes/prefill.js";
 import { readingRoutes } from "./routes/readings.js";
 import { ticketRoutes } from "./routes/tickets.js";
+import { loopRoutes } from "./routes/loop.js";
 import { overviewRoutes } from "./routes/overview.js";
 import { runPrefillPass, runTick, startPrefillWalker, startTicker } from "./ticker.js";
 
@@ -48,6 +49,7 @@ async function main() {
   await app.register(prefillRoutes);
   await app.register(readingRoutes);
   await app.register(ticketRoutes);
+  await app.register(loopRoutes);
   await app.register(overviewRoutes);
 
   // Manual tick trigger (setter action + verification hook).

@@ -1,0 +1,17 @@
+{
+ "asked_by": "generator/rules-v1",
+ "proposal": {
+  "question": "What does card \"Line-12 hourly production\" show for the window? Summarize per bucket at the card's hourly grain with grounded numbers.",
+  "source": "unread-card",
+  "sourceRef": "card:card-munsleft",
+  "reason": "card has no readings yet — first coverage",
+  "cardId": "card-munsleft",
+  "readingId": null,
+  "ticketId": null
+ },
+ "window": {
+  "from": "2026-08-04T00:00:00+09:00",
+  "to": "2026-08-05T00:00:00+09:00"
+ },
+ "at": "2026-09-30T090518Z"
+}

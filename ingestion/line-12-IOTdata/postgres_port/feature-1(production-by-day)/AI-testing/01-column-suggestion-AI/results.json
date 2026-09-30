@@ -1,0 +1,571 @@
+{
+ "stg_ryohin": {
+  "prompt_user": "Table: line12_august.stg_ryohin\nFill meanings for these columns:\nkinmu_hidukejiku (text): 2026/08/01, 2026/08/01, 2026/08/01\nsetsubi_unit (text): 10-1629, 10-1629, 10-1629\nsetsubi_kiban (text): AM-307A, AM-307A, AM-307A\nhiduke (text): 2026/08/01 08:21:00, 2026/08/01 08:21:00, 2026/08/01 08:21:00\nchuyakin (text): 昼勤, 昼勤, 昼勤\nseisan_jikantai (text): 08:20, 08:20, 08:20\njikan_taisei (text): 通常時間, 通常時間, 通常時間\njikanbetsu_mokuhyo (text): 0, 0, 0\nmokuhyo (text): 0, 0, 0\nkishu_no (text): 1, 2, 3\nse_no (text): ***, ***, ***\njikanbetsu_seisan (text): 0, 0, 0\nseisan_su (text): 0, 0, 0\nct (text): 0, 0, 0\ninsert_timing (text): 直始め, 直始め, 直始め\nReply JSON array: [{\"name\",\"meaning\"}]. One sentence per column, include units if apparent.",
+  "raw": "[{\"name\": \"kinmu_hidukejiku\", \"meaning\": \"Work schedule date range.\"}, {\"name\": \"setsubi_unit\", \"meaning\": \"Equipment unit identifier.\"}, {\"name\": \"setsubi_kiban\", \"meaning\": \"Equipment base or model code.\"}, {\"name\": \"hiduke\", \"meaning\": \"Timestamp of the record.\"}, {\"name\": \"chuyakin\", \"meaning\": \"Shift type, such as day shift.\"}, {\"name\": \"seisan_jikantai\", \"meaning\": \"Production time slot.\"}, {\"name\": \"jikan_taisei\", \"meaning\": \"Time adjustment status, such as normal time.\"}, {\"name\": \"jikanbetsu_mokuhyo\", \"meaning\": \"Target quantity for the specific time slot.\"}, {\"name\": \"mokuhyo\", \"meaning\": \"Overall production target.\"}, {\"name\": \"kishu_no\", \"meaning\": \"Sequence number within the shift.\"}, {\"name\": \"se_no\", \"meaning\": \"Employee or operator number.\"}, {\"name\": \"jikanbetsu_seisan\", \"meaning\": \"Actual production quantity for the time slot.\"}, {\"name\": \"seisan_su\", \"meaning\": \"Total production count.\"}, {\"name\": \"ct\", \"meaning\": \"Cycle time or counter value.\"}, {\"name\": \"insert_timing\", \"meaning\": \"Timing of data insertion, such as at the start of the shift.\"}]",
+  "drafts": [
+   {
+    "name": "kinmu_hidukejiku",
+    "meaning": "Work schedule date range."
+   },
+   {
+    "name": "setsubi_unit",
+    "meaning": "Equipment unit identifier."
+   },
+   {
+    "name": "setsubi_kiban",
+    "meaning": "Equipment base or model code."
+   },
+   {
+    "name": "hiduke",
+    "meaning": "Timestamp of the record."
+   },
+   {
+    "name": "chuyakin",
+    "meaning": "Shift type, such as day shift."
+   },
+   {
+    "name": "seisan_jikantai",
+    "meaning": "Production time slot."
+   },
+   {
+    "name": "jikan_taisei",
+    "meaning": "Time adjustment status, such as normal time."
+   },
+   {
+    "name": "jikanbetsu_mokuhyo",
+    "meaning": "Target quantity for the specific time slot."
+   },
+   {
+    "name": "mokuhyo",
+    "meaning": "Overall production target."
+   },
+   {
+    "name": "kishu_no",
+    "meaning": "Sequence number within the shift."
+   },
+   {
+    "name": "se_no",
+    "meaning": "Employee or operator number."
+   },
+   {
+    "name": "jikanbetsu_seisan",
+    "meaning": "Actual production quantity for the time slot."
+   },
+   {
+    "name": "seisan_su",
+    "meaning": "Total production count."
+   },
+   {
+    "name": "ct",
+    "meaning": "Cycle time or counter value."
+   },
+   {
+    "name": "insert_timing",
+    "meaning": "Timing of data insertion, such as at the start of the shift."
+   }
+  ],
+  "scores": [
+   {
+    "column": "jikanbetsu_seisan",
+    "weight": 2,
+    "pass": true,
+    "meaning": "Actual production quantity for the time slot."
+   },
+   {
+    "column": "seisan_su",
+    "weight": 2,
+    "pass": false,
+    "meaning": "Total production count."
+   },
+   {
+    "column": "insert_timing",
+    "weight": 2,
+    "pass": false,
+    "meaning": "Timing of data insertion, such as at the start of the shift."
+   },
+   {
+    "column": "kishu_no",
+    "weight": 2,
+    "pass": false,
+    "meaning": "Sequence number within the shift."
+   },
+   {
+    "column": "se_no",
+    "weight": 2,
+    "pass": true,
+    "meaning": "Employee or operator number."
+   },
+   {
+    "column": "ct",
+    "weight": 2,
+    "pass": true,
+    "meaning": "Cycle time or counter value."
+   },
+   {
+    "column": "kinmu_hidukejiku",
+    "weight": 2,
+    "pass": false,
+    "meaning": "Work schedule date range."
+   },
+   {
+    "column": "chuyakin",
+    "weight": 2,
+    "pass": true,
+    "meaning": "Shift type, such as day shift."
+   },
+   {
+    "column": "seisan_jikantai",
+    "weight": 2,
+    "pass": true,
+    "meaning": "Production time slot."
+   },
+   {
+    "column": "setsubi_unit",
+    "weight": 1,
+    "pass": true,
+    "meaning": "Equipment unit identifier."
+   },
+   {
+    "column": "setsubi_kiban",
+    "weight": 1,
+    "pass": true,
+    "meaning": "Equipment base or model code."
+   },
+   {
+    "column": "hiduke",
+    "weight": 1,
+    "pass": true,
+    "meaning": "Timestamp of the record."
+   },
+   {
+    "column": "jikan_taisei",
+    "weight": 1,
+    "pass": false,
+    "meaning": "Time adjustment status, such as normal time."
+   },
+   {
+    "column": "jikanbetsu_mokuhyo",
+    "weight": 1,
+    "pass": true,
+    "meaning": "Target quantity for the specific time slot."
+   },
+   {
+    "column": "mokuhyo",
+    "weight": 1,
+    "pass": true,
+    "meaning": "Overall production target."
+   }
+  ],
+  "got": 15,
+  "total": 24
+ },
+ "stg_seisan_jisseki": {
+  "prompt_user": "Table: line12_august.stg_seisan_jisseki\nFill meanings for these columns:\nhiduke (text): 2026/08/01 08:21:00, 2026/08/01 08:21:00, 2026/08/01 08:25:00\nsetsubi_unit (text): 10-1629, 10-1629, 10-1629\nsetsubi_kiban (text): 0, 0, Hirukin\nkinmu_hidukejiku (text): 2026/08/01, 2026/08/01, 2026/08/01\nchuyakin (text): 昼勤, 昼勤, 昼勤\nseisan_jikantai (text): 09:20, 09:20, 09:20\njikan_taisei (text): 通常時間, 通常時間, 通常時間\nsagyosha (text): 0, 0, 0\njisseki_code (text): 112, 112, 129\njisseki_naiyo (text): 仕掛け品有(かんばん有), 仕掛け品有(かんばん有), 設備開始時刻\non_off (text): off, on, on\njisseki_jikan (text): 60, 0, 0\nReply JSON array: [{\"name\",\"meaning\"}]. One sentence per column, include units if apparent.",
+  "raw": "[{\"name\": \"hiduke\", \"meaning\": \"The precise timestamp when the record was created or updated.\"}, {\"name\": \"setsubi_unit\", \"meaning\": \"The specific equipment or machine unit identifier.\"}, {\"name\": \"setsubi_kiban\", \"meaning\": \"The operational status or base condition of the equipment, such as 'Hirukin' (Hollow/Empty).\"}, {\"name\": \"kinmu_hidukejiku\", \"meaning\": \"The date associated with the work shift or activity period.\"}, {\"name\": \"chuyakin\", \"meaning\": \"The type of work shift, specifically 'Day Shift' (昼勤).\"}, {\"name\": \"seisan_jikantai\", \"meaning\": \"The actual start time of the production activity.\"}, {\"name\": \"jikan_taisei\", \"meaning\": \"The time classification or adjustment status, such as 'Normal Time' (通常時間).\"}, {\"name\": \"sagyosha\", \"meaning\": \"The operator or worker identifier assigned to the task.\"}, {\"name\": \"jisseki_code\", \"meaning\": \"A unique code identifying the specific type of production result or activity.\"}, {\"name\": \"jisseki_naiyo\", \"meaning\": \"The detailed content or description of the production result, such as 'Work-in-Progress with Kanban' or 'Equipment Start Time'.\"}, {\"name\": \"on_off\", \"meaning\": \"The operational state of the equipment or activity, indicating 'On' or 'Off'.\"}, {\"name\": \"jisseki_jikan\", \"meaning\": \"The duration of the production activity in minutes.\"}]",
+  "drafts": [
+   {
+    "name": "hiduke",
+    "meaning": "The precise timestamp when the record was created or updated."
+   },
+   {
+    "name": "setsubi_unit",
+    "meaning": "The specific equipment or machine unit identifier."
+   },
+   {
+    "name": "setsubi_kiban",
+    "meaning": "The operational status or base condition of the equipment, such as 'Hirukin' (Hollow/Empty)."
+   },
+   {
+    "name": "kinmu_hidukejiku",
+    "meaning": "The date associated with the work shift or activity period."
+   },
+   {
+    "name": "chuyakin",
+    "meaning": "The type of work shift, specifically 'Day Shift' (昼勤)."
+   },
+   {
+    "name": "seisan_jikantai",
+    "meaning": "The actual start time of the production activity."
+   },
+   {
+    "name": "jikan_taisei",
+    "meaning": "The time classification or adjustment status, such as 'Normal Time' (通常時間)."
+   },
+   {
+    "name": "sagyosha",
+    "meaning": "The operator or worker identifier assigned to the task."
+   },
+   {
+    "name": "jisseki_code",
+    "meaning": "A unique code identifying the specific type of production result or activity."
+   },
+   {
+    "name": "jisseki_naiyo",
+    "meaning": "The detailed content or description of the production result, such as 'Work-in-Progress with Kanban' or 'Equipment Start Time'."
+   },
+   {
+    "name": "on_off",
+    "meaning": "The operational state of the equipment or activity, indicating 'On' or 'Off'."
+   },
+   {
+    "name": "jisseki_jikan",
+    "meaning": "The duration of the production activity in minutes."
+   }
+  ],
+  "scores": [
+   {
+    "column": "jisseki_code",
+    "weight": 2,
+    "pass": true,
+    "meaning": "A unique code identifying the specific type of production result or activity."
+   },
+   {
+    "column": "hiduke",
+    "weight": 1,
+    "pass": true,
+    "meaning": "The precise timestamp when the record was created or updated."
+   },
+   {
+    "column": "setsubi_unit",
+    "weight": 1,
+    "pass": true,
+    "meaning": "The specific equipment or machine unit identifier."
+   },
+   {
+    "column": "setsubi_kiban",
+    "weight": 1,
+    "pass": true,
+    "meaning": "The operational status or base condition of the equipment, such as 'Hirukin' (Hollow/Empty)."
+   },
+   {
+    "column": "kinmu_hidukejiku",
+    "weight": 1,
+    "pass": true,
+    "meaning": "The date associated with the work shift or activity period."
+   },
+   {
+    "column": "chuyakin",
+    "weight": 1,
+    "pass": true,
+    "meaning": "The type of work shift, specifically 'Day Shift' (昼勤)."
+   },
+   {
+    "column": "seisan_jikantai",
+    "weight": 1,
+    "pass": true,
+    "meaning": "The actual start time of the production activity."
+   },
+   {
+    "column": "jikan_taisei",
+    "weight": 1,
+    "pass": true,
+    "meaning": "The time classification or adjustment status, such as 'Normal Time' (通常時間)."
+   },
+   {
+    "column": "sagyosha",
+    "weight": 1,
+    "pass": true,
+    "meaning": "The operator or worker identifier assigned to the task."
+   },
+   {
+    "column": "jisseki_naiyo",
+    "weight": 1,
+    "pass": true,
+    "meaning": "The detailed content or description of the production result, such as 'Work-in-Progress with Kanban' or 'Equipment Start Time'."
+   },
+   {
+    "column": "on_off",
+    "weight": 1,
+    "pass": true,
+    "meaning": "The operational state of the equipment or activity, indicating 'On' or 'Off'."
+   },
+   {
+    "column": "jisseki_jikan",
+    "weight": 1,
+    "pass": true,
+    "meaning": "The duration of the production activity in minutes."
+   }
+  ],
+  "got": 13,
+  "total": 13
+ },
+ "stg_ijo": {
+  "prompt_user": "Table: line12_august.stg_ijo\nFill meanings for these columns:\nhiduke (text): 2026/08/01 13:31:50, 2026/08/01 13:32:48, 2026/08/03 08:31:52\nkinmu_hidukejiku (text): 2026/08/01, 2026/08/01, 2026/08/03\nchuyakin (text): 昼勤, 昼勤, 昼勤\nunit_code (text): 10-1629, 10-1629, 10-1629\nkotei_junban (text): 2, 2, 2\nkiban (text): AM-307B, AM-307B, AM-307B\njikantai (text): 14:10, 14:10, 09:20\nsagyosha (text): 0, 0, 0\nunten_mode (text): 手動, 手動, 手動\nijo_shurui (text): 運転中異常, 運転中異常, 運転中異常\nijo_no (text): 352, 352, 352\nijo_naiyo (text): ① 圧入ｶｼﾒST ｻｲｸﾙﾀｲﾑｵｰﾊﾞｰ, ① 圧入ｶｼﾒST ｻｲｸﾙﾀｲﾑｵｰﾊﾞｰ, ① 圧入ｶｼﾒST ｻｲｸﾙﾀｲﾑｵｰﾊﾞｰ\non_off (text): on, 異常処置終了, on\nkidouji_teishi_s (text): 0, 0, 0\nuntenchu_teishi_s (text): 0, 58.5, 0\nwork_no_st1 (text): FD31, FD31, FD31\nwork_no_st2 (text): FD31, FD31, FD31\nwork_no_st3 (text): FD31, FD31, FD31\nwork_no_st4 (text): FD31, FD31, FD31\nwork_no_st5 (text): FD31, FD31, FD31\nwork_no_st6 (text): FD31, FD31, FD31\nwork_no_st7 (text): < NULL >, < NULL >, < NULL >\nwork_no_st8 (text): < NULL >, < NULL >, < NULL >\nserial_st1 (text): —\nserial_st2 (text): —\nserial_st3 (text): —\nserial_st4 (text): —\nserial_st5 (text): —\nserial_st6 (text): —\nserial_st7 (text): —\nserial_st8 (text): —\nReply JSON array: [{\"name\",\"meaning\"}]. One sentence per column, include units if apparent.",
+  "raw": "{\"name\": \"hiduke\", \"meaning\": \"Timestamp of the event occurrence.\"}\n{\"name\": \"kinmu_hidukejiku\", \"meaning\": \"Date of the work shift.\"}\n{\"name\": \"chuyakin\", \"meaning\": \"Shift type designation.\"}\n{\"name\": \"unit_code\", \"meaning\": \"Unique identifier for the production unit.\"}\n{\"name\": \"kotei_junban\", \"meaning\": \"Fixed sequence number for the record.\"}\n{\"name\": \"kiban\", \"meaning\": \"Base machine or equipment model code.\"}\n{\"name\": \"jikantai\", \"meaning\": \"Start time of the operation.\"}\n{\"name\": \"sagyosha\", \"meaning\": \"Operator identification code.\"}\n{\"name\": \"unten_mode\", \"meaning\": \"Current driving mode of the equipment.\"}\n{\"name\": \"ijo_shurui\", \"meaning\": \"Category of the abnormality detected.\"}\n{\"name\": \"ijo_no\", \"meaning\": \"Unique identifier for the specific abnormality instance.\"}\n{\"name\": \"ijo_naiyo\", \"meaning\": \"Detailed description of the abnormality content.\"}\n{\"name\": \"on_off\", \"meaning\": \"Status of the abnormality handling process.\"}\n{\"name\": \"kidouji_teishi_s\", \"meaning\": \"Duration of the emergency stop in seconds.\"}\n{\"name\": \"untenchu_teishi_s\", \"meaning\": \"Duration of the operation stop in seconds.\"}\n{\"name\": \"work_no_st1\", \"meaning\": \"Work order number for station 1.\"}\n{\"name\": \"work_no_st2\", \"meaning\": \"Work order number for station 2.\"}\n{\"name\": \"work_no_st3\", \"meaning\": \"Work order number for station 3.\"}\n{\"name\": \"work_no_st4\", \"meaning\": \"Work order number for station 4.\"}\n{\"name\": \"",
+  "drafts": [
+   {
+    "name": "hiduke",
+    "meaning": "Timestamp of the event occurrence."
+   },
+   {
+    "name": "kinmu_hidukejiku",
+    "meaning": "Date of the work shift."
+   },
+   {
+    "name": "chuyakin",
+    "meaning": "Shift type designation."
+   },
+   {
+    "name": "unit_code",
+    "meaning": "Unique identifier for the production unit."
+   },
+   {
+    "name": "kotei_junban",
+    "meaning": "Fixed sequence number for the record."
+   },
+   {
+    "name": "kiban",
+    "meaning": "Base machine or equipment model code."
+   },
+   {
+    "name": "jikantai",
+    "meaning": "Start time of the operation."
+   },
+   {
+    "name": "sagyosha",
+    "meaning": "Operator identification code."
+   },
+   {
+    "name": "unten_mode",
+    "meaning": "Current driving mode of the equipment."
+   },
+   {
+    "name": "ijo_shurui",
+    "meaning": "Category of the abnormality detected."
+   },
+   {
+    "name": "ijo_no",
+    "meaning": "Unique identifier for the specific abnormality instance."
+   },
+   {
+    "name": "ijo_naiyo",
+    "meaning": "Detailed description of the abnormality content."
+   },
+   {
+    "name": "on_off",
+    "meaning": "Status of the abnormality handling process."
+   },
+   {
+    "name": "kidouji_teishi_s",
+    "meaning": "Duration of the emergency stop in seconds."
+   },
+   {
+    "name": "untenchu_teishi_s",
+    "meaning": "Duration of the operation stop in seconds."
+   },
+   {
+    "name": "work_no_st1",
+    "meaning": "Work order number for station 1."
+   },
+   {
+    "name": "work_no_st2",
+    "meaning": "Work order number for station 2."
+   },
+   {
+    "name": "work_no_st3",
+    "meaning": "Work order number for station 3."
+   },
+   {
+    "name": "work_no_st4",
+    "meaning": "Work order number for station 4."
+   }
+  ],
+  "scores": [
+   {
+    "column": "hiduke",
+    "weight": 1,
+    "pass": true,
+    "meaning": "Timestamp of the event occurrence."
+   },
+   {
+    "column": "kinmu_hidukejiku",
+    "weight": 1,
+    "pass": true,
+    "meaning": "Date of the work shift."
+   },
+   {
+    "column": "chuyakin",
+    "weight": 1,
+    "pass": true,
+    "meaning": "Shift type designation."
+   },
+   {
+    "column": "unit_code",
+    "weight": 1,
+    "pass": true,
+    "meaning": "Unique identifier for the production unit."
+   },
+   {
+    "column": "kotei_junban",
+    "weight": 1,
+    "pass": true,
+    "meaning": "Fixed sequence number for the record."
+   },
+   {
+    "column": "kiban",
+    "weight": 1,
+    "pass": true,
+    "meaning": "Base machine or equipment model code."
+   },
+   {
+    "column": "jikantai",
+    "weight": 1,
+    "pass": true,
+    "meaning": "Start time of the operation."
+   },
+   {
+    "column": "sagyosha",
+    "weight": 1,
+    "pass": true,
+    "meaning": "Operator identification code."
+   },
+   {
+    "column": "unten_mode",
+    "weight": 1,
+    "pass": true,
+    "meaning": "Current driving mode of the equipment."
+   },
+   {
+    "column": "ijo_shurui",
+    "weight": 1,
+    "pass": true,
+    "meaning": "Category of the abnormality detected."
+   },
+   {
+    "column": "ijo_no",
+    "weight": 1,
+    "pass": true,
+    "meaning": "Unique identifier for the specific abnormality instance."
+   },
+   {
+    "column": "ijo_naiyo",
+    "weight": 1,
+    "pass": true,
+    "meaning": "Detailed description of the abnormality content."
+   },
+   {
+    "column": "on_off",
+    "weight": 1,
+    "pass": true,
+    "meaning": "Status of the abnormality handling process."
+   },
+   {
+    "column": "kidouji_teishi_s",
+    "weight": 1,
+    "pass": true,
+    "meaning": "Duration of the emergency stop in seconds."
+   },
+   {
+    "column": "untenchu_teishi_s",
+    "weight": 1,
+    "pass": true,
+    "meaning": "Duration of the operation stop in seconds."
+   },
+   {
+    "column": "work_no_st1",
+    "weight": 1,
+    "pass": true,
+    "meaning": "Work order number for station 1."
+   },
+   {
+    "column": "serial_st1",
+    "weight": 1,
+    "pass": false,
+    "meaning": ""
+   },
+   {
+    "column": "work_no_st2",
+    "weight": 1,
+    "pass": true,
+    "meaning": "Work order number for station 2."
+   },
+   {
+    "column": "serial_st2",
+    "weight": 1,
+    "pass": false,
+    "meaning": ""
+   },
+   {
+    "column": "work_no_st3",
+    "weight": 1,
+    "pass": true,
+    "meaning": "Work order number for station 3."
+   },
+   {
+    "column": "serial_st3",
+    "weight": 1,
+    "pass": false,
+    "meaning": ""
+   },
+   {
+    "column": "work_no_st4",
+    "weight": 1,
+    "pass": true,
+    "meaning": "Work order number for station 4."
+   },
+   {
+    "column": "serial_st4",
+    "weight": 1,
+    "pass": false,
+    "meaning": ""
+   },
+   {
+    "column": "work_no_st5",
+    "weight": 1,
+    "pass": false,
+    "meaning": ""
+   },
+   {
+    "column": "serial_st5",
+    "weight": 1,
+    "pass": false,
+    "meaning": ""
+   },
+   {
+    "column": "work_no_st6",
+    "weight": 1,
+    "pass": false,
+    "meaning": ""
+   },
+   {
+    "column": "serial_st6",
+    "weight": 1,
+    "pass": false,
+    "meaning": ""
+   },
+   {
+    "column": "work_no_st7",
+    "weight": 1,
+    "pass": false,
+    "meaning": ""
+   },
+   {
+    "column": "serial_st7",
+    "weight": 1,
+    "pass": false,
+    "meaning": ""
+   },
+   {
+    "column": "work_no_st8",
+    "weight": 1,
+    "pass": false,
+    "meaning": ""
+   },
+   {
+    "column": "serial_st8",
+    "weight": 1,
+    "pass": false,
+    "meaning": ""
+   }
+  ],
+  "got": 19,
+  "total": 31
+ },
+ "_summary": {
+  "got": 47,
+  "total": 68,
+  "pct": 69.1,
+  "pass": true,
+  "model": "qwen36-35B"
+ }
+}

@@ -308,6 +308,7 @@ export async function cardRoutes(app: FastifyInstance) {
         steer ? `Setter notes (ground truth — obey over inference): ${steer}` : "",
         `Rules: SELECT-only single statement; MUST filter ts with '{{from}}' AND '{{to}}' placeholders (literal, quoted, upper bound EXCLUSIVE: ts < '{{to}}'); GROUP BY the time bucket for the cadence (hourly → date_trunc('hour', ts)); alias every output column (no bare ts/value); AVG for gauges, SUM for counters; one row per time bucket out.`,
         `Cross-table rule: if the requested measures live in different tables, JOIN them — never silently drop a measure. Join on the time bucket (date_trunc('hour', a.ts) = date_trunc('hour', b.ts)), LEFT JOIN from the primary measure table so missing secondary rows give NULLs, never dropped hours. JOINs only within the listed tables.`,
+        steer ? `Override rule (#8): where the Setter notes above conflict with the bucket/column rules (e.g. plant buckets instead of date_trunc, a named timestamp expression instead of ts), the Setter notes WIN — follow them literally and note the override in thinking.` : "",
         `Also explain the draft as short summary points: "thinking": 3-6 points, one per decision — why this table set/JOIN, why these aggregates, how each rule above is met, and what could still be wrong (fan-out risk, grain doubts). Short clauses, no prose.`,
       ].filter(Boolean).join("\n"),
       schema: z.object({ sql: z.string().min(10).max(20000), thinking: z.array(z.string().max(300)).min(1).max(8) }),

@@ -1,0 +1,27 @@
+{
+ "sample": {
+  "columns": [
+   {
+    "name": "best_hour",
+    "sampleType": "string"
+   },
+   {
+    "name": "hourly_qty",
+    "sampleType": "string"
+   },
+   {
+    "name": "daily_total",
+    "sampleType": "string"
+   }
+  ],
+  "rows": [
+   {
+    "best_hour": "17:20",
+    "hourly_qty": "177",
+    "daily_total": "1061"
+   }
+  ],
+  "truncatedSample": false
+ },
+ "editorSql": "WITH hourly AS (\n  SELECT\n    setsubi_unit,\n    setsubi_kiban,\n    seisan_jikantai,\n    SUM(CAST(jikanbetsu_seisan AS INT)) AS hourly_qty\n  FROM line12_august.stg_ryohin\n  WHERE kinmu_hidukejiku = '2026/08/04'\n    AND chuyakin = '昼勤'\n    AND insert_timing = '時間チェック'\n  GROUP BY setsubi_unit, setsubi_kiban, seisan_jikantai\n),\nmax_hour AS (\n  SELECT * FROM hourly\n  ORDER BY hourly_qty DESC\n  LIMIT 1\n),\ndaily AS (\n  SELECT SUM(CAST(jikanbetsu_seisan AS INT)) AS daily_total\n  FROM line12_august.stg_ryohin\n  WHERE kinmu_hidukejiku = '2026/08/04'\n    AND chuyakin = '昼勤'\n    AND insert_timing = '時間チェック'\n)\nSELECT m.seisan_jikantai AS best_hour,\n       m.hourly_qty,\n       d.daily_total\nFROM max_hour m, daily d"
+}

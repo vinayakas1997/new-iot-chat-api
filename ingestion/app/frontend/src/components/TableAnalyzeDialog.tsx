@@ -44,6 +44,8 @@ export function TableAnalyzeDialog({ mode, lineId, schema, table, connectionId, 
   const [activeSample, setActiveSample] = useState<Col | null>(null);
   const [showHelp, setShowHelp] = useState(false);
   const [fillingCol, setFillingCol] = useState<string | null>(null);
+  const [steerOpen, setSteerOpen] = useState(false);
+  const [steerText, setSteerText] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
   const isDraft = !lineId && !!connectionId;
@@ -90,8 +92,8 @@ export function TableAnalyzeDialog({ mode, lineId, schema, table, connectionId, 
     setFilling(true); setError(null);
     try {
       const r = isDraft
-        ? await api.llmFillTableDraft(connectionId!, schema, table, empties)
-        : await api.llmFillTable(lineId, schema, table, empties);
+        ? await api.llmFillTableDraft(connectionId!, schema, table, empties, steerText.trim() || undefined)
+        : await api.llmFillTable(lineId, schema, table, empties, steerText.trim() || undefined);
       const byName = new Map(r.drafted.map((d) => [d.name.toLowerCase(), d.meaning]));
       setCols((prev) => prev ? prev.map((c) => byName.has(c.name.toLowerCase()) ? { ...c, meaning: byName.get(c.name.toLowerCase())! } : c) : prev);
       if (r.drafted.length === 0) setError("LLM returned no drafts — check AI Services or fill manually.");
@@ -104,8 +106,8 @@ export function TableAnalyzeDialog({ mode, lineId, schema, table, connectionId, 
     setFillingCol(colName); setError(null);
     try {
       const r = isDraft
-        ? await api.llmFillTableDraft(connectionId!, schema, table, [colName])
-        : await api.llmFillTable(lineId, schema, table, [colName]);
+        ? await api.llmFillTableDraft(connectionId!, schema, table, [colName], steerText.trim() || undefined)
+        : await api.llmFillTable(lineId, schema, table, [colName], steerText.trim() || undefined);
       const byName = new Map(r.drafted.map((d) => [d.name.toLowerCase(), d.meaning]));
       setCols((prev) => prev ? prev.map((c) => byName.has(c.name.toLowerCase()) ? { ...c, meaning: byName.get(c.name.toLowerCase())! } : c) : prev);
       if (r.drafted.length === 0) setError(`LLM returned no draft for ${colName}`);
@@ -264,6 +266,20 @@ export function TableAnalyzeDialog({ mode, lineId, schema, table, connectionId, 
                   <Btn size="sm" onClick={() => void onLlmFill()} loading={filling} disabled={filling || emptyCount === 0} title={emptyCount === 0 ? "All meanings filled" : `Fill ${emptyCount} empty via LLM`} className="glass-pill glass-pill--amber"><span className="robot-glow inline-flex"><Sparkles size={13} /></span>LLM fill empty{emptyCount > 0 ? ` (${emptyCount})` : ""}</Btn>
                   <Btn size="sm" icon={Search} onClick={() => void onAnalyze()} loading={analyzing} disabled={analyzing} title="Re-introspect table — sample values + LLM drafts for empties" className="glass-pill glass-pill--neutral">Re-analyze</Btn>
                   {emptyCount > 0 && <span className="text-xs font-medium text-state-warn">{emptyCount} meaning{emptyCount === 1 ? "" : "s"} empty — amber rows must be filled before saving.</span>}
+                  <div className="w-full">
+                    <button type="button" onClick={() => setSteerOpen((v) => !v)} className="text-xs text-slate-400">
+                      {steerOpen ? "▾" : "▸"} Steer the AI{steerText.trim() ? " (set)" : " (optional)"}
+                    </button>
+                    {steerOpen && (
+                      <textarea
+                        rows={2}
+                        value={steerText}
+                        onChange={(e) => setSteerText(e.target.value)}
+                        placeholder="Plant knowledge the AI can't see in samples — e.g. seisan_su is cumulative, never sum it; kishu_no 27/28/29 is rework"
+                        className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-2 py-1 text-sm dark:border-ink-700 dark:bg-ink-900"
+                      />
+                    )}
+                  </div>
                 </div>
               )}
               {mode === "edit" && (

@@ -1,4 +1,4 @@
-# F7 Overview — Enhancement Plan
+one more is the # F7 Overview — Enhancement Plan
 
 Source: discussion 2026-09-25. F7 = `ingestion/app/frontend/src/screens/Overview.tsx` (230 lines).
 F7 shows *results* (logs, readings, tickets, health) but not the *cadence behind them*.
@@ -483,21 +483,6 @@ the operate-and-consume features, adopted per status. Use according as builds re
   derivedFrom lineage; operations reconcile route (20 ops, 0 failed). Curate
   invalidate cascades world→observation (proven during cleanup).
 - Proof rows cleaned throughout (tickets/readings/memories/state). Baseline restored.
-- Structural gaps closed: ① prefillStreams zod enum (garbage 400s, never silent);
-  ④ orphan Playground.tsx deleted; ② loop_json persisted + drawer Loop decisions
-  section (proven: reading #10 carries its report end to end, incl. list select);
-  ③ tags keyed by stable card id + cardName (recall proxy falls back across
-  id/name eras — 101 legacy hits via fallback); ⑤ prefill- chartKey reserved
-  on manual routes (400).
-- 4b redesigned (Live vs Custom→From-start/Custom-date + 4c stream scope):
-  Live stores "off" (no migration); Custom nests From-start (grounded) + date;
-  prefill_streams columns + inheritance + card override; walker filters to
-  scope∩ticks; F8 out-of-scope state. Proven: 5-min deselected → hourly walked
-  twice, zero base runs; scope restored to all after.
-- F7 live-only (live default + All toggle): runsForLine liveOnly + ?era=live|all
-  (default all) on health/day/readings; F7 sends live, toggle beside Log filters.
-  Proven: last1h 14 live vs 44 all; readings live 0 vs all 1 (prefill-daily
-  excluded); F4/F8 untouched (own defaults/endpoints).
 - Walker reads (same process, one wire): runStep1 + table envelope exported and
   shared; ExtractResult.hadBreach; read rule = coarse always, fine on breach,
   never on unchanged/empty; budget = countLlmCallsToday vs LLM_READS_PER_DAY

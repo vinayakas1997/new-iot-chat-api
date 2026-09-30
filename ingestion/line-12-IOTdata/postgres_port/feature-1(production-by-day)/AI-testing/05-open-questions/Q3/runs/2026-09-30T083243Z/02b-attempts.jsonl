@@ -1,0 +1,1 @@
+{"attempt": 1, "systemRef": "ASK_SYSTEM", "promptChars": 3588, "sqlProposed": "", "validatorVerdict": {"gate": "n/a", "reason": "assistant-answered-without-sql"}, "outcome": "explain"}

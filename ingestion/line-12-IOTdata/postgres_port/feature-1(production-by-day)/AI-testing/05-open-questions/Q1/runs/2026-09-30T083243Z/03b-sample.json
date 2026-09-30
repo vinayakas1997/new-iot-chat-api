@@ -1,0 +1,30 @@
+{
+ "sample": {
+  "columns": [
+   {
+    "name": "kishu_no",
+    "sampleType": "string"
+   },
+   {
+    "name": "total_qty",
+    "sampleType": "string"
+   }
+  ],
+  "rows": [
+   {
+    "kishu_no": "27",
+    "total_qty": "0"
+   },
+   {
+    "kishu_no": "28",
+    "total_qty": "0"
+   },
+   {
+    "kishu_no": "29",
+    "total_qty": "28"
+   }
+  ],
+  "truncatedSample": false
+ },
+ "editorSql": "SELECT kishu_no, SUM(jikanbetsu_seisan::int) AS total_qty\nFROM line12_august.stg_ryohin\nWHERE hiduke >= '2026/08/19 00:00:00' AND hiduke < '2026/08/20 00:00:00'\n  AND chuyakin = '昼勤'\n  AND insert_timing = '時間チェック'\n  AND kishu_no IN ('27', '28', '29')\nGROUP BY kishu_no"
+}

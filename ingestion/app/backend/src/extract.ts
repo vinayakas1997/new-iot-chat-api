@@ -88,11 +88,15 @@ async function llmDraft(
   resolution: string
 ): Promise<{ drafts: DraftFact[] | null; reason: LlmFailReason | "empty-result" | null }> {
   const shown = rows.slice(0, MAX_ROWS_TO_LLM);
+  // #6 table guardrail note: the cap below is stated, never silent.
+  const truncNote = rows.length > MAX_ROWS_TO_LLM
+    ? ` showing first ${MAX_ROWS_TO_LLM} of ${rows.length} — remainder omitted, do not assume completeness`
+    : "";
   const user = [
     `Card: ${card.name} (granularity ${card.granularity}, unit "${card.unit || "none"}", threshold ${card.threshold ?? "none"})`,
     `Extract hint: ${card.extractHint || "(none)"}`,
     `Stream: ${resolution} — ${resolution === "base" ? "finest-resolution samples" : `${resolution} rollup of the base stream (sums for counts, averages otherwise)`}`,
-    `Window: ${w.from} .. ${w.to} (${rows.length} buckets)`,
+    `Window: ${w.from} .. ${w.to} (${rows.length} buckets${truncNote})`,
     `Rows (JSON): ${JSON.stringify(shown)}`,
     `Reply with JSON only: an array of {"content","measure","value","unit","breach"}.`,
     `One fact per bucket, at most ${MAX_FACTS}. content = one short sentence with the value + unit.`,

@@ -98,7 +98,7 @@ function fmtCell(v: unknown): string {
   if (!isNaN(t) && /[T\-:]/.test(String(v))) return formatTimeFull(t);
   return String(v);
 }
-export function ChartPreviewModal({ title, subtitle, items, sample, sampledAt, loadingSample, sampleError, summary, resolution, onResolutionChange, onRefresh, onClose, ai, onResuggest }: {
+export function ChartPreviewModal({ title, subtitle, items, sample, sampledAt, loadingSample, sampleError, summary, resolution, onResolutionChange, onRefresh, onClose, ai, onResuggest, onResuggestOne }: {
   title: string;
   subtitle?: string;
   items: PreviewItem[];
@@ -114,6 +114,8 @@ export function ChartPreviewModal({ title, subtitle, items, sample, sampledAt, l
   /** AI section: omitted (e.g. card viewer) hides it entirely. */
   ai?: AiRunInfo | null;
   onResuggest?: () => void;
+  /** Per-chart regenerate: re-runs suggestion for one item only, others stay put. */
+  onResuggestOne?: (key: string) => void;
 }) {
   const toneCls: Record<string, string> = {
     ok: "bg-state-ok/10 text-state-ok ring-state-ok/30",
@@ -369,6 +371,16 @@ export function ChartPreviewModal({ title, subtitle, items, sample, sampledAt, l
                   ))}
                   <span className="font-semibold">{rt.text}{resSuffix}</span>
                   {metaLine && <span className="tnum text-xs text-slate-400">{metaLine}</span>}
+                  {onResuggestOne && (
+                    <button
+                      onClick={() => onResuggestOne(it.key)}
+                      disabled={ai?.status === "running"}
+                      title="Regenerate only this chart — others stay put"
+                      className="ml-auto inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-accent-500 ring-1 ring-accent-500/30 transition-colors hover:bg-accent-500/10 disabled:opacity-40"
+                    >
+                      <RefreshCw size={11} /> Regenerate
+                    </button>
+                  )}
                 </div>
                 <div className="mt-2">
                   {isTradingEligible(rows, it.xColumn, it.yColumns, it.chartType) ? (

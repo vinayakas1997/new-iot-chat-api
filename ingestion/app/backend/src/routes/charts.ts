@@ -449,7 +449,10 @@ function sanitizeCandidates(
   rows: Record<string, unknown>[],
   granularity: string,
   threshold: number | null,
-  thresholdRows: ThresholdCondition[] = []
+  thresholdRows: ThresholdCondition[] = [],
+  /** #7 human opt-in: a steered table request survives; otherwise AI tables
+   *  beside plottable charts stay suppressed as noise. */
+  allowTable = false
 ): { suggestions: ChartSuggestion[]; dropped: DroppedColumns } {
   const cols = new Set(columns);
   // Verbatim-copy checker: exact match accepts; case-only drift is
@@ -507,9 +510,10 @@ function sanitizeCandidates(
     const y = Array.isArray(cand.yColumns) ? cand.yColumns.map(resolve).filter((v): v is string => v != null) : [];
     const yOk = y.filter((col) => nums.includes(col));
     if (cand.chartType !== "table" && yOk.length === 0) continue;
-    // Fallback-only: a table beside plottable charts is noise. It survives
-    // only when nothing numeric plots (handled by the heuristic path).
-    if (cand.chartType === "table" && nums.length > 0) continue;
+    // Fallback-only unless the human explicitly asked for a table (allowTable):
+    // a table beside plottable charts is noise. It survives only when nothing
+    // numeric plots (handled by the heuristic path) or on explicit opt-in.
+    if (cand.chartType === "table" && nums.length > 0 && !allowTable) continue;
     const yCols = cand.chartType === "table" ? [] : yOk.slice(0, 4);
     if (cand.chartType === "line" || cand.chartType === "area") {
       const key = `trend|${xCol.toLowerCase()}|${[...yCols].sort((a, b) => a.toLowerCase() < b.toLowerCase() ? -1 : 1).join(",").toLowerCase()}`;
@@ -619,6 +623,8 @@ export async function recommendCore(o: {
   semantics: string;
   meanings: ReturnType<typeof listLineColumnMeta>;
   sample: { columns: string[]; rows: Record<string, unknown>[] };
+  /** #7 human opt-in for AI table candidates (steered requests only). */
+  allowTable?: boolean;
 }): Promise<{
   suggestions: ChartSuggestion[];
   model: string | null;
@@ -640,7 +646,7 @@ export async function recommendCore(o: {
   });
   const prompt = { system: CHART_SYSTEM, user };
   const checked = r.parsed
-    ? sanitizeCandidates(toCandidateArray(r.parsed), o.sample.columns, o.sample.rows, o.granularity, o.threshold, rows)
+    ? sanitizeCandidates(toCandidateArray(r.parsed), o.sample.columns, o.sample.rows, o.granularity, o.threshold, rows, o.allowTable ?? false)
     : { suggestions: [], dropped: { invented: [], renamed: [] } };
   const raw = checked.suggestions.length > 0 ? checked.suggestions : fallback;
   const sum = summarizeSample(o.sample.columns, o.sample.rows);
@@ -828,6 +834,7 @@ export async function chartRoutes(app: FastifyInstance) {
         comment: z.string().max(500).default(""),
       })).max(2).default([]),
       referenceLineId: z.string().min(1),
+      steer: z.string().max(2000).default(""),
     }).safeParse(req.body ?? {});
     if (!p.success) return reply.code(400).send({ error: p.error.message });
     const b = p.data;
@@ -835,6 +842,7 @@ export async function chartRoutes(app: FastifyInstance) {
     if (!line) return reply.code(404).send({ error: "line not found" });
     const conn = getConnection(line.connectionId);
     if (!conn) return reply.code(404).send({ error: "connection not found" });
+    const steer = b.steer.trim();
     let sample;
     try {
       sample = await sampleWithFallback(conn, b.sqlTemplate);
@@ -847,7 +855,7 @@ export async function chartRoutes(app: FastifyInstance) {
       b.sqlTemplate,
       { description: b.description, context: "", extractHint: "" },
       meanings,
-    );
+    ) + (steer ? `\nSetter notes (ground truth from the plant — obey over inference): ${steer}` : "");
     const rows = parseThresholds(b.thresholdRows);
     const r = await recommendCore({
       log: app.log,
@@ -860,6 +868,8 @@ export async function chartRoutes(app: FastifyInstance) {
       semantics,
       meanings,
       sample: { columns: sample.columns, rows: sample.rows },
+      // #7: an explicit table ask in steer opts the AI table candidate in.
+      allowTable: /table/i.test(steer),
     });
     return { ...r, stored: false };
   });

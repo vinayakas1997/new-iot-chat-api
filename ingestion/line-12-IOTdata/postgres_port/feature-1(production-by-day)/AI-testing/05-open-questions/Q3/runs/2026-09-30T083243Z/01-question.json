@@ -1,0 +1,9 @@
+{
+ "eval": "Q3-close-rules.json",
+ "question": "Why is there no 12:xx production bucket on 2026-08-04, and which day do night-shift 00:00-11:00 rows belong to?",
+ "window": {
+  "from": "2026-08-04T00:00:00+09:00",
+  "to": "2026-08-05T00:00:00+09:00"
+ },
+ "at": "2026-09-30T083243Z"
+}

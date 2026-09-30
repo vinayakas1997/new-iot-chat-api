@@ -1,0 +1,9 @@
+{
+ "eval": "Q1-rework-0819.json",
+ "question": "How much rework (FD再) was produced on 2026-08-19 day shift, split by model?",
+ "window": {
+  "from": "2026-08-19T00:00:00+09:00",
+  "to": "2026-08-20T00:00:00+09:00"
+ },
+ "at": "2026-09-30T083243Z"
+}

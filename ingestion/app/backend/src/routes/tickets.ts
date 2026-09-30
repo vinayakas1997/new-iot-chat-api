@@ -17,11 +17,15 @@ export async function ticketRoutes(app: FastifyInstance) {
         readingId: z.number().int().positive().optional(),
         runId: z.number().int().positive().optional(),
         title: z.string().max(200).optional(),
+        // Loop-filed questions carry their own evidence as the reason
+        // (Item 7a) and may bypass the reading/run anchor requirement.
+        aiReason: z.string().max(2000).optional(),
+        allowMultiple: z.boolean().default(false),
       })
       .safeParse(req.body);
     if (!p.success) return reply.code(400).send({ error: p.error.message });
-    if (p.data.readingId == null && p.data.runId == null) {
-      return reply.code(400).send({ error: "readingId or runId required — tickets anchor to evidence" });
+    if (p.data.readingId == null && p.data.runId == null && !p.data.allowMultiple) {
+      return reply.code(400).send({ error: "readingId or runId required — tickets anchor to evidence (or pass allowMultiple with aiReason for loop-filed questions)" });
     }
     const r = openTicket(p.data);
     return { id: r.id, deduped: r.deduped, ticket: getTicket(r.id) };

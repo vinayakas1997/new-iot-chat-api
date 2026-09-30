@@ -126,8 +126,7 @@ function measureCols(rows: Record<string, unknown>[], xCol: string | null): stri
 
 export function scanQuirks(
   rows: Record<string, unknown>[],
-): QuirkScan {
-  const cols = Object.keys(rows[0] ?? {});
+): QuirkScan {  const cols = Object.keys(rows[0] ?? {});
   const xCol = cols.find((c) =>
     rows.some((r) => {
       const v = r[c];
@@ -298,4 +297,113 @@ export function scanQuirks(
     // hour; the prompt merges them. No separate pass needed.)
   }
   return { daysAvailable, status: "ok", xColumn: xCol, candidates: candidates.slice(0, 12) };
+}
+
+/**
+ * #5 shared time-column detection: TIME_RE name match, else first column with
+ * date-parseable values in a 5-row probe (covers TEXT timestamps like 日付).
+ */
+export async function findTimeColumn(
+  conn: ConnectionRecord,
+  schema: string,
+  table: string,
+): Promise<string | null> {
+  try {
+    const driver = driverFor(conn);
+    const info = await driver.describeTable(conn, schema, table);
+    const byName = info.columns.find((c) => TIME_RE.test(c.name))?.name;
+    if (byName) return byName;
+    const probe = await driver.sampleRows(conn, schema, table, 5).catch(() => null);
+    const rows = probe?.rows ?? [];
+    return info.columns.find((c) =>
+      rows.some((r) => {
+        const v = r[c.name];
+        return v != null && String(v) !== "" && !isNaN(Date.parse(String(v)));
+      }))?.name ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * #5 spread sample: earliest-5 + latest-5 values per column so growth across
+ * time is visible (a cumulative column looks like "a number" in one spot).
+ * Falls back to null when no time column is detectable — callers keep the
+ * existing single-spot sampleText unchanged.
+ */
+export async function spreadSampleValues(
+  conn: ConnectionRecord,
+  schema: string,
+  table: string,
+  columns: string[],
+): Promise<Map<string, { early: string[]; late: string[] }> | null> {
+  try {
+    const driver = driverFor(conn);
+    const timeCol = await findTimeColumn(conn, schema, table);
+    if (!timeCol) return null;
+    const head = await driver.sampleRows(conn, schema, table, 5).catch(() => null);
+    const tail = await driver.queryReadonly<Record<string, unknown>>(conn,
+      `SELECT * FROM "${schema}"."${table}" ORDER BY "${timeCol}" DESC LIMIT 5`).catch(() => []);
+    if (!head || head.rows.length === 0) return null;
+    const chronoTail = [...tail].reverse();
+    const out = new Map<string, { early: string[]; late: string[] }>();
+    for (const name of columns) {
+      const early = head.rows.map((r) => String(r[name] ?? "")).filter(Boolean).slice(0, 3);
+      const late = chronoTail.map((r) => String(r[name] ?? "")).filter(Boolean).slice(-3);
+      out.set(name, { early, late });
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+/**
+ * #4 table-level quirk feed for llm-fill: strided time-ordered sample of one
+ * raw table → scanQuirks → prompt-ready clause lines (same shape as the
+ * suggest-hints quirkLines). Best-effort: any failure yields no lines and the
+ * caller proceeds without them — labeling must never break on this.
+ */
+export async function tableQuirkLines(
+  conn: ConnectionRecord,
+  schema: string,
+  table: string,
+): Promise<{ daysAvailable: number; lines: string[] }> {
+  const none = { daysAvailable: 0, lines: [] as string[] };
+  try {
+    const driver = driverFor(conn);
+    const info = await driver.describeTable(conn, schema, table);
+    const timeCol = await findTimeColumn(conn, schema, table);
+    if (!timeCol) return none;
+    // Strided slices across the whole table (OFFSET/LIMIT is portable) so the
+    // sample spans many days. One-sided or ends-only LIMITs see < MIN_DAYS on
+    // big tables → permanent "insufficient-data", no verdicts ever.
+    const total = info.rowCount && info.rowCount > 0 ? info.rowCount : 0;
+    const SLICES = 8;
+    const PER = 50;
+    let rows: Record<string, unknown>[] = [];
+    try {
+      if (total > PER) {
+        const step = Math.max(1, Math.floor((total - PER) / SLICES));
+        for (let i = 0; i < SLICES; i++) {
+          const part = await driver.queryReadonly<Record<string, unknown>>(conn,
+            `SELECT * FROM "${schema}"."${table}" ORDER BY "${timeCol}" ASC LIMIT ${PER} OFFSET ${i * step}`);
+          rows.push(...part);
+          if (rows.length >= SLICES * PER) break;
+        }
+      } else {
+        rows = await driver.queryReadonly<Record<string, unknown>>(conn,
+          `SELECT * FROM "${schema}"."${table}" ORDER BY "${timeCol}" ASC LIMIT ${SLICES * PER}`);
+      }
+    } catch {
+      return none;
+    }
+    if (rows.length === 0) return none;
+    const scan = scanQuirks(rows);
+    if (scan.status !== "ok") return { daysAvailable: scan.daysAvailable, lines: [] };
+    const lines = scan.candidates.slice(0, 6).map((q) =>
+      `- [${q.kind}] ${q.column}${q.at ? ` at ${q.at}` : ""}: ${q.detail} → clause: "${q.proposedClause}"`);
+    return { daysAvailable: scan.daysAvailable, lines };
+  } catch {
+    return none;
+  }
 }

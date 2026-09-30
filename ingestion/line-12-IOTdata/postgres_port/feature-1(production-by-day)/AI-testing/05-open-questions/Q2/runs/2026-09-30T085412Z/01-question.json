@@ -1,0 +1,10 @@
+{
+ "eval": "Q2-peak-0804.json",
+ "question": "Which hour produced the most on 2026-08-04 day shift, and what was the day total?",
+ "window": {
+  "from": "2026-08-04T00:00:00+09:00",
+  "to": "2026-08-05T00:00:00+09:00"
+ },
+ "at": "2026-09-30T085412Z",
+ "ask_system": "ask-v3"
+}

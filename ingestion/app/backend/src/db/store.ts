@@ -250,10 +250,6 @@ export function openStore(path: string): Database.Database {
     // 4b scope: prefill stream allow-list (JSON array, NULL = all tick streams).
     if (!cols.includes("prefill_streams")) db.exec(`ALTER TABLE ${t} ADD COLUMN prefill_streams TEXT`);
   }
-  // Gap 2: loop decisions persisted per reading (file/merge/drop/close).
-  if (!(db.prepare("PRAGMA table_info(chart_readings)").all() as { name: string }[]).some((c) => c.name === "loop_json")) {
-    db.exec("ALTER TABLE chart_readings ADD COLUMN loop_json TEXT");
-  }
   // Lightweight migration: production-day time settings. shift_start (HH:MM)
   // anchors shift ticks and daily bucketing; shift_hours sets the shift
   // length. Defaults reproduce the old midnight behavior exactly. Set on the
@@ -393,6 +389,13 @@ export function openStore(path: string): Database.Database {
     );
     CREATE INDEX IF NOT EXISTS idx_readings_line ON chart_readings(line_id, at DESC);
     CREATE INDEX IF NOT EXISTS idx_readings_card ON chart_readings(card_id, at DESC);
+  `);
+  // Gap 2 backfill for pre-loop_json DBs (kept outside the SQL string above —
+  // JS/TS code must never sit inside db.exec, SQLite rejects it).
+  if (!(db.prepare("PRAGMA table_info(chart_readings)").all() as { name: string }[]).some((c) => c.name === "loop_json")) {
+    db.exec("ALTER TABLE chart_readings ADD COLUMN loop_json TEXT");
+  }
+  db.exec(`
     CREATE TABLE IF NOT EXISTS tickets (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       at TEXT NOT NULL,

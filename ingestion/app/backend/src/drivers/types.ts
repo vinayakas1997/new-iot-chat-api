@@ -37,8 +37,28 @@ export interface DbDriver {
 
 const READONLY = /^\s*(select|with|show|describe|desc|explain)\b/i;
 
+/** Strip leading SQL comments so documented templates (-- header lines) pass
+ *  the read-only gate. Only leading comments are removed; inline checks below
+ *  still apply, so a write hidden after comments is still rejected. */
+export function stripLeadingComments(sql: string): string {
+  let s = sql;
+  for (;;) {
+    const line = /^\s*--[^\n]*(\n|$)/.exec(s);
+    if (line) {
+      s = s.slice(line[0].length);
+      continue;
+    }
+    const block = /^\s*\/\*[\s\S]*?\*\//.exec(s);
+    if (block) {
+      s = s.slice(block[0].length);
+      continue;
+    }
+    return s;
+  }
+}
+
 export function assertReadonly(sql: string): void {
-  if (!READONLY.test(sql)) throw new Error("only read-only statements allowed");
+  if (!READONLY.test(stripLeadingComments(sql))) throw new Error("only read-only statements allowed");
   const stripped = sql.replace(/'([^'\\]|\\.)*'/g, "''").replace(/"([^"\\]|\\.)*"/g, '""');
   if (stripped.includes(";")) throw new Error("multi-statement queries are not allowed");
 }

@@ -1,0 +1,113 @@
+{
+ "sample": {
+  "columns": [
+   {
+    "name": "bucket",
+    "sampleType": "datetime"
+   },
+   {
+    "name": "setsubi_unit",
+    "sampleType": "string"
+   },
+   {
+    "name": "setsubi_kiban",
+    "sampleType": "string"
+   },
+   {
+    "name": "seisan_jikantai",
+    "sampleType": "string"
+   },
+   {
+    "name": "total_good_qty",
+    "sampleType": "string"
+   },
+   {
+    "name": "total_target_qty",
+    "sampleType": "string"
+   }
+  ],
+  "rows": [
+   {
+    "bucket": "2026-08-03T15:00:00.000Z",
+    "setsubi_unit": "10-1629",
+    "setsubi_kiban": "AM-307A",
+    "seisan_jikantai": "15:20",
+    "total_good_qty": "89",
+    "total_target_qty": "0"
+   },
+   {
+    "bucket": "2026-08-03T16:00:00.000Z",
+    "setsubi_unit": "10-1629",
+    "setsubi_kiban": "AM-307A",
+    "seisan_jikantai": "16:20",
+    "total_good_qty": "82",
+    "total_target_qty": "0"
+   },
+   {
+    "bucket": "2026-08-03T17:00:00.000Z",
+    "setsubi_unit": "10-1629",
+    "setsubi_kiban": "AM-307A",
+    "seisan_jikantai": "17:20",
+    "total_good_qty": "133",
+    "total_target_qty": "0"
+   },
+   {
+    "bucket": "2026-08-03T18:00:00.000Z",
+    "setsubi_unit": "10-1629",
+    "setsubi_kiban": "AM-307A",
+    "seisan_jikantai": "18:20",
+    "total_good_qty": "7",
+    "total_target_qty": "0"
+   },
+   {
+    "bucket": "2026-08-03T19:00:00.000Z",
+    "setsubi_unit": "10-1629",
+    "setsubi_kiban": "AM-307A",
+    "seisan_jikantai": "19:20",
+    "total_good_qty": "0",
+    "total_target_qty": "0"
+   },
+   {
+    "bucket": "2026-08-03T20:00:00.000Z",
+    "setsubi_unit": "10-1629",
+    "setsubi_kiban": "AM-307A",
+    "seisan_jikantai": "20:20",
+    "total_good_qty": "82",
+    "total_target_qty": "0"
+   },
+   {
+    "bucket": "2026-08-03T21:00:00.000Z",
+    "setsubi_unit": "10-1629",
+    "setsubi_kiban": "AM-307A",
+    "seisan_jikantai": "21:20",
+    "total_good_qty": "180",
+    "total_target_qty": "0"
+   },
+   {
+    "bucket": "2026-08-03T22:00:00.000Z",
+    "setsubi_unit": "10-1629",
+    "setsubi_kiban": "AM-307A",
+    "seisan_jikantai": "22:20",
+    "total_good_qty": "179",
+    "total_target_qty": "0"
+   },
+   {
+    "bucket": "2026-08-03T23:00:00.000Z",
+    "setsubi_unit": "10-1629",
+    "setsubi_kiban": "AM-307A",
+    "seisan_jikantai": "23:20",
+    "total_good_qty": "128",
+    "total_target_qty": "0"
+   },
+   {
+    "bucket": "2026-08-04T01:00:00.000Z",
+    "setsubi_unit": "10-1629",
+    "setsubi_kiban": "AM-307A",
+    "seisan_jikantai": "01:20",
+    "total_good_qty": "125",
+    "total_target_qty": "0"
+   }
+  ],
+  "truncatedSample": true
+ }
+}

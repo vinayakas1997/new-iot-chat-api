@@ -1,0 +1,52 @@
+{
+ "meta": {
+  "days": 31,
+  "rows": 312,
+  "quirks": [
+   "- [counter] 累計: non-decreasing across every shift-day (month-wide running total per shift) → clause: \"累計 is a cumulative counter — report deltas between buckets, never raw levels\"",
+   "- [gap] 時間帯 at 12:xx: missing on all 31 sampled days (lunch 12:00–13:10, 13:10 is post-lunch) → clause: \"ignore the 12:xx single-bucket gap in 時間帯 (scheduled lunch, all days)\"",
+   "- [gap] 時間帯 at 19:20: zero on most sampled days (short close bucket) → clause: \"ignore zero 19:20 buckets in 時間帯 (short close, recurring)\""
+  ],
+  "model": "qwen36-35B"
+ },
+ "BARE": {
+  "hint": "No columns recorded in stg_ryohin so no measure/unit/threshold rules can be derived | Sample covers only 31 production days so no recurring quirks are invented | No setter-note rules apply due to missing column definitions",
+  "context": "hourly production rollup",
+  "score": {
+   "breakdown": {
+    "format": 20,
+    "split": 0,
+    "lunch": 0,
+    "cume": 0,
+    "measure": 0
+   },
+   "total": 20,
+   "detail": {
+    "points": 3,
+    "hint_chars": 222,
+    "ctx_chars": 24
+   }
+  },
+  "raw": "{\"extractHint\":\"No columns recorded in stg_ryohin so no measure/unit/threshold rules can be derived | Sample covers only 31 production days so no recurring quirks are invented | No setter-note rules apply due to missing column definitions\",\"context\":\"hourly production rollup\"}"
+ },
+ "FULL": {
+  "hint": "Aggregate jikanbetsu_seisan as hourly good quantity in pcs with no threshold | Ignore 12:xx time buckets due to scheduled lunch gaps observed in 31 days | Ignore 19:20 zero buckets as recurring short close gaps from 31 days | Report cumulative counter deltas rather than raw levels based on non-decreasing shift-day evidence | Separate new builds (7/8/9) and rework (27/28/29) without summing per setter notes | Exclude rows where insert_timing is not '時間チェック' per ground truth",
+  "context": "hourly good production rollup",
+  "score": {
+   "breakdown": {
+    "format": 20,
+    "split": 25,
+    "lunch": 20,
+    "cume": 15,
+    "measure": 20
+   },
+   "total": 100,
+   "detail": {
+    "points": 6,
+    "hint_chars": 477,
+    "ctx_chars": 29
+   }
+  },
+  "raw": "{\"extractHint\":\"Aggregate jikanbetsu_seisan as hourly good quantity in pcs with no threshold | Ignore 12:xx time buckets due to scheduled lunch gaps observed in 31 days | Ignore 19:20 zero buckets as recurring short close gaps from 31 days | Report cumulative counter deltas rather than raw levels based on non-decreasing shift-day evidence | Separate new builds (7/8/9) and rework (27/28/29) without summing per setter notes | Exclude rows where insert_timing is not '時間チェック' per ground truth\",\"context\":\"hourly good production rollup\"}"
+ }
+}

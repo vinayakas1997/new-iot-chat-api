@@ -1,0 +1,4 @@
+{"at": "2026-09-30T090518Z", "qid": "loop-0-unread-card", "source": "unread-card", "type": "round", "rows": 22, "verdict": "FILE", "action": "filed ticket #1"}
+{"at": "2026-09-30T090550Z", "qid": "loop-0-open-ticket", "source": "open-ticket", "type": "round", "rows": null, "verdict": "FILE (empty-finding)", "action": "closed ticket #1 as resolved"}
+{"at": "2026-09-30T090550Z", "qid": "loop-1-unread-card", "source": "unread-card", "type": "round", "rows": 22, "verdict": "FILE", "action": "filed ticket #2"}
+{"at": "2026-09-30T090744Z", "qid": "loop-0-open-ticket", "source": "open-ticket", "type": "round", "rows": 22, "verdict": "FILE", "action": "closed ticket #2 as resolved"}

@@ -1,0 +1,44 @@
+{
+ "sample": {
+  "columns": [
+   {
+    "name": "seisan_jikantai",
+    "sampleType": "string"
+   }
+  ],
+  "rows": [
+   {
+    "seisan_jikantai": "01:20"
+   },
+   {
+    "seisan_jikantai": "02:20"
+   },
+   {
+    "seisan_jikantai": "03:20"
+   },
+   {
+    "seisan_jikantai": "04:20"
+   },
+   {
+    "seisan_jikantai": "05:20"
+   },
+   {
+    "seisan_jikantai": "06:20"
+   },
+   {
+    "seisan_jikantai": "07:20"
+   },
+   {
+    "seisan_jikantai": "08:20"
+   },
+   {
+    "seisan_jikantai": "09:20"
+   },
+   {
+    "seisan_jikantai": "10:20"
+   }
+  ],
+  "truncatedSample": true
+ },
+ "editorSql": "SELECT DISTINCT seisan_jikantai FROM line12_august.stg_ryohin WHERE hiduke >= '2026/08/04 00:00:00' AND hiduke < '2026/08/05 00:00:00' AND insert_timing = '時間チェック' ORDER BY seisan_jikantai"
+}

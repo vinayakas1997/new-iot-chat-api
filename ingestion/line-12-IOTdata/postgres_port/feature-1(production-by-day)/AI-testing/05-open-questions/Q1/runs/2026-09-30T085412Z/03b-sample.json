@@ -1,0 +1,30 @@
+{
+ "sample": {
+  "columns": [
+   {
+    "name": "model",
+    "sampleType": "string"
+   },
+   {
+    "name": "total_rework_qty",
+    "sampleType": "string"
+   }
+  ],
+  "rows": [
+   {
+    "model": "27",
+    "total_rework_qty": "0"
+   },
+   {
+    "model": "28",
+    "total_rework_qty": "0"
+   },
+   {
+    "model": "29",
+    "total_rework_qty": "28"
+   }
+  ],
+  "truncatedSample": false
+ },
+ "editorSql": "WITH filtered AS (\n  SELECT \n    kishu_no,\n    jikanbetsu_seisan,\n    hiduke\n  FROM line12_august.stg_ryohin\n  WHERE insert_timing = '時間チェック'\n    AND chuyakin = '昼勤'\n    AND to_timestamp(hiduke, 'YYYY/MM/DD HH24:MI:SS') >= '2026-08-19 00:00:00+09:00'\n    AND to_timestamp(hiduke, 'YYYY/MM/DD HH24:MI:SS') < '2026-08-20 00:00:00+09:00'\n    AND kishu_no IN ('27', '28', '29')\n)\nSELECT \n  kishu_no AS model,\n  SUM(jikanbetsu_seisan::int) AS total_rework_qty\nFROM filtered\nGROUP BY kishu_no\nORDER BY kishu_no"
+}

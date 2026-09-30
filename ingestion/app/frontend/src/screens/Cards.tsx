@@ -252,6 +252,7 @@ export function Cards() {
         threshold: validThresholds(tplDraft.thresholds)[0]?.value ?? null,
         thresholdRows: validThresholds(tplDraft.thresholds),
         referenceLineId: ref.id,
+        steer: steerText.trim() || undefined,
       });
       setFormSug(r.suggestions ?? []);
       setFormAi({ status: "done", model: r.model, heuristic: r.heuristic, reason: r.reason, prompt: r.prompt ?? null });
@@ -259,6 +260,48 @@ export function Cards() {
       setFormRes("hourly");
       setFormModalOpen(true);
       await loadFormSample(ref.id, tplDraft.sqlTemplate, "hourly");
+    } catch (e) {
+      setFormSuggestError((e as Error).message);
+      setFormAi({ status: "error", error: (e as Error).message });
+    } finally {
+      setFormSuggestBusy(false);
+    }
+  }
+  /** #3 per-chart regenerate: re-runs recommend with an auto-steer naming only
+   *  this chart, then swaps just that item — all others stay put. */
+  async function onFormResuggestOne(key: string) {
+    const ref = lines.find((l) => l.id === tplPickLine) ?? lines[0];
+    if (!ref || !tplDraft.sqlTemplate.trim() || formSuggestBusy) return;
+    const order = formSug.map((s, i) => ({ s, i })).filter(({ s }) => s.chartType !== "table");
+    const slot = order[Number(key)];
+    if (!slot) return;
+    const cur = slot.s;
+    setFormSuggestBusy(true);
+    setFormSuggestError(null);
+    setFormAi({ status: "running" });
+    try {
+      const auto = `Propose a fresh alternative for the "${cur.title}" chart (${cur.chartType}, x=${cur.xColumn}, y=${cur.yColumns.join(", ")}). It must differ in type or series. Keep it complementary to the other charts.`;
+      const r = await chartApi.recommendDraft({
+        name: tplDraft.name,
+        description: tplDraft.description,
+        sqlTemplate: tplDraft.sqlTemplate,
+        unit: tplDraft.unit,
+        granularity: granularityForStreams(tplDraft.resolutions),
+        threshold: validThresholds(tplDraft.thresholds)[0]?.value ?? null,
+        thresholdRows: validThresholds(tplDraft.thresholds),
+        referenceLineId: ref.id,
+        steer: [steerText.trim(), auto].filter(Boolean).join("\n"),
+      });
+      const sig = (c: ChartSuggestion) => `${c.chartType}|${c.xColumn}|${[...c.yColumns].sort().join(",")}`;
+      const oldSig = sig(cur);
+      const fresh = (r.suggestions ?? []).find((c) => sig(c) !== oldSig);
+      if (!fresh) {
+        setFormSuggestError("Regenerate returned only identical charts — kept the current one. Try adjusting Steer.");
+        setFormAi({ status: "done", model: r.model, heuristic: r.heuristic, reason: r.reason, prompt: r.prompt ?? null });
+        return;
+      }
+      setFormSug((prev) => prev.map((s, i) => (i === slot.i ? { ...fresh } : s)));
+      setFormAi({ status: "done", model: r.model, heuristic: r.heuristic, reason: r.reason, prompt: r.prompt ?? null });
     } catch (e) {
       setFormSuggestError((e as Error).message);
       setFormAi({ status: "error", error: (e as Error).message });
@@ -2039,6 +2082,7 @@ export function Cards() {
           onClose={() => setFormModalOpen(false)}
           ai={formAi}
           onResuggest={() => void onFormSuggest()}
+          onResuggestOne={(key) => void onFormResuggestOne(key)}
         />
       )}
 
@@ -3819,6 +3863,45 @@ function TemplateCharts({ template, onChanged }: { template: CardTemplate; onCha
     if (s.enabled !== false) enabledRank.set(i, enabledRank.size);
   });
   const enabledCount = enabledRank.size;
+  // #9 manual chart builder on templates (same shape as AI suggestions,
+  // source manual). Needs a loaded sample for column names — Preview loads it.
+  const [mOpen, setMOpen] = useState(false);
+  const [mType, setMType] = useState<ChartType>("table");
+  const [mX, setMX] = useState("");
+  const [mY, setMY] = useState<string[]>([]);
+  const [mTitle, setMTitle] = useState("");
+  const [mBusy, setMBusy] = useState(false);
+  const sampleCols = sample?.columns ?? [];
+  async function onManualAdd() {
+    if (!mX || mBusy) return;
+    if (mType !== "table" && mY.length === 0) {
+      setError("Pick at least one Y column for non-table charts.");
+      return;
+    }
+    setMBusy(true);
+    setError(null);
+    try {
+      const spec = {
+        chartType: mType,
+        xColumn: mX,
+        yColumns: mType === "table" ? [] : mY,
+        title: mTitle.trim() || `${mX} ${mType}`,
+        rationale: "Added manually on the template.",
+        conditions: "",
+        enabled: true,
+      };
+      await cardApi.updateTemplate(template.id, { chartSuggestions: [...sug, spec] });
+      setMOpen(false);
+      setMX("");
+      setMY([]);
+      setMTitle("");
+      onChanged();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setMBusy(false);
+    }
+  }
 
   return (
     <div className="mt-3 rounded-lg border border-slate-200 p-3 dark:border-ink-800">
@@ -3853,8 +3936,45 @@ function TemplateCharts({ template, onChanged }: { template: CardTemplate; onCha
           <Btn size="sm" icon={Sparkles} onClick={() => void onRecommend()} loading={busy} disabled={busy} title={template.referenceLineId ? "Recommend once from the reference line's data. Stores ranked candidates on this feature." : "Set a reference line first — recommendations run on its data."} className="glass-pill glass-pill--neutral">
             {sug.length > 0 ? "Re-recommend" : "Recommend charts"}
           </Btn>
+          <Btn size="sm" onClick={() => setMOpen((v) => !v)} title="Hand-add one chart spec (type + axes) — saved alongside AI suggestions" className="glass-pill glass-pill--neutral">
+            {mOpen ? "Close manual add" : "Add chart manually"}
+          </Btn>
         </div>
       </div>
+      {mOpen && (
+        <div className="mt-2 rounded-lg border border-slate-200 p-2.5 text-sm dark:border-ink-800">
+          {sampleCols.length === 0 ? (
+            <div className="text-xs text-slate-400">Load a sample first (Preview charts) so column names appear below.</div>
+          ) : (
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="text-xs text-slate-400">Type
+                <select value={mType} onChange={(e) => setMType(e.target.value as ChartType)} className={`${inp} ml-1`}>
+                  {(["table", "line", "bar", "area", "histogram"] as const).map((t) => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </label>
+              <label className="text-xs text-slate-400">X axis
+                <select value={mX} onChange={(e) => setMX(e.target.value)} className={`${inp} ml-1`}>
+                  <option value="">— select —</option>
+                  {sampleCols.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </label>
+              {mType !== "table" && (
+                <span className="text-xs text-slate-400">Y series (click to toggle):
+                  <span className="ml-1 inline-flex flex-wrap gap-1">
+                    {sampleCols.map((c) => (
+                      <button key={c} type="button" onClick={() => setMY((p) => p.includes(c) ? p.filter((x) => x !== c) : [...p, c])} className={`rounded-full px-2 py-0.5 ring-1 ${mY.includes(c) ? "bg-accent-500/10 text-accent-500 ring-accent-500/30" : "text-slate-400 ring-slate-300 dark:ring-ink-700"}`}>{c}</button>
+                    ))}
+                  </span>
+                </span>
+              )}
+              <label className="text-xs text-slate-400">Title
+                <input value={mTitle} onChange={(e) => setMTitle(e.target.value)} placeholder="e.g. FD split table" className={`${inp} ml-1 w-44`} />
+              </label>
+              <Btn size="sm" onClick={() => void onManualAdd()} loading={mBusy} disabled={mBusy || !mX} className="glass-pill glass-pill--blue">Save chart</Btn>
+            </div>
+          )}
+        </div>
+      )}
       {error && <div className="mt-2 text-xs text-state-bad">{error}</div>}
       {!template.referenceLineId && sug.length === 0 && (
         <div className="mt-1 text-xs text-slate-400">Set a reference line on this feature first — recommendations run once on its sample rows.</div>

@@ -73,6 +73,23 @@ export function skipSummary(schedule: SkipSchedule | undefined): string {
 
 export const RESOLUTION_ORDER: StreamResolution[] = ["5min", "hourly", "daily", "weekly", "monthly"];
 
+/**
+ * #6 table row guardrail for LLM feeds: tables (unlike charts) carry exact
+ * values per row, so an uncapped month table would blow context. Latest N
+ * rows win (recency first); callers state the truncation in the prompt so the
+ * model knows the view is partial, never complete.
+ */
+export const TABLE_FEED_MAX_ROWS = 50;
+
+export function capTableRows<T>(rows: T[], max = TABLE_FEED_MAX_ROWS): {
+  rows: T[];
+  total: number;
+  truncated: boolean;
+} {
+  if (rows.length <= max) return { rows, total: rows.length, truncated: false };
+  return { rows: rows.slice(-max), total: rows.length, truncated: true };
+}
+
 /** Finest checked stream = base sampler (plant queries). */
 export function finestOf(resolutions: StreamResolution[]): StreamResolution {
   for (const r of RESOLUTION_ORDER) {
