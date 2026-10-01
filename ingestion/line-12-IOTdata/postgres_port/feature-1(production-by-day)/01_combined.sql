@@ -8,6 +8,8 @@
 --   FD31 new  = work_no  9,  FD31(再) rework = work_no 29   (CT = 18 for all six)
 --   other work_no (***, CT 0) contribute to 時間当 only (always 0 in August).
 -- Filter: insert_timing = '時間チェック'  <=>  Hour_Check IN (1,2,3).
+-- PLUS nonzero 生産数リセット/直始め rows with real bucket stamps (Word
+-- includes them, e.g. 2026-08-04 08:55:44 reset 22pcs in 09:20: 22+28=50).
 -- 日付 rolls over midnight for 夜勤 (slot_ts = 勤務日付軸+1 day for 00:xx-11:xx night slots).
 
 DROP FUNCTION IF EXISTS line12_august.qgn_daily_combined(DATE, TEXT);
@@ -52,7 +54,9 @@ LANGUAGE sql STABLE AS $$
      AND w.begin_date <= p_date
      AND w.end_date >= p_date
     WHERE t.ab_section_day = p_date
-      AND t.hour_check_text = '時間チェック'
+      AND (t.hour_check_text = '時間チェック'
+           OR (t.hour_check_text IN ('生産数リセット', '直始め')
+               AND t.work_qty_h <> 0))
       AND (p_shift IS NULL OR t.shift_type = p_shift)
   ),
   per_slot AS (

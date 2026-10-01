@@ -1,0 +1,52 @@
+{
+ "candidates": [
+  {
+   "chartType": "line",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "時間当"
+   ],
+   "title": "Hourly output peaks 13:10 at 277 pcs",
+   "rationale": "trend over shift-day 09:20–19:20; peak 13:10 = 277, the day max; time_span from profile confirms 10 hourly buckets",
+   "conditions": "when trend reading matters"
+  },
+  {
+   "chartType": "bar",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "FD03[7]",
+    "FD32[8]",
+    "FD31[9]"
+   ],
+   "title": "Model split shows FD32[8] dominance at 13:10",
+   "rationale": "splits by model for new builds; FD32[8] reaches 137 pcs at 13:10, the highest single-model value; FD03(再) and FD32(再) are 0 across all rows, so rework bars are omitted",
+   "conditions": "when split reading matters"
+  },
+  {
+   "chartType": "table",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "時間当",
+    "累計",
+    "FD03[7]",
+    "FD32[8]",
+    "FD31[9]",
+    "正味時間秒"
+   ],
+   "title": "Hourly breakdown with key measures",
+   "rationale": "exact values for time当, cumulative, model split, and net seconds; target数 is constant 0 and omitted from chart",
+   "conditions": "when exact values matter"
+  }
+ ],
+ "questions": [
+  {
+   "id": "q1",
+   "q": "Why does output drop from 277 pcs at 13:10 to 163 pcs at 14:10?",
+   "why": "mid-shift dip after peak is unclosable from this set — needs downtime or changeover cause",
+   "window": "2026-08-28 13:10–14:10",
+   "grain": "hourly",
+   "source": "stg_seisan_jisseki",
+   "status": "open"
+  }
+ ]
+}

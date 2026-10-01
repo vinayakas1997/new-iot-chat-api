@@ -1,0 +1,49 @@
+{
+ "candidates": [
+  {
+   "chartType": "line",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "時間当"
+   ],
+   "title": "Hourly output peaks 11:20 at 184 pcs with a midday dip at 13:10",
+   "rationale": "Trend of hourly good production (時間当) over the shift-day 09:20–19:20; the peak is 184 pcs at 11:20, followed by a drop to 126 pcs at 13:10 after the lunch gap.",
+   "conditions": "when trend reading matters"
+  },
+  {
+   "chartType": "bar",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "FD32[8]",
+    "FD31[9]"
+   ],
+   "title": "New builds split: FD32 and FD31 dominate output with no rework",
+   "rationale": "Bar split of new builds (FD32[8], FD31[9]) per time-slot; FD32[8] ranges 16–112 and FD31[9] ranges 0–80, while all rework columns (FD03(再)[27], FD32(再)[28], FD31(再)[29]) are constant 0.",
+   "conditions": "when split reading matters"
+  },
+  {
+   "chartType": "table",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "時間当",
+    "累計",
+    "FD32[8]",
+    "FD31[9]"
+   ],
+   "title": "Hourly output, cumulative total, and new build split by slot",
+   "rationale": "Exact values for hourly output (時間当), running total (累計), and the active new build models (FD32[8], FD31[9]) across the 10 time-slots; constant columns (目標数, rework) omitted.",
+   "conditions": "when exact values matter"
+  }
+ ],
+ "questions": [
+  {
+   "id": "q1",
+   "q": "Why does output dip to 126 pcs at 13:10 after the 11:20 peak of 184 pcs?",
+   "why": "The midday dip is unclosable from this set as it follows a lunch gap; needs downtime or staffing cause.",
+   "window": "2026-08-24 11:20–13:10",
+   "grain": "hourly",
+   "source": "stg_seisan_jisseki",
+   "status": "open"
+  }
+ ]
+}

@@ -1,0 +1,49 @@
+{
+ "candidates": [
+  {
+   "chartType": "line",
+   "xColumn": "日付",
+   "yColumns": [
+    "day_total"
+   ],
+   "title": "August day-shift output peaks 1581 pcs on 2026-08-28",
+   "rationale": "Line chart shows daily trend over shift-days 2026-08-01 to 2026-08-31. The day_total column (good pcs) reveals a clear ramp-up from 711 pcs on 08-03 to a peak of 1581 pcs on 08-28, with multiple zero-days (Obon/holidays) visible as flat segments at the baseline.",
+   "conditions": "when trend reading matters"
+  },
+  {
+   "chartType": "bar",
+   "xColumn": "日付",
+   "yColumns": [
+    "new_total",
+    "rework_total"
+   ],
+   "title": "August day-shift new vs rework split dominated by new builds",
+   "rationale": "Bar chart shows the split between new_total and rework_total per day. The data profile confirms rework_total is negligible (max 28 pcs on 08-19, avg 0.9), while new_total accounts for nearly all output (avg 645.2 vs 0.9), making this a closed pattern of pure new-build production.",
+   "conditions": "when split reading matters"
+  },
+  {
+   "chartType": "table",
+   "xColumn": "日付",
+   "yColumns": [
+    "day_total",
+    "new_total",
+    "rework_total",
+    "net_sec_total"
+   ],
+   "title": "August day-shift daily rollup with exact values",
+   "rationale": "Table provides exact values for day_total, new_total, rework_total, and net_sec_total for all 31 rows. This is necessary because the target_total is constant zero (no baseline), and exact values are required to verify the negligible rework and net seconds per day.",
+   "conditions": "when exact values matter"
+  }
+ ],
+ "questions": [
+  {
+   "id": "q1",
+   "q": "Why does output drop to 30 pcs on 2026-08-22 after a ramp to 1502 pcs on 08-21?",
+   "why": "Unexplained sharp dip with no stated gap (Obon/holidays) behind it; needs downtime cause.",
+   "window": "2026-08-21 to 2026-08-22",
+   "grain": "daily",
+   "source": "stg_seisan_jisseki",
+   "status": "open"
+  }
+ ]
+}

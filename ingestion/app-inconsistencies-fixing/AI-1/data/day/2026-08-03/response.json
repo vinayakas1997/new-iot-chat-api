@@ -1,0 +1,53 @@
+{
+ "candidates": [
+  {
+   "chartType": "line",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "時間当"
+   ],
+   "title": "Hourly output peaks 10:20 at 130 pcs, dips 14:10 to 12 pcs",
+   "rationale": "Line chart shows trend over shift-day 09:20–19:20; peak 10:20 = 130 pcs, day max; low 14:10 = 12 pcs, the day min. Target 0 constant: no chart, noted in rationale.",
+   "conditions": "when trend reading matters"
+  },
+  {
+   "chartType": "bar",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "FD03[7]",
+    "FD32[8]",
+    "FD31[9]",
+    "FD03(再)[27]",
+    "FD32(再)[28]",
+    "FD31(再)[29]"
+   ],
+   "title": "Model split: FD31[9] dominates all slots; FD03[7] appears only at 10:20",
+   "rationale": "Bar chart shows split by model per slot; FD31[9] accounts for all output (e.g., 130 pcs at 10:20, 113 at 11:20); FD03[7] = 32 pcs at 10:20, zero elsewhere. FD32[8] and all rework columns are zero across all rows.",
+   "conditions": "when split reading matters"
+  },
+  {
+   "chartType": "table",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "時間当",
+    "累計",
+    "FD03[7]",
+    "FD31[9]"
+   ],
+   "title": "Hourly output and cumulative totals with model split",
+   "rationale": "Table provides exact values for hourly output, running total, and model split; FD31[9] = 130 at 10:20, FD03[7] = 32 at 10:20, all other FD03[7] = 0.",
+   "conditions": "when exact values matter"
+  }
+ ],
+ "questions": [
+  {
+   "id": "q1",
+   "q": "Why does output drop to 12 pcs at 14:10 after 90 pcs at 13:10?",
+   "why": "Mid-shift dip unexplained by lunch gap (ends 13:10) or model split (FD31[9] still available); needs downtime cause.",
+   "window": "2026-08-03 13:10–14:10",
+   "grain": "hourly",
+   "source": "stg_seisan_jisseki",
+   "status": "open"
+  }
+ ]
+}

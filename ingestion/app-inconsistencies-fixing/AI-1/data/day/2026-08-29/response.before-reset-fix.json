@@ -1,0 +1,54 @@
+{
+ "candidates": [
+  {
+   "chartType": "line",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "時間当"
+   ],
+   "title": "Hourly output peaks 16:20 at 184 pcs with midday gap",
+   "rationale": "trend over shift-day 07:20–19:20; peak 16:20 = 184, the day max; 11:20–13:10 gap reflects lunch break with 0 pcs",
+   "conditions": "when trend reading matters"
+  },
+  {
+   "chartType": "bar",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "FD03[7]",
+    "FD32[8]",
+    "FD31[9]",
+    "FD03(再)[27]",
+    "FD32(再)[28]",
+    "FD31(再)[29]"
+   ],
+   "title": "Model split shows FD31[9] dominance with no rework",
+   "rationale": "split by model; FD31[9] accounts for all output (max 171 pcs at 10:20); FD03[7] and FD32[8] appear only at 15:20–16:20; rework columns are all 0",
+   "conditions": "when split reading matters"
+  },
+  {
+   "chartType": "table",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "時間当",
+    "累計",
+    "FD03[7]",
+    "FD31[9]",
+    "正味時間秒"
+   ],
+   "title": "Hourly production and model split with net seconds",
+   "rationale": "key columns for exact values: 時間当 (hourly pcs), 累計 (running total), FD03[7]/FD31[9] (new builds), 正味時間秒 (effort); target 0 constant omitted from chart",
+   "conditions": "when exact values matter"
+  }
+ ],
+ "questions": [
+  {
+   "id": "q1",
+   "q": "Why does output drop to 0 pcs at 11:20–13:10?",
+   "why": "midday gap unclosable from this set — needs downtime cause",
+   "window": "2026-08-29 11:20–13:10",
+   "grain": "hourly",
+   "source": "stg_seisan_jisseki",
+   "status": "open"
+  }
+ ]
+}

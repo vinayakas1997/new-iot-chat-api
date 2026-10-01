@@ -1,0 +1,51 @@
+{
+ "candidates": [
+  {
+   "chartType": "line",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "時間当"
+   ],
+   "title": "Hourly output peaks 11:20 at 184 pcs",
+   "rationale": "Line chart shows trend over shift-day 09:20–19:20; peak 11:20 = 184 pcs, the day max, with a midday dip at 17:20 to 56 pcs.",
+   "conditions": "when trend reading matters"
+  },
+  {
+   "chartType": "bar",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "FD03[7]",
+    "FD32[8]",
+    "FD31[9]"
+   ],
+   "title": "Model split: FD32[8] dominates new builds",
+   "rationale": "Bar chart shows split by model; FD32[8] ranges 16–112 pcs, FD31[9] ranges 0–80 pcs, FD03[7] ranges 0–32 pcs; no rework (FD(再) columns are all 0).",
+   "conditions": "when split reading matters"
+  },
+  {
+   "chartType": "table",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "時間当",
+    "累計",
+    "FD03[7]",
+    "FD32[8]",
+    "FD31[9]"
+   ],
+   "title": "Hourly production and model split",
+   "rationale": "Table provides exact values for hourly output, cumulative total, and model split; target is constant 0 and omitted from charts.",
+   "conditions": "when exact values matter"
+  }
+ ],
+ "questions": [
+  {
+   "id": "q1",
+   "q": "Why does output dip to 56 pcs at 17:20 after 169 pcs at 15:20?",
+   "why": "Mid-afternoon dip unexplained by calendar gaps (no lunch/downtime noted); needs cause.",
+   "window": "2026-08-24 15:20–17:20",
+   "grain": "hourly",
+   "source": "stg_seisan_jisseki",
+   "status": "open"
+  }
+ ]
+}

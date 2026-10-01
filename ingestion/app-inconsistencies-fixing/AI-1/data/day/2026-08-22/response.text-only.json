@@ -1,0 +1,48 @@
+{
+ "candidates": [
+  {
+   "chartType": "line",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "時間当"
+   ],
+   "title": "Hourly output concentrated at 13:20 with 30 pcs; rest zero",
+   "rationale": "Trend over shift-day 09:20–19:20 using 時間当 (hourly good qty). The data shows a single active bucket at 13:20 with 30 pcs, while all other 9 buckets are 0, indicating a highly concentrated production event.",
+   "conditions": "when trend reading matters"
+  },
+  {
+   "chartType": "bar",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "FD31[9]"
+   ],
+   "title": "FD31 new builds account for all 30 pcs at 13:20",
+   "rationale": "Split view using FD31[9] (new builds per model). Only the 13:20 bucket has value (30), while FD03[7], FD32[8], and all rework columns are 0 across the entire set, isolating the source of production.",
+   "conditions": "when split reading matters"
+  },
+  {
+   "chartType": "table",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "時間当",
+    "累計",
+    "FD31[9]",
+    "正味時間秒"
+   ],
+   "title": "Exact hourly values for Line-12 day-shift",
+   "rationale": "Key columns only: 時間当 (output), 累計 (running total), FD31[9] (source), and 正味時間秒 (effort). This table captures the single non-zero event and the zero baseline for all other slots.",
+   "conditions": "when exact values matter"
+  }
+ ],
+ "questions": [
+  {
+   "id": "q1",
+   "q": "Why did production remain at zero for 9 out of 10 hourly buckets?",
+   "why": "The cause of the 9-hour downtime or lack of work is not visible in this output set.",
+   "window": "2026-08-22 09:20–19:20",
+   "grain": "hourly",
+   "source": "stg_seisan_jisseki",
+   "status": "open"
+  }
+ ]
+}

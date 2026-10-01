@@ -1,0 +1,49 @@
+{
+ "candidates": [
+  {
+   "chartType": "line",
+   "xColumn": "日付",
+   "yColumns": [
+    "day_total"
+   ],
+   "title": "August day-shift output peaks 1581 pcs on 2026-08-28",
+   "rationale": "trend over shift-day 2026-08-01 to 2026-08-31; day_total ranges 0–1581 with the day max at 1581 pcs on 2026-08-28; zero-days (Obon, weekends) visible as flat segments",
+   "conditions": "when trend reading matters"
+  },
+  {
+   "chartType": "bar",
+   "xColumn": "日付",
+   "yColumns": [
+    "new_total",
+    "rework_total"
+   ],
+   "title": "new builds dominate day-shift; rework at most 28 pcs on 2026-08-17",
+   "rationale": "split by day; new_total max 1581 pcs, rework_total max 28 pcs on 2026-08-17; zero rework on most days visible",
+   "conditions": "when split reading matters"
+  },
+  {
+   "chartType": "table",
+   "xColumn": "日付",
+   "yColumns": [
+    "day_total",
+    "new_total",
+    "rework_total",
+    "net_sec_total"
+   ],
+   "title": "August day-shift daily rollup with net seconds",
+   "rationale": "exact values for day_total, new_total, rework_total, net_sec_total across all 31 rows; target_total constant 0 noted in rationale",
+   "conditions": "when exact values matter"
+  }
+ ],
+ "questions": [
+  {
+   "id": "q1",
+   "q": "Why does output drop to zero on multiple days (Obon, weekends) and how do those gaps affect the monthly average?",
+   "why": "period gaps unclosable from this set — needs calendar/shift schedule; window 2026-08-01 to 2026-08-31; grain daily; source stg_seisan_jisseki; status open",
+   "window": "2026-08-01 to 2026-08-31",
+   "grain": "daily",
+   "source": "stg_seisan_jisseki",
+   "status": "open"
+  }
+ ]
+}

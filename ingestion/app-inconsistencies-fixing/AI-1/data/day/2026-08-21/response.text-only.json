@@ -1,0 +1,49 @@
+{
+ "candidates": [
+  {
+   "chartType": "line",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "時間当"
+   ],
+   "title": "Hourly output peaks 10:20 at 167 pcs with midday dip at 13:10",
+   "rationale": "Trend over shift-day 09:20–19:20 using 時間当 (hourly good qty); peak 10:20 = 167, lowest 13:10 = 135, showing a midday dip after the morning high.",
+   "conditions": "when trend reading matters"
+  },
+  {
+   "chartType": "bar",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "FD32[8]",
+    "FD31[9]"
+   ],
+   "title": "New builds split: FD32 dominates output across all slots",
+   "rationale": "Split comparison using FD32[8] and FD31[9] (new builds per model); FD32[8] ranges 52–135, FD31[9] ranges 32–64, showing FD32 consistently higher than FD31 in every bucket.",
+   "conditions": "when split reading matters"
+  },
+  {
+   "chartType": "table",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "時間当",
+    "累計",
+    "FD32[8]",
+    "FD31[9]"
+   ],
+   "title": "Hourly metrics and model split",
+   "rationale": "Exact values for 時間当, 累計, and model split columns; necessary when precise counts are required rather than visual trends.",
+   "conditions": "when exact values matter"
+  }
+ ],
+ "questions": [
+  {
+   "id": "q1",
+   "q": "Why does output dip to 135 pcs at 13:10 after 161 pcs at 11:20?",
+   "why": "Midday dip unclosable from this set — needs downtime cause or break schedule details",
+   "window": "2026-08-21 11:20–13:10",
+   "grain": "hourly",
+   "source": "stg_seisan_jisseki",
+   "status": "open"
+  }
+ ]
+}

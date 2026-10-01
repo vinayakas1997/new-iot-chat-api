@@ -1,0 +1,50 @@
+{
+ "candidates": [
+  {
+   "chartType": "line",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "時間当"
+   ],
+   "title": "Hourly output peaks 10:20 at 163 pcs with midday dip",
+   "rationale": "Trend over shift-day 09:20–19:20 using 時間当 (hourly good qty). The chart shows a peak of 163 pcs at 10:20, a sharp drop to 56 pcs at 13:10, and recovery to 141 pcs at 14:10. The 12:xx bucket is omitted as per data profile.",
+   "conditions": "when trend reading matters"
+  },
+  {
+   "chartType": "bar",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "FD03[7]",
+    "FD31[9]"
+   ],
+   "title": "New builds split: FD31 dominates output with zero rework",
+   "rationale": "Bar chart showing split of new builds per model (FD03[7] and FD31[9]) against hourly buckets. FD31[9] ranges from 56 to 141 pcs, while FD03[7] drops to 0 after 10:20. All rework columns (FD03(再)[27], FD32(再)[28], FD31(再)[29]) are constant 0, so they are excluded from the chart and noted in the rationale.",
+   "conditions": "when split reading matters"
+  },
+  {
+   "chartType": "table",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "時間当",
+    "累計",
+    "FD03[7]",
+    "FD31[9]",
+    "正味時間秒"
+   ],
+   "title": "Hourly production details and net seconds",
+   "rationale": "Table providing exact values for hourly output, running total, new build split, and net seconds. This is the only candidate when exact values are required, as the trend and split charts abstract these details.",
+   "conditions": "when exact values matter"
+  }
+ ],
+ "questions": [
+  {
+   "id": "q1",
+   "q": "Why does output drop to 56 pcs at 13:10 after 112 pcs at 11:20?",
+   "why": "Midday dip cause is unclosable from this set; needs downtime or break data.",
+   "window": "2026-08-07 11:20–13:10",
+   "grain": "hourly",
+   "source": "stg_seisan_jisseki",
+   "status": "open"
+  }
+ ]
+}

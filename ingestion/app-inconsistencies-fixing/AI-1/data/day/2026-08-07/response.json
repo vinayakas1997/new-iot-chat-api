@@ -1,0 +1,53 @@
+{
+ "candidates": [
+  {
+   "chartType": "line",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "時間当"
+   ],
+   "title": "Hourly output peaks 10:20 at 163 pcs, drops to 56 at 13:10",
+   "rationale": "trend over shift-day 09:20–19:20; peak 10:20 = 163, the day max; 13:10 dip to 56 follows the 12:00–13:10 lunch gap",
+   "conditions": "when trend reading matters"
+  },
+  {
+   "chartType": "bar",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "FD03[7]",
+    "FD32[8]",
+    "FD31[9]",
+    "FD03(再)[27]",
+    "FD32(再)[28]",
+    "FD31(再)[29]"
+   ],
+   "title": "Model split shows FD31[9] dominates new builds; rework is zero",
+   "rationale": "splits by model across hourly buckets; FD31[9] reaches 141 at 14:10 and 135 at 15:20; all rework columns (FD03(再)[27], FD32(再)[28], FD31(再)[29]) are 0",
+   "conditions": "when split reading matters"
+  },
+  {
+   "chartType": "table",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "時間当",
+    "累計",
+    "FD03[7]",
+    "FD31[9]"
+   ],
+   "title": "Hourly output, cumulative, and new-build split by model",
+   "rationale": "exact values for 時間当, 累計, and model split (FD03[7], FD31[9]); target is constant 0 and omitted from charts",
+   "conditions": "when exact values matter"
+  }
+ ],
+ "questions": [
+  {
+   "id": "q1",
+   "q": "Why does output fall from 112 at 11:20 to 56 at 13:10 despite no downtime gap between them?",
+   "why": "mid-shift dip after lunch gap is unexplained by calendar alone",
+   "window": "2026-08-07 11:20–13:10",
+   "grain": "hourly",
+   "source": "stg_seisan_jisseki",
+   "status": "open"
+  }
+ ]
+}

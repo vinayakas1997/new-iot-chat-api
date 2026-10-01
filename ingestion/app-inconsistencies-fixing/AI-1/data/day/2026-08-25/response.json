@@ -1,0 +1,49 @@
+{
+ "candidates": [
+  {
+   "chartType": "line",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "時間当"
+   ],
+   "title": "Hourly output peaks 13:10 at 266 pcs",
+   "rationale": "trend over shift-day 09:20–19:20; peak 13:10 = 266, the day max; target 0 constant: no chart, noted in rationale",
+   "conditions": "when trend reading matters"
+  },
+  {
+   "chartType": "bar",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "FD32[8]",
+    "FD31[9]"
+   ],
+   "title": "Model split: FD32[8] and FD31[9] drive output",
+   "rationale": "splits by model; FD32[8] max 171 at 13:10, FD31[9] max 95 at 13:10; rework columns FD(再) are all 0: no chart, noted in rationale",
+   "conditions": "when split reading matters"
+  },
+  {
+   "chartType": "table",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "時間当",
+    "累計",
+    "FD32[8]",
+    "FD31[9]"
+   ],
+   "title": "Hourly output, cumulative, and model split",
+   "rationale": "exact values for 時間当, 累計, FD32[8], FD31[9]; target 0 and all rework 0 omitted as constant",
+   "conditions": "when exact values matter"
+  }
+ ],
+ "questions": [
+  {
+   "id": "q1",
+   "q": "Why does output dip to 112 pcs at 16:20 after 168 at 15:20?",
+   "why": "mid-shift dip unclosable from this set — needs downtime cause",
+   "window": "2026-08-25 15:20–16:20",
+   "grain": "hourly",
+   "source": "stg_seisan_jisseki",
+   "status": "open"
+  }
+ ]
+}

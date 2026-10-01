@@ -1,0 +1,58 @@
+{
+ "candidates": [
+  {
+   "chartType": "line",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "時間当"
+   ],
+   "title": "Hourly output peaks 17:20 at 160 pcs",
+   "rationale": "trend over shift-day 09:20–19:20; peak 17:20 = 160, the day max; target 0 is constant and excluded from chart",
+   "conditions": "when trend reading matters"
+  },
+  {
+   "chartType": "bar",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "FD32[8]",
+    "FD31[9]"
+   ],
+   "title": "FD32 dominates new builds; FD31(再) absent",
+   "rationale": "split by model shows FD32[8] (orange) as primary volume (max 123 pcs) and FD31[9] (green) as secondary; all rework columns FD03(再)[27], FD32(再)[28], FD31(再)[29] are zero across the set",
+   "conditions": "when split reading matters"
+  },
+  {
+   "chartType": "table",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "時間当",
+    "累計",
+    "FD32[8]",
+    "FD31[9]"
+   ],
+   "title": "Hourly output and cumulative totals by slot",
+   "rationale": "exact values for 時間当, 累計, and active model splits (FD32[8], FD31[9]); constant target 0 and zero rework columns omitted from table",
+   "conditions": "when exact values matter"
+  }
+ ],
+ "questions": [
+  {
+   "id": "q1",
+   "q": "Why does output dip to 117 pcs at 11:20 after 153 at 10:20?",
+   "why": "mid-shift dip unexplained by gaps (no lunch gap here) or model mix (FD32/31 present both slots)",
+   "window": "2026-08-18 10:20–11:20",
+   "grain": "hourly",
+   "source": "stg_seisan_jisseki",
+   "status": "open"
+  },
+  {
+   "id": "q2",
+   "q": "Why does output fall to 88 pcs at 19:20 after 141 at 18:20?",
+   "why": "end-of-shift decline without a stated closing event or gap in this set",
+   "window": "2026-08-18 18:20–19:20",
+   "grain": "hourly",
+   "source": "stg_seisan_jisseki",
+   "status": "open"
+  }
+ ]
+}

@@ -1,0 +1,50 @@
+{
+ "candidates": [
+  {
+   "chartType": "line",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "時間当"
+   ],
+   "title": "Hourly output peaks 14:10 at 170 pcs with a midday dip at 13:10",
+   "rationale": "Trend of hourly good production (時間当) over the shift-day 09:20–19:20; the peak is 170 pcs at 14:10, the day max, following a dip to 115 pcs at 13:10 after 122 pcs at 11:20.",
+   "conditions": "when trend reading matters"
+  },
+  {
+   "chartType": "bar",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "FD32[8]",
+    "FD31[9]"
+   ],
+   "title": "New build split dominated by FD32[8] with FD31[9] as secondary",
+   "rationale": "Bar split of new builds (FD32[8] and FD31[9]) per time-slot; FD32[8] ranges 31–105 pcs while FD31[9] ranges 15–63 pcs, showing FD32[8] as the primary volume driver across all 10 buckets.",
+   "conditions": "when split reading matters"
+  },
+  {
+   "chartType": "table",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "時間当",
+    "累計",
+    "FD32[8]",
+    "FD31[9]",
+    "FD31(再)[29]"
+   ],
+   "title": "Hourly production and build split exact values",
+   "rationale": "Key columns (時間当, 累計, FD32[8], FD31[9], FD31(再)[29]) provide exact values for output, cumulative progress, and the active new/rework split; constant columns (目標数, FD03[7], FD03(再)[27], FD32(再)[28]) omitted as they are zero.",
+   "conditions": "when exact values matter"
+  }
+ ],
+ "questions": [
+  {
+   "id": "q1",
+   "q": "Why does output dip to 115 pcs at 13:10 after 122 pcs at 11:20?",
+   "why": "Midday dip unclosable from this set — needs downtime cause",
+   "window": "2026-08-19 11:20–13:10",
+   "grain": "hourly",
+   "source": "stg_seisan_jisseki",
+   "status": "open"
+  }
+ ]
+}

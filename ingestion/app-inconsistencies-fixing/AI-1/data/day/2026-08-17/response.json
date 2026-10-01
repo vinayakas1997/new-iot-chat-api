@@ -1,0 +1,49 @@
+{
+ "candidates": [
+  {
+   "chartType": "line",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "時間当"
+   ],
+   "title": "Hourly output peaks 18:20 at 169 pcs with midday dip to 19 pcs",
+   "rationale": "trend over shift-day 09:20–19:20; peak 18:20 = 169, the day max; low 13:10 = 19 pcs due to lunch gap (no 12:xx bucket)",
+   "conditions": "when trend reading matters"
+  },
+  {
+   "chartType": "bar",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "FD32[8]",
+    "FD31[9]"
+   ],
+   "title": "Model split dominated by FD32[8] with FD31[9] secondary",
+   "rationale": "split by model; FD32[8] ranges 19–169 pcs, FD31[9] ranges 0–64 pcs; FD03[7] and all rework columns are constant 0",
+   "conditions": "when split reading matters"
+  },
+  {
+   "chartType": "table",
+   "xColumn": "時間帯",
+   "yColumns": [
+    "時間当",
+    "累計",
+    "FD32[8]",
+    "FD31[9]"
+   ],
+   "title": "Hourly production and cumulative totals with model split",
+   "rationale": "exact values for 時間当, 累計, and active model columns; constant columns (目標数, FD03[7], rework) omitted per table rule",
+   "conditions": "when exact values matter"
+  }
+ ],
+ "questions": [
+  {
+   "id": "q1",
+   "q": "Why does output drop to 19 pcs at 13:10 after 157 pcs at 11:20?",
+   "why": "midday dip unexplained by stated gaps alone; needs downtime cause",
+   "window": "2026-08-17 11:20–13:10",
+   "grain": "hourly",
+   "source": "stg_seisan_jisseki",
+   "status": "open"
+  }
+ ]
+}
